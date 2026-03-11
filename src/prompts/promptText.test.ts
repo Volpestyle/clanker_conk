@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { buildInitiativePrompt } from "./promptText.ts";
 
-test("buildInitiativePrompt includes the unified initiative spec structure and wording", () => {
+test("buildInitiativePrompt includes the ambient text spec structure and wording", () => {
   const prompt = buildInitiativePrompt({
     botName: "clanker conk",
     persona: "playful slang, open, honest, exploratory",
@@ -63,14 +63,14 @@ test("buildInitiativePrompt includes the unified initiative spec structure and w
     remainingImages: 2
   });
 
-  assert.equal(prompt.includes("=== INITIATIVE MODE ==="), true);
+  assert.equal(prompt.includes("=== AMBIENT TEXT MODE ==="), true);
   assert.equal(prompt.includes("Persona: playful slang, open, honest, exploratory"), true);
   assert.equal(prompt.includes("=== CHANNELS ==="), true);
-  assert.equal(prompt.includes("Eligible channels:"), true);
+  assert.equal(prompt.includes("You have a moment to look around your Discord channels"), true);
   assert.equal(prompt.includes("=== YOUR FEED ==="), true);
-  assert.equal(prompt.includes("Things from your feed (share if any catch your eye):"), true);
+  assert.equal(prompt.includes("Things from your feed"), true);
   assert.equal(prompt.includes("=== FEED SOURCES ==="), true);
-  assert.equal(prompt.includes("Your feed sources:"), true);
+  assert.equal(prompt.includes("Your feed sources"), true);
   assert.equal(prompt.includes("=== WHAT THIS COMMUNITY IS INTO ==="), true);
   assert.equal(prompt.includes("=== MEMORY ==="), true);
   assert.equal(prompt.includes("=== BEHAVIOR GUIDANCE ==="), true);
@@ -82,7 +82,7 @@ test("buildInitiativePrompt includes the unified initiative spec structure and w
   assert.equal(prompt.includes("You can request media (image, video, GIF) if the moment calls for it."), true);
   assert.equal(prompt.includes("- discovery_source_add: subscribe to a new subreddit, RSS feed, YouTube channel, or X handle"), true);
   assert.equal(
-    prompt.includes("Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, [SKIP] and check back later."),
+    prompt.includes("Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, [SKIP] and stay ambient."),
     true
   );
   assert.equal(

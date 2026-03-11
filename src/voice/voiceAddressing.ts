@@ -4,6 +4,7 @@ import { getBotNameAliases } from "../settings/agentStack.ts";
 import { getPromptBotName } from "../prompts/promptCore.ts";
 import {
   normalizeInlineText,
+  isVoiceTurnAddressedToBot,
   normalizeVoiceAddressingTargetToken,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
@@ -34,6 +35,12 @@ type BuildVoiceAddressingStateRow = {
   talkingTo: string | null;
   directedConfidence: number;
   ageMs: number | null;
+};
+
+export type VoiceDirectAddressSignal = {
+  directAddressed: boolean;
+  nameCueDetected: boolean;
+  addressedOrNamed: boolean;
 };
 
 function isVoiceTimelineTurn(row: VoiceTimelineTurnLike): row is Partial<VoiceTimelineTurn> {
@@ -118,6 +125,39 @@ export function hasBotNameCueForTranscript({
     }
   }
   return false;
+}
+
+export function resolveVoiceDirectAddressSignal({
+  transcript = "",
+  settings = null
+}: {
+  transcript?: string;
+  settings?: unknown;
+} = {}): VoiceDirectAddressSignal {
+  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+  if (!normalizedTranscript) {
+    return {
+      directAddressed: false,
+      nameCueDetected: false,
+      addressedOrNamed: false
+    };
+  }
+
+  const promptBotName = getPromptBotName(settings);
+  const directAddressed = isVoiceTurnAddressedToBot(normalizedTranscript, settings);
+  const nameCueDetected =
+    !directAddressed &&
+    Boolean(promptBotName) &&
+    hasBotNameCue({
+      transcript: normalizedTranscript,
+      botName: promptBotName
+    });
+
+  return {
+    directAddressed,
+    nameCueDetected,
+    addressedOrNamed: directAddressed || nameCueDetected
+  };
 }
 
 export function mergeVoiceAddressingAnnotation(

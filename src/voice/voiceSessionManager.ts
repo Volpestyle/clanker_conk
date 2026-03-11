@@ -369,9 +369,8 @@ type VoiceAddressingState = {
 };
 
 type VoiceConversationContext = {
-  engagementState: string;
-  engaged: boolean;
-  engagedWithCurrentSpeaker: boolean;
+  attentionMode: "ACTIVE" | "AMBIENT";
+  currentSpeakerActive: boolean;
   recentAssistantReply: boolean;
   recentDirectAddress: boolean;
   sameAsRecentDirectAddress: boolean;
@@ -381,8 +380,6 @@ type VoiceConversationContext = {
   activeCommandDomain?: string | null;
   activeCommandIntent?: string | null;
   msUntilCommandSessionExpiry?: number | null;
-  voiceAddressingState?: VoiceAddressingState | null;
-  currentTurnAddressing?: VoiceAddressingAnnotation | null;
   pendingCommandFollowupSignal?: boolean;
   musicActive?: boolean;
   musicWakeLatched?: boolean;

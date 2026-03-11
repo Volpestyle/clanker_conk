@@ -507,7 +507,10 @@ export function buildVoiceTurnPrompt({
       }
     }
 
-    if (normalizedConversationContext.engagementState === "command_only_engaged") {
+    if (
+      normalizedConversationContext.activeCommandSpeaker &&
+      !normalizedConversationContext.currentSpeakerActive
+    ) {
       recencyLines.push("You have a pending command from another speaker. This speaker is not part of that exchange — do not treat their speech as a command response.");
     }
 

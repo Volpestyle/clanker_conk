@@ -1006,8 +1006,8 @@ test("reply decider routes single-human assistant followups through classifier",
 
     assert.equal(decision.allow, true);
     assert.equal(decision.reason, "classifier_allow");
-    assert.equal(decision.conversationContext.engaged, true);
-    assert.equal(decision.conversationContext.engagedWithCurrentSpeaker, true);
+    assert.equal(decision.conversationContext.attentionMode, "ACTIVE");
+    assert.equal(decision.conversationContext.currentSpeakerActive, true);
     assert.equal(decision.conversationContext.singleParticipantAssistantFollowup, true);
     assert.equal(callCount, 1);
   } finally {
@@ -3773,9 +3773,8 @@ test("runRealtimeBrainReply keeps assistant replies closed in speaker mode when 
     transcript: "yo clanker keep going",
     directAddressed: true,
     conversationContext: {
-      engagementState: "engaged",
-      engaged: true,
-      engagedWithCurrentSpeaker: true
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: true
     },
     source: "realtime"
   });
@@ -3855,9 +3854,8 @@ test("runRealtimeBrainReply keeps ALL-target replies when queued speaker cannot 
     transcript: "clanker tell everyone",
     directAddressed: true,
     conversationContext: {
-      engagementState: "engaged",
-      engaged: true,
-      engagedWithCurrentSpeaker: true
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: true
     },
     source: "realtime"
   });
@@ -3926,9 +3924,8 @@ test("runRealtimeBrainReply routes speaker-mode interruption to the named assist
     transcript: "tell bob no",
     directAddressed: true,
     conversationContext: {
-      engagementState: "engaged",
-      engaged: true,
-      engagedWithCurrentSpeaker: true
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: true
     },
     source: "realtime"
   });
@@ -4009,9 +4006,8 @@ test("runRealtimeBrainReply resolves streamed reply-target interruption policy b
     transcript: "tell bob no",
     directAddressed: true,
     conversationContext: {
-      engagementState: "engaged",
-      engaged: true,
-      engagedWithCurrentSpeaker: true
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: true
     },
     source: "realtime"
   });
@@ -4577,9 +4573,8 @@ test("runRealtimeBrainReply treats engaged thread turns as non-eager even withou
     transcript: "open that first article",
     directAddressed: false,
     conversationContext: {
-      engagementState: "engaged",
-      engaged: true,
-      engagedWithCurrentSpeaker: false
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: true
     },
     source: "realtime"
   });
@@ -4587,6 +4582,53 @@ test("runRealtimeBrainReply treats engaged thread turns as non-eager even withou
   assert.equal(result, true);
   assert.equal(generationPayloads.length, 1);
   assert.equal(Boolean(generationPayloads[0]?.isEagerTurn), false);
+});
+
+test("runRealtimeBrainReply keeps room-active but speaker-inactive turns eager", async () => {
+  const generationPayloads = [];
+  const manager = createManager();
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => true;
+  manager.generateVoiceTurn = async (payload) => {
+    generationPayloads.push(payload);
+    return {
+      text: "on it"
+    };
+  };
+
+  const session = {
+    id: "session-room-active-speaker-ambient-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 28_000,
+    realtimeClient: {},
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "open that first article",
+    directAddressed: false,
+    conversationContext: {
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: false
+    },
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(generationPayloads.length, 1);
+  assert.equal(Boolean(generationPayloads[0]?.isEagerTurn), true);
 });
 
 test("runRealtimeTurn uses native realtime forwarding when strategy is native", async () => {
@@ -4716,9 +4758,8 @@ test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-br
     directAddressConfidence: 0.94,
     transcript: "we should ship tonight",
     conversationContext: {
-      engagementState: "engaged",
-      engaged: true,
-      engagedWithCurrentSpeaker: true
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: true
     }
   });
   manager.runRealtimeBrainReply = async (payload) => {
@@ -4786,9 +4827,8 @@ test("runRealtimeTurn forwards shared ASR transcript turns into OpenAI room-brai
     directAddressConfidence: 0.94,
     transcript: "shared mode transcript",
     conversationContext: {
-      engagementState: "engaged",
-      engaged: true,
-      engagedWithCurrentSpeaker: true
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: true
     }
   });
   manager.runRealtimeBrainReply = async (payload) => {

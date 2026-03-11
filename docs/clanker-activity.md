@@ -84,13 +84,14 @@ Relevant code:
 
 ### 2. Recent-Window Follow-Up Reply
 
-If the bot already has a message in the recent channel window, later non-addressed turns can still enter reply admission as a follow-up. This is the text spoke's current shipped version of sustained `ACTIVE` attention.
+If a user replies directly to a recent bot message, or the latest recent bot reply was aimed at the same author and no other human has already moved the room on, a later non-addressed text turn can still enter reply admission as a follow-up. This is the text spoke's current shipped version of sustained `ACTIVE` attention.
 
 Behavior:
 
-- this is still a reactive reply path, not initiative
+- this is still a reactive reply path, not ambient cold-start posting
 - `permissions.replies.allowUnsolicitedReplies` still matters
 - `interaction.activity.responseWindowEagerness` controls how sticky the recent-engagement window is
+- a conflicting newer human message collapses the turn back to `AMBIENT`
 - the model can still `[SKIP]`
 
 Relevant code:
@@ -107,6 +108,7 @@ Behavior:
 
 - this is separate from both direct address and recent-window follow-ups
 - `interaction.activity.ambientReplyEagerness` is the admission dial for these cold reactive turns
+- reply-channel membership adds a deterministic admission bonus, but the model still decides whether to speak or `[SKIP]`
 - the model still decides whether to reply or `[SKIP]`
 
 Relevant code:
@@ -202,6 +204,7 @@ Runtime behavior:
 - `bridge` reply path always behaves as classifier-first, because the text-to-realtime bridge has no native `[SKIP]`
 - `brain` reply path defaults to `generation_decides`
 - `native` reply path does not use the text classifier path
+- `voice.conversationPolicy.commandOnlyMode` stays an overlay on top of shared attention: explicit wakeups, direct-address turns, and owned command follow-ups can still enter, but command-only does not create a third attention mode
 - internal runtime labels like `hard_classifier` and `generation_only` are implementation details, not canonical settings names
 
 Relevant code:
@@ -215,7 +218,8 @@ This is the ambient voice surface. It runs only while a voice session is active 
 
 Behavior:
 
-- gated by silence and spacing, not by a global cron
+- gated by shared ambient attention, silence, and spacing, not by a global cron
+- the thought loop waits for voice attention to decay back to `AMBIENT`; a warm active exchange is not treated as ambient just because the room is briefly quiet
 - eagerness is a probability gate before generation
 - even after the gate passes, the generated thought can still be rejected or skipped
 - delivery uses the active voice output transport
@@ -229,7 +233,7 @@ Canonical cadence settings:
 
 Implementation note:
 
-- the live thought generator currently resolves its provider/model from the orchestrator binding during generation
+- the live thought generator resolves provider/model from `initiative.voice.execution` via the resolved voice-initiative binding
 
 Relevant code:
 

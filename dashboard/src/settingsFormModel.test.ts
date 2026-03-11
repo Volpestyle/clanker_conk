@@ -836,29 +836,6 @@ test("settingsFormModel forces bridge replies onto realtime output", () => {
   assert.equal(patch.voice.conversationPolicy.ttsMode, "realtime");
 });
 
-test("settingsFormModel migrates legacy adaptive admission into canonical modes by reply path", () => {
-  const brainForm = settingsToForm(withResolved(normalizeSettings({
-    voice: {
-      admission: {
-        mode: "adaptive"
-      }
-    }
-  })));
-  assert.equal(brainForm.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
-
-  const bridgeForm = settingsToForm(withResolved(normalizeSettings({
-    voice: {
-      admission: {
-        mode: "adaptive"
-      },
-      conversationPolicy: {
-        replyPath: "bridge"
-      }
-    }
-  })));
-  assert.equal(bridgeForm.voiceReplyDecisionRealtimeAdmissionMode, "classifier_gate");
-});
-
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {

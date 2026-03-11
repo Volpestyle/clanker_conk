@@ -96,7 +96,11 @@ function buildIncomingMessage({
   channel,
   messageId,
   content,
-  replyPayloads
+  replyPayloads,
+  authorId = "user-1",
+  username = "alice",
+  referenceMessageId = null,
+  referencedAuthorId = null
 }) {
   return {
     id: messageId,
@@ -106,12 +110,12 @@ function buildIncomingMessage({
     guild,
     channel,
     author: {
-      id: "user-1",
-      username: "alice",
+      id: authorId,
+      username,
       bot: false
     },
     member: {
-      displayName: "alice"
+      displayName: username
     },
     content,
     mentions: {
@@ -120,9 +124,15 @@ function buildIncomingMessage({
           return false;
         }
       },
-      repliedUser: null
+      repliedUser: referencedAuthorId ? { id: referencedAuthorId } : null
     },
-    reference: null,
+    reference: referenceMessageId ? { messageId: referenceMessageId } : null,
+    referencedMessage: referenceMessageId
+      ? {
+          id: referenceMessageId,
+          author: referencedAuthorId ? { id: referencedAuthorId } : undefined
+        }
+      : null,
     attachments: new Map(),
     embeds: [],
     reactions: {
@@ -143,6 +153,48 @@ function buildIncomingMessage({
         embeds: []
       };
     }
+  };
+}
+
+function recordSameAuthorFollowupContext(
+  store,
+  {
+    guildId,
+    channelId,
+    authorId = "user-1",
+    authorName = "alice",
+    botUserId = "bot-1",
+    botName = "clanker conk",
+    humanMessageId = "human-context-1",
+    botMessageId = "bot-context-1"
+  }
+) {
+  store.recordMessage({
+    messageId: humanMessageId,
+    createdAt: Date.now() - 1_500,
+    guildId,
+    channelId,
+    authorId,
+    authorName,
+    isBot: false,
+    content: "starter takes are chaos",
+    referencedMessageId: null
+  });
+  store.recordMessage({
+    messageId: botMessageId,
+    createdAt: Date.now() - 750,
+    guildId,
+    channelId,
+    authorId: botUserId,
+    authorName: botName,
+    isBot: true,
+    content: "last bot line",
+    referencedMessageId: humanMessageId
+  });
+
+  return {
+    humanMessageId,
+    botMessageId
   };
 }
 
@@ -204,7 +256,7 @@ function applyBaselineSettings(store, channelId) {
   });
 }
 
-test("non-addressed non-initiative turn can still post when model contributes value", async () => {
+test("same-author active follow-up turn can still post when model contributes value", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
@@ -256,16 +308,9 @@ test("non-addressed non-initiative turn can still post when model contributes va
     const guild = buildGuild();
     const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
 
-    store.recordMessage({
-      messageId: "bot-context-1",
-      createdAt: Date.now() - 750,
+    const { botMessageId } = recordSameAuthorFollowupContext(store, {
       guildId: guild.id,
-      channelId,
-      authorId: "bot-1",
-      authorName: "clanker conk",
-      isBot: true,
-      content: "last bot line",
-      referencedMessageId: null
+      channelId
     });
 
     const incoming = buildIncomingMessage({
@@ -298,7 +343,7 @@ test("non-addressed non-initiative turn can still post when model contributes va
     assert.equal(typingCallsRef.count > 0, true);
     assert.match(String(channelSendPayloads[0]?.content || ""), /evo lines decide everything/i);
     const sentAction = store.getRecentActions(12).find(
-      (row) => row.kind === "sent_message" && row.message_id !== "bot-context-1"
+      (row) => row.kind === "sent_message" && row.message_id !== botMessageId
     );
     assert.equal(sentAction?.metadata?.replyPrompts?.hiddenByDefault, true);
     assert.equal(typeof sentAction?.metadata?.replyPrompts?.systemPrompt, "string");
@@ -308,7 +353,7 @@ test("non-addressed non-initiative turn can still post when model contributes va
   });
 });
 
-test("non-addressed non-initiative turn is skipped when model declines", async () => {
+test("same-author active follow-up turn is skipped when the model declines", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
@@ -358,16 +403,9 @@ test("non-addressed non-initiative turn is skipped when model declines", async (
     const guild = buildGuild();
     const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
 
-    store.recordMessage({
-      messageId: "bot-context-1",
-      createdAt: Date.now() - 750,
+    recordSameAuthorFollowupContext(store, {
       guildId: guild.id,
-      channelId,
-      authorId: "bot-1",
-      authorName: "clanker conk",
-      isBot: true,
-      content: "last bot line",
-      referencedMessageId: null
+      channelId
     });
 
     const incoming = buildIncomingMessage({
@@ -616,11 +654,16 @@ test("non-addressed initiative turn can still contribute when model responds", a
   });
 });
 
-test("reply channels do not immediately evaluate cold non-addressed turns without prior bot context", async () => {
+test("reply channels can evaluate cold ambient turns when the eagerness gate admits them", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
     store.patchSettings({
+      interaction: {
+        activity: {
+          ambientReplyEagerness: 100
+        }
+      },
       permissions: {
         replies: {
           replyChannelIds: [channelId]
@@ -694,11 +737,11 @@ test("reply channels do not immediately evaluate cold non-addressed turns withou
       }
     });
 
-    assert.equal(sent, false);
-    assert.equal(llmCalls.length, 0);
+    assert.equal(sent, true);
+    assert.equal(llmCalls.length, 1);
     assert.equal(replyPayloads.length, 0);
-    assert.equal(channelSendPayloads.length, 0);
-    assert.equal(typingCallsRef.count, 0);
+    assert.equal(channelSendPayloads.length, 1);
+    assert.equal(typingCallsRef.count > 0, true);
   });
 });
 
@@ -746,6 +789,13 @@ test("non-addressed turn is dropped before llm when unsolicited gate is closed",
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      permissions: {
+        replies: {
+          allowUnsolicitedReplies: false
+        }
+      }
+    });
 
     const llmCalls = [];
     const replyPayloads = [];
@@ -1021,16 +1071,11 @@ test("text reply follow-up can run web search and append cited sources", async (
     const guild = buildGuild();
     const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
 
-    store.recordMessage({
-      messageId: "bot-context-search-1",
-      createdAt: Date.now() - 750,
+    recordSameAuthorFollowupContext(store, {
       guildId: guild.id,
       channelId,
-      authorId: "bot-1",
-      authorName: "clanker conk",
-      isBot: true,
-      content: "last bot line",
-      referencedMessageId: null
+      humanMessageId: "human-context-search-1",
+      botMessageId: "bot-context-search-1"
     });
 
     const incoming = buildIncomingMessage({
@@ -1167,16 +1212,9 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
 
     const guild = buildGuild();
     const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
-    store.recordMessage({
-      messageId: "bot-context-1",
-      createdAt: Date.now() - 750,
+    recordSameAuthorFollowupContext(store, {
       guildId: guild.id,
-      channelId,
-      authorId: "bot-1",
-      authorName: "clanker conk",
-      isBot: true,
-      content: "last bot line",
-      referencedMessageId: null
+      channelId
     });
     const incoming = buildIncomingMessage({
       guild,

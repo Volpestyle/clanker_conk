@@ -49,8 +49,7 @@ const INITIATIVE_SOURCE_STATS_WINDOW_DAYS = 14;
 const INITIATIVE_LOOKBACK_MAX_CHANNEL_MESSAGES = 5;
 const INITIATIVE_MIN_GAP_ACTION_KINDS = [
   "initiative_post",
-  "initiative_skip",
-  "text_thought_loop_post"
+  "initiative_skip"
 ] as const;
 const SOURCE_TYPE_LABELS = {
   reddit: "Reddit",
@@ -307,9 +306,7 @@ function countRecentActions(store: InitiativeRuntime["store"], kind: string, sin
 
 export function getEligibleInitiativeChannelIds(settings: Record<string, unknown>) {
   const permissions = getReplyPermissions(settings);
-  // Legacy `initiative.discovery.channelIds` is migrated into
-  // `permissions.replyChannelIds` during settings normalization, so the
-  // reply-channel list is the canonical unified initiative pool here.
+  // The reply-channel list is the canonical unified initiative pool.
   return [...new Set(
     (Array.isArray(permissions.replyChannelIds) ? permissions.replyChannelIds : [])
       .map((value) => String(value || "").trim())
@@ -829,9 +826,7 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     if (!runtime.canTalkNow(settings)) return;
 
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const posts24h =
-      countRecentActions(runtime.store, "initiative_post", since24h) +
-      countRecentActions(runtime.store, "text_thought_loop_post", since24h);
+    const posts24h = countRecentActions(runtime.store, "initiative_post", since24h);
     if (posts24h >= initiative.maxPostsPerDay) return;
 
     const minGapMs = Math.max(1, Number(initiative.minMinutesBetweenPosts || 0) * 60_000);

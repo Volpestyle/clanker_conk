@@ -1,5 +1,9 @@
 import { clamp } from "../utils.ts";
-import { VOICE_THOUGHT_LOOP_BUSY_RETRY_MS, VOICE_THOUGHT_MAX_CHARS } from "./voiceSessionManager.constants.ts";
+import {
+  RECENT_ENGAGEMENT_WINDOW_MS,
+  VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
+  VOICE_THOUGHT_MAX_CHARS
+} from "./voiceSessionManager.constants.ts";
 import { normalizeVoiceText } from "./voiceSessionHelpers.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
 import type { TurnProcessor } from "./turnProcessor.ts";
@@ -57,6 +61,15 @@ export interface ThoughtEngineHost {
   };
   store: ThoughtStoreLike;
   resolveVoiceThoughtEngineConfig: (settings: ThoughtSettings) => ThoughtConfigLike;
+  buildVoiceConversationContext: (args: {
+    session: VoiceSession;
+    userId?: string | null;
+    directAddressed?: boolean;
+    participantCount?: number | null;
+    now?: number;
+  }) => {
+    attentionMode: "ACTIVE" | "AMBIENT";
+  };
   isCommandOnlyActive: (session: VoiceSession, settings?: ThoughtSettings) => boolean;
   getMusicPhase: (session: VoiceSession) => MusicPlaybackPhase;
   getOutputChannelState: (session: VoiceSession) => {
@@ -240,6 +253,34 @@ export class ThoughtEngine {
         allow: false,
         reason: "thought_attempt_cooldown",
         retryAfterMs: Math.max(300, minIntervalMs - sinceLastAttemptMs)
+      };
+    }
+
+    const conversationContext = this.host.buildVoiceConversationContext({
+      session,
+      userId: null,
+      directAddressed: false,
+      now
+    });
+    if (conversationContext.attentionMode === "ACTIVE") {
+      const activeSignalAges = [
+        Number(session.lastAssistantReplyAt || 0) > 0
+          ? Math.max(0, now - Number(session.lastAssistantReplyAt || 0))
+          : null,
+        Number(session.lastDirectAddressAt || 0) > 0
+          ? Math.max(0, now - Number(session.lastDirectAddressAt || 0))
+          : null
+      ].filter((value): value is number => Number.isFinite(value) && value >= 0);
+      const retryAfterMs = activeSignalAges.length > 0
+        ? Math.max(
+          500,
+          ...activeSignalAges.map((ageMs) => Math.max(0, RECENT_ENGAGEMENT_WINDOW_MS - ageMs))
+        )
+        : VOICE_THOUGHT_LOOP_BUSY_RETRY_MS;
+      return {
+        allow: false,
+        reason: "attention_active",
+        retryAfterMs
       };
     }
 

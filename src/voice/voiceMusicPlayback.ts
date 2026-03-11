@@ -1,5 +1,5 @@
 import { ChatInputCommandInteraction } from "discord.js";
-import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBot, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
+import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
 import {
   getResolvedVoiceMusicBrainBinding,
   isVoiceMusicBrainEnabled,
@@ -25,6 +25,7 @@ import type { MusicPlaybackProvider } from "./musicPlayback.ts";
 import type { DiscordMusicPlayer } from "./musicPlayer.ts";
 import type { MusicSearchProvider } from "./musicSearch.ts";
 import type { ReplyManager } from "./replyManager.ts";
+import { resolveVoiceDirectAddressSignal } from "./voiceAddressing.ts";
 
 // English-only fallback/fast-path heuristics for obvious music control turns.
 // These are lightweight transport shortcuts, not the main conversational brain.
@@ -2343,7 +2344,12 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     });
     return true;
   }
-  const directAddressedToBot = isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings);
+  const directAddressSignal = resolveVoiceDirectAddressSignal({
+    transcript: normalizedTranscript,
+    settings: resolvedSettings
+  });
+  const directAddressedToBot = directAddressSignal.directAddressed;
+  const nameCueDetected = directAddressSignal.nameCueDetected;
   const normalizedUserId = String(userId || "").trim() || null;
   const wakeFollowupState = getMusicWakeFollowupState(session, normalizedUserId);
   const currentPhase = wakeFollowupState.currentPhase;
@@ -2359,6 +2365,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     Boolean(musicWakeFollowupEligibleAtCapture);
   const mainBrainEligible =
     directAddressedToBot ||
+    nameCueDetected ||
     passiveWakeFollowupAllowed ||
     interruptedReplyOwnerFollowup;
   const disambiguationResolutionTurn = manager.isMusicDisambiguationResolutionTurn(
@@ -2380,11 +2387,12 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
   }
   const musicBrainEnabled = isVoiceMusicBrainEnabled(resolvedSettings);
   const compactControlCommand =
-    musicBrainEnabled && !directAddressedToBot
+    musicBrainEnabled && !directAddressedToBot && !nameCueDetected
       ? resolveCompactVoiceMusicControlCommand(normalizedTranscript, currentPhase)
       : null;
   const controlCommandCandidate =
     !directAddressedToBot &&
+    !nameCueDetected &&
     isLikelyVoiceMusicControlCommandTurn(manager, {
       transcript: normalizedTranscript,
       currentPhase
@@ -2395,6 +2403,8 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     (disambiguationResolutionTurn || controlCommandCandidate);
   const gateDecisionReason = directAddressedToBot
     ? "direct_address"
+    : nameCueDetected
+      ? "name_cue"
     : disambiguationResolutionTurn
       ? "disambiguation"
       : compactControlCommand
@@ -2429,6 +2439,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
         interruptedReplyOwnerFollowup,
         pausedWakeWordOwnerFollowup,
         directAddressedToBot,
+        nameCueDetected,
         disambiguationResolutionTurn,
         compactControlCommand,
         musicBrainEnabled: true,
@@ -2466,6 +2477,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
         interruptedReplyOwnerFollowup,
         pausedWakeWordOwnerFollowup,
         directAddressedToBot,
+        nameCueDetected,
         disambiguationResolutionTurn,
         gateDecisionReason,
         musicBrainEnabled,
@@ -2496,6 +2508,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
         interruptedReplyOwnerFollowup,
         pausedWakeWordOwnerFollowup,
         directAddressedToBot,
+        nameCueDetected,
         disambiguationResolutionTurn,
         gateDecisionReason,
         decisionReason: gateDecisionReason
@@ -2540,6 +2553,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
       interruptedReplyOwnerFollowup,
       pausedWakeWordOwnerFollowup,
       directAddressedToBot,
+      nameCueDetected,
       disambiguationResolutionTurn,
       gateDecisionReason,
       musicBrainDecision: resolvedBrainDecision,

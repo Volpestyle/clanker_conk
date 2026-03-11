@@ -2,6 +2,8 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   getReplyAddressSignal,
+  resolveColdAmbientReplyProbability,
+  resolveTextAttentionState,
   shouldAttemptReplyDecision
 } from "./replyAdmission.ts";
 import { createTestSettings } from "../testSettings.ts";
@@ -102,7 +104,7 @@ test("reply admission forceDecisionLoop bypasses unsolicited gating", () => {
   assert.equal(shouldRun, true);
 });
 
-test("reply admission unsolicited turns require followup window when not directly addressed", () => {
+test("reply admission treats direct replies to a recent bot message as ACTIVE", () => {
   const settings = {
     permissions: {
       allowUnsolicitedReplies: true
@@ -115,21 +117,7 @@ test("reply admission unsolicited turns require followup window when not directl
     }
   };
 
-  const withoutWindow = shouldAttemptReplyDecision({
-    botUserId: "bot-1",
-    settings,
-    recentMessages: [],
-    addressSignal: {
-      direct: false,
-      inferred: false,
-      triggered: false,
-      reason: "llm_decides"
-    },
-    triggerMessageId: "msg-1"
-  });
-  assert.equal(withoutWindow, false);
-
-  const withWindow = shouldAttemptReplyDecision({
+  const attention = resolveTextAttentionState({
     botUserId: "bot-1",
     settings,
     recentMessages: [
@@ -144,9 +132,77 @@ test("reply admission unsolicited turns require followup window when not directl
       triggered: false,
       reason: "llm_decides"
     },
-    triggerMessageId: "msg-1"
+    triggerMessageId: "msg-1",
+    triggerAuthorId: "user-1",
+    triggerReferenceMessageId: "bot-ctx-1"
   });
-  assert.equal(withWindow, true);
+  assert.equal(attention.mode, "ACTIVE");
+  assert.equal(attention.reason, "reply_to_bot");
+  assert.equal(attention.recentReplyWindowActive, true);
+
+  assert.equal(
+    shouldAttemptReplyDecision({
+      botUserId: "bot-1",
+      settings,
+      recentMessages: [
+        {
+          message_id: "bot-ctx-1",
+          author_id: "bot-1"
+        }
+      ],
+      addressSignal: {
+        direct: false,
+        inferred: false,
+        triggered: false,
+        reason: "llm_decides"
+      },
+      triggerMessageId: "msg-1",
+      triggerAuthorId: "user-1",
+      triggerReferenceMessageId: "bot-ctx-1"
+    }),
+    true
+  );
+});
+
+test("reply admission treats same-author followups after a bot reply as ACTIVE", () => {
+  const settings = {
+    permissions: {
+      allowUnsolicitedReplies: true
+    },
+    interaction: {
+      activity: {
+        ambientReplyEagerness: 10,
+        responseWindowEagerness: 60
+      }
+    }
+  };
+
+  const attention = resolveTextAttentionState({
+    botUserId: "bot-1",
+    settings,
+    recentMessages: [
+      {
+        message_id: "bot-ctx-1",
+        author_id: "bot-1",
+        referenced_message_id: "human-ctx-1"
+      },
+      {
+        message_id: "human-ctx-1",
+        author_id: "user-1"
+      }
+    ],
+    addressSignal: {
+      direct: false,
+      inferred: false,
+      triggered: false,
+      reason: "llm_decides"
+    },
+    triggerMessageId: "msg-1",
+    triggerAuthorId: "user-1"
+  });
+  assert.equal(attention.mode, "ACTIVE");
+  assert.equal(attention.reason, "same_author_followup");
+  assert.equal(attention.recentReplyWindowActive, true);
 });
 
 test("reply admission disables recent-window followups when response-window eagerness is zero", () => {
@@ -174,24 +230,30 @@ test("reply admission disables recent-window followups when response-window eage
       recentMessages: [
         {
           message_id: "bot-ctx-1",
-          author_id: "bot-1"
+          author_id: "bot-1",
+          referenced_message_id: "human-ctx-1"
+        },
+        {
+          message_id: "human-ctx-1",
+          author_id: "user-1"
         }
       ],
       addressSignal: noAddress,
-      triggerMessageId: "msg-1"
+      triggerMessageId: "msg-1",
+      triggerAuthorId: "user-1"
     }),
     false
   );
 });
 
-test("reply admission admits at high eagerness even without recent window", () => {
+test("reply admission blocks zero-eagerness cold ambient turns and admits max-eagerness ones", () => {
   const highEagernessSettings = {
     permissions: { allowUnsolicitedReplies: true },
-    interaction: { activity: { ambientReplyEagerness: 80 } }
+    interaction: { activity: { ambientReplyEagerness: 100 } }
   };
   const lowEagernessSettings = {
     permissions: { allowUnsolicitedReplies: true },
-    interaction: { activity: { ambientReplyEagerness: 50 } }
+    interaction: { activity: { ambientReplyEagerness: 0 } }
   };
   const noAddress = {
     direct: false,
@@ -200,7 +262,6 @@ test("reply admission admits at high eagerness even without recent window", () =
     reason: "llm_decides"
   };
 
-  // High eagerness: admitted even without bot in recent window
   assert.equal(
     shouldAttemptReplyDecision({
       botUserId: "bot-1",
@@ -212,7 +273,6 @@ test("reply admission admits at high eagerness even without recent window", () =
     true
   );
 
-  // Low eagerness: blocked without recent window (model not consulted)
   assert.equal(
     shouldAttemptReplyDecision({
       botUserId: "bot-1",
@@ -225,7 +285,7 @@ test("reply admission admits at high eagerness even without recent window", () =
   );
 });
 
-test("reply admission uses response-window eagerness separately from ambient eagerness", () => {
+test("reply admission falls back to AMBIENT when another human has already moved the room on", () => {
   const noAddress = {
     direct: false,
     inferred: false,
@@ -242,19 +302,30 @@ test("reply admission uses response-window eagerness separately from ambient eag
     }
   };
 
-  assert.equal(
-    shouldAttemptReplyDecision({
-      botUserId: "bot-1",
-      settings,
-      recentMessages: [
-        { message_id: "older-1", author_id: "someone-else" },
-        { message_id: "older-2", author_id: "someone-else" },
-        { message_id: "older-3", author_id: "someone-else" },
-        { message_id: "bot-ctx", author_id: "bot-1" }
-      ],
-      addressSignal: noAddress,
-      triggerMessageId: "msg-1"
-    }),
-    true
-  );
+  const attention = resolveTextAttentionState({
+    botUserId: "bot-1",
+    settings,
+    recentMessages: [
+      { message_id: "newer-human", author_id: "user-2" },
+      { message_id: "bot-ctx", author_id: "bot-1", referenced_message_id: "older-user-1" },
+      { message_id: "older-user-1", author_id: "user-1" }
+    ],
+    addressSignal: noAddress,
+    triggerMessageId: "msg-1",
+    triggerAuthorId: "user-1"
+  });
+
+  assert.equal(attention.mode, "AMBIENT");
+  assert.equal(attention.reason, "cold_ambient");
+  assert.equal(attention.recentReplyWindowActive, false);
+});
+
+test("reply admission applies a reply-channel bonus to cold ambient probability", () => {
+  assert.equal(resolveColdAmbientReplyProbability({
+    ambientReplyEagerness: 30,
+    isReplyChannel: false
+  }) < resolveColdAmbientReplyProbability({
+    ambientReplyEagerness: 30,
+    isReplyChannel: true
+  }), true);
 });

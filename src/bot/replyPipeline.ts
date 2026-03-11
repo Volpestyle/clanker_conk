@@ -39,8 +39,7 @@ import {
   finalizeReplyPerformanceSample
 } from "./replyPipelineShared.ts";
 import {
-  getResponseWindowMessageCount,
-  hasBotMessageInRecentWindow
+  resolveTextAttentionState
 } from "./replyAdmission.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
 import { loadBehavioralMemoryFacts } from "./memorySlice.ts";
@@ -152,6 +151,12 @@ type ReplyPipelineMessage = ReplyPipelineSentMessage & {
   } | null;
   channel: ReplyPipelineChannel;
   mentions?: ReplyPipelineMentions;
+  reference?: {
+    messageId?: string;
+  } | null;
+  referencedMessage?: {
+    id?: string;
+  } | null;
   react: (emoji: string) => Promise<unknown>;
   reply: (payload: ReplyMessagePayload) => Promise<ReplyPipelineSentMessage>;
 };
@@ -355,15 +360,17 @@ export async function buildReplyContext(
     0,
     100
   );
-  const responseWindowSize = getResponseWindowMessageCount(responseWindowEagerness);
-  const recentReplyWindowActive =
-    responseWindowSize > 0 &&
-    hasBotMessageInRecentWindow({
-      botUserId: bot.client.user?.id || null,
-      recentMessages,
-      windowSize: responseWindowSize,
-      triggerMessageId: message.id
-    });
+  const textAttentionState = resolveTextAttentionState({
+    botUserId: bot.client.user?.id || null,
+    settings,
+    recentMessages,
+    addressSignal,
+    triggerMessageId: message.id,
+    triggerAuthorId: message.author?.id || null,
+    triggerReferenceMessageId:
+      message.reference?.messageId || message.referencedMessage?.id || null
+  });
+  const recentReplyWindowActive = textAttentionState.recentReplyWindowActive;
   const reactionEmojiOptions = [
     ...new Set([...bot.getReactionEmojiOptions(message.guild), ...UNICODE_REACTIONS])
   ];
@@ -372,9 +379,13 @@ export async function buildReplyContext(
     settings,
     recentMessages,
     addressSignal,
+    isReplyChannel,
     forceRespond: Boolean(options.forceRespond),
     forceDecisionLoop: Boolean(options.forceDecisionLoop),
-    triggerMessageId: message.id
+    triggerMessageId: message.id,
+    triggerAuthorId: message.author?.id || null,
+    triggerReferenceMessageId:
+      message.reference?.messageId || message.referencedMessage?.id || null
   });
   if (!shouldRunDecisionLoop) return false;
 
@@ -554,6 +565,8 @@ export async function buildReplyContext(
     ambientReplyEagerness,
     responseWindowEagerness,
     recentReplyWindowActive,
+    textAttentionMode: textAttentionState.mode,
+    textAttentionReason: textAttentionState.reason,
     reactivity,
     addressing: {
       directlyAddressed: addressed,

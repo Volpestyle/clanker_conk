@@ -29,17 +29,12 @@ test("getEligibleInitiativeChannelIds uses the canonical unified reply-channel p
       replies: {
         replyChannelIds: ["reply-1"]
       }
-    },
-    initiative: {
-      discovery: {
-        channelIds: ["disc-1"]
-      }
     }
   };
 
   const settings = normalizeSettings(rawSettings);
 
-  assert.deepEqual(getEligibleInitiativeChannelIds(settings), ["reply-1", "disc-1"]);
+  assert.deepEqual(getEligibleInitiativeChannelIds(settings), ["reply-1"]);
 });
 
 test("maybeRunInitiativeCycle starts the min-gap cooldown after an initiative skip", async () => {

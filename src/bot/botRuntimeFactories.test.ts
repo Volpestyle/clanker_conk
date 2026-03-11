@@ -200,7 +200,9 @@ test("buildReplyPipelineRuntime maps bot fields and preserves runtime delegation
       triggered: false,
       reason: "llm_decides"
     },
-    triggerMessageId: "m-3"
+    triggerMessageId: "m-3",
+    triggerAuthorId: "user-2",
+    triggerReferenceMessageId: "m-2"
   });
   assert.equal(shouldAttempt, true);
 

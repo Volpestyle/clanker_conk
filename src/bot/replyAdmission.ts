@@ -17,9 +17,26 @@ export type ReplyAddressSignal = {
   confidenceSource: "llm" | "fallback" | "direct" | "exact_name";
 };
 
+export type TextAttentionMode = "ACTIVE" | "AMBIENT";
+export type TextAttentionReason =
+  | "direct_address"
+  | "reply_to_bot"
+  | "same_author_followup"
+  | "cold_ambient";
+
+export type TextAttentionState = {
+  mode: TextAttentionMode;
+  reason: TextAttentionReason;
+  responseWindowSize: number;
+  recentReplyWindowActive: boolean;
+  latestBotMessageId: string | null;
+};
+
 type ReplyAdmissionRecentMessage = Record<string, unknown> & {
   message_id?: string;
   author_id?: string;
+  is_bot?: boolean | number;
+  referenced_message_id?: string | null;
 };
 
 type ReplyAdmissionAuthor = {
@@ -82,7 +99,7 @@ export function hasBotMessageInRecentWindow({
   const cappedWindow = clamp(Math.floor(windowSize), 1, 50);
   return candidateMessages
     .slice(0, cappedWindow)
-    .some((row) => String(row?.author_id || "").trim() === normalizedBotUserId);
+    .some((row) => isBotRecentMessage(row, normalizedBotUserId));
 }
 
 export function getResponseWindowMessageCount(eagerness: unknown) {
@@ -141,54 +158,323 @@ export function hasStartupFollowupAfterMessage({
   return false;
 }
 
-export function shouldAttemptReplyDecision({
+function getCandidateRecentMessages({
+  recentMessages,
+  triggerMessageId = null,
+  windowSize = 5
+}: {
+  recentMessages?: ReplyAdmissionRecentMessage[];
+  triggerMessageId?: string | null;
+  windowSize?: number;
+}) {
+  if (!Array.isArray(recentMessages) || !recentMessages.length) return [];
+
+  const excludedMessageId = String(triggerMessageId || "").trim();
+  const candidateMessages = excludedMessageId
+    ? recentMessages.filter((row) => String(row?.message_id || "").trim() !== excludedMessageId)
+    : recentMessages;
+
+  const cappedWindow = clamp(Math.floor(windowSize), 1, 50);
+  return candidateMessages.slice(0, cappedWindow);
+}
+
+function isBotRecentMessage(row: ReplyAdmissionRecentMessage | null | undefined, botUserId?: string | null) {
+  const normalizedBotUserId = String(botUserId || "").trim();
+  if (normalizedBotUserId && String(row?.author_id || "").trim() === normalizedBotUserId) {
+    return true;
+  }
+  return row?.is_bot === true || row?.is_bot === 1;
+}
+
+function resolveRecentMessageAuthorId(
+  messages: ReplyAdmissionRecentMessage[],
+  messageId?: string | null
+) {
+  const normalizedMessageId = String(messageId || "").trim();
+  if (!normalizedMessageId) return null;
+  const row = messages.find((candidate) => String(candidate?.message_id || "").trim() === normalizedMessageId);
+  const authorId = String(row?.author_id || "").trim();
+  return authorId || null;
+}
+
+function hashTextGateKey(input: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) / 0xffffffff;
+}
+
+export function resolveColdAmbientReplyProbability({
+  ambientReplyEagerness,
+  isReplyChannel = false
+}: {
+  ambientReplyEagerness: unknown;
+  isReplyChannel?: boolean;
+}) {
+  const normalizedEagerness = clamp(Number(ambientReplyEagerness) || 0, 0, 100);
+  const channelBonus = isReplyChannel ? 20 : 0;
+  return clamp((normalizedEagerness + channelBonus - 20) / 80, 0, 1);
+}
+
+export function shouldAdmitColdAmbientTurn({
+  ambientReplyEagerness,
+  isReplyChannel = false,
+  gateKey = ""
+}: {
+  ambientReplyEagerness: unknown;
+  isReplyChannel?: boolean;
+  gateKey?: string;
+}) {
+  const probability = resolveColdAmbientReplyProbability({
+    ambientReplyEagerness,
+    isReplyChannel
+  });
+  if (probability <= 0) return false;
+  if (probability >= 1) return true;
+
+  const normalizedGateKey = String(gateKey || "").trim()
+    || `cold_ambient:${String(ambientReplyEagerness || "")}:${isReplyChannel ? "reply_channel" : "other_channel"}`;
+  return hashTextGateKey(normalizedGateKey) < probability;
+}
+
+function resolveRecentReplyWindowState({
+  botUserId,
+  recentMessages,
+  windowSize = 5,
+  triggerMessageId = null,
+  triggerAuthorId = null,
+  triggerReferenceMessageId = null
+}: {
+  botUserId?: string | null;
+  recentMessages?: ReplyAdmissionRecentMessage[];
+  windowSize?: number;
+  triggerMessageId?: string | null;
+  triggerAuthorId?: string | null;
+  triggerReferenceMessageId?: string | null;
+}) {
+  const normalizedBotUserId = String(botUserId || "").trim();
+  const normalizedTriggerAuthorId = String(triggerAuthorId || "").trim() || null;
+  const normalizedTriggerReferenceMessageId = String(triggerReferenceMessageId || "").trim() || null;
+  if (!normalizedBotUserId) {
+    return {
+      active: false,
+      reason: "cold_ambient" as const,
+      latestBotMessageId: null
+    };
+  }
+
+  const windowMessages = getCandidateRecentMessages({
+    recentMessages,
+    triggerMessageId,
+    windowSize
+  });
+  if (!windowMessages.length) {
+    return {
+      active: false,
+      reason: "cold_ambient" as const,
+      latestBotMessageId: null
+    };
+  }
+
+  if (normalizedTriggerReferenceMessageId) {
+    const referencedBotMessage = windowMessages.find((row) =>
+      String(row?.message_id || "").trim() === normalizedTriggerReferenceMessageId &&
+      isBotRecentMessage(row, normalizedBotUserId)
+    );
+    if (referencedBotMessage) {
+      return {
+        active: true,
+        reason: "reply_to_bot" as const,
+        latestBotMessageId: String(referencedBotMessage.message_id || "").trim() || null
+      };
+    }
+  }
+
+  const latestBotMessageIndex = windowMessages.findIndex((row) => isBotRecentMessage(row, normalizedBotUserId));
+  if (latestBotMessageIndex === -1) {
+    return {
+      active: false,
+      reason: "cold_ambient" as const,
+      latestBotMessageId: null
+    };
+  }
+
+  const latestBotMessage = windowMessages[latestBotMessageIndex];
+  const latestBotMessageId = String(latestBotMessage?.message_id || "").trim() || null;
+  if (!normalizedTriggerAuthorId) {
+    return {
+      active: false,
+      reason: "cold_ambient" as const,
+      latestBotMessageId
+    };
+  }
+
+  const newerMessages = windowMessages.slice(0, latestBotMessageIndex);
+  const conflictingNewerHumanMessage = newerMessages.some((row) => {
+    const authorId = String(row?.author_id || "").trim();
+    return authorId && !isBotRecentMessage(row, normalizedBotUserId) && authorId !== normalizedTriggerAuthorId;
+  });
+  if (conflictingNewerHumanMessage) {
+    return {
+      active: false,
+      reason: "cold_ambient" as const,
+      latestBotMessageId
+    };
+  }
+
+  const latestBotReplyTargetId = resolveRecentMessageAuthorId(
+    windowMessages,
+    String(latestBotMessage?.referenced_message_id || "").trim() || null
+  );
+  const immediateOlderHumanMessage = windowMessages
+    .slice(latestBotMessageIndex + 1)
+    .find((row) => {
+      const authorId = String(row?.author_id || "").trim();
+      return authorId && !isBotRecentMessage(row, normalizedBotUserId);
+    });
+  const immediateOlderHumanAuthorId = String(immediateOlderHumanMessage?.author_id || "").trim() || null;
+
+  if (
+    latestBotReplyTargetId === normalizedTriggerAuthorId ||
+    immediateOlderHumanAuthorId === normalizedTriggerAuthorId
+  ) {
+    return {
+      active: true,
+      reason: "same_author_followup" as const,
+      latestBotMessageId
+    };
+  }
+
+  return {
+    active: false,
+    reason: "cold_ambient" as const,
+    latestBotMessageId
+  };
+}
+
+export function resolveTextAttentionState({
   botUserId,
   settings,
   recentMessages,
   addressSignal,
-  forceRespond = false,
-  forceDecisionLoop = false,
   triggerMessageId = null,
+  triggerAuthorId = null,
+  triggerReferenceMessageId = null,
   windowSize = 5
 }: {
   botUserId?: string | null;
   settings: Settings;
   recentMessages?: ReplyAdmissionRecentMessage[];
   addressSignal?: Partial<ReplyAddressSignal> | null;
+  triggerMessageId?: string | null;
+  triggerAuthorId?: string | null;
+  triggerReferenceMessageId?: string | null;
+  windowSize?: number;
+}): TextAttentionState {
+  const responseWindowSize = getResponseWindowMessageCount(
+    settings?.interaction?.activity?.responseWindowEagerness
+  );
+  if (isHardAddressSignal(addressSignal)) {
+    return {
+      mode: "ACTIVE",
+      reason: "direct_address",
+      responseWindowSize,
+      recentReplyWindowActive: false,
+      latestBotMessageId: null
+    };
+  }
+
+  if (responseWindowSize <= 0) {
+    return {
+      mode: "AMBIENT",
+      reason: "cold_ambient",
+      responseWindowSize,
+      recentReplyWindowActive: false,
+      latestBotMessageId: null
+    };
+  }
+
+  const recentWindow = resolveRecentReplyWindowState({
+    botUserId,
+    recentMessages,
+    windowSize: Math.min(responseWindowSize, clamp(Math.floor(windowSize), 1, 50)),
+    triggerMessageId,
+    triggerAuthorId,
+    triggerReferenceMessageId
+  });
+  if (recentWindow.active) {
+    return {
+      mode: "ACTIVE",
+      reason: recentWindow.reason,
+      responseWindowSize,
+      recentReplyWindowActive: true,
+      latestBotMessageId: recentWindow.latestBotMessageId
+    };
+  }
+
+  return {
+    mode: "AMBIENT",
+    reason: "cold_ambient",
+    responseWindowSize,
+    recentReplyWindowActive: false,
+    latestBotMessageId: recentWindow.latestBotMessageId
+  };
+}
+
+export function shouldAttemptReplyDecision({
+  botUserId,
+  settings,
+  recentMessages,
+  addressSignal,
+  isReplyChannel = false,
+  forceRespond = false,
+  forceDecisionLoop = false,
+  triggerMessageId = null,
+  triggerAuthorId = null,
+  triggerReferenceMessageId = null,
+  windowSize = 5
+}: {
+  botUserId?: string | null;
+  settings: Settings;
+  recentMessages?: ReplyAdmissionRecentMessage[];
+  addressSignal?: Partial<ReplyAddressSignal> | null;
+  isReplyChannel?: boolean;
   forceRespond?: boolean;
   forceDecisionLoop?: boolean;
   triggerMessageId?: string | null;
+  triggerAuthorId?: string | null;
+  triggerReferenceMessageId?: string | null;
   windowSize?: number;
 }) {
   if (forceRespond || forceDecisionLoop || isHardAddressSignal(addressSignal)) return true;
   if (!getReplyPermissions(settings).allowUnsolicitedReplies) return false;
 
-  const ambientReplyEagerness = clamp(
-    Number(settings?.interaction?.activity?.ambientReplyEagerness ?? 0),
-    0,
-    100
-  );
-  const responseWindowSize = getResponseWindowMessageCount(
-    settings?.interaction?.activity?.responseWindowEagerness
-  );
-
-  // Recent continuity is its own dial. At zero, there is no follow-up bias.
-  // At higher values the recent-thread window gets wider and stickier.
-  if (
-    responseWindowSize > 0 &&
-    hasBotMessageInRecentWindow({
-      botUserId,
-      recentMessages,
-      windowSize: responseWindowSize,
-      triggerMessageId
-    })
-  ) {
+  const attentionState = resolveTextAttentionState({
+    botUserId,
+    settings,
+    recentMessages,
+    addressSignal,
+    triggerMessageId,
+    triggerAuthorId,
+    triggerReferenceMessageId,
+    windowSize
+  });
+  if (attentionState.recentReplyWindowActive) {
     return true;
   }
 
-  // Ambient replies are a separate cost gate. At high values, admit unprompted
-  // turns even without a recent thread so the model can decide via [SKIP].
-  return ambientReplyEagerness >= 75;
+  return shouldAdmitColdAmbientTurn({
+    ambientReplyEagerness: settings?.interaction?.activity?.ambientReplyEagerness,
+    isReplyChannel,
+    gateKey: [
+      String(triggerMessageId || "").trim(),
+      String(triggerAuthorId || "").trim(),
+      String(triggerReferenceMessageId || "").trim(),
+      isReplyChannel ? "reply_channel" : "other_channel"
+    ].join(":")
+  });
 }
 
 export async function getReplyAddressSignal(

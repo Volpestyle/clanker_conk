@@ -1205,10 +1205,10 @@ export function VoiceModeSettingsSection({
             </label>
           </div>
 
-          {/* ── Thought Engine ── */}
-          <h4>Thought Engine</h4>
+          {/* ── Ambient Voice Thoughts ── */}
+          <h4>Ambient Voice Thoughts</h4>
           <p>
-            When VC is quiet, Clank can self-prompt a candidate thought and let the brain decide if it should be spoken.
+            When VC is quiet, Clank can surface an ambient voice thought and let the brain decide if it should actually be spoken.
           </p>
           <div className="toggles">
             <label>
@@ -1217,13 +1217,13 @@ export function VoiceModeSettingsSection({
                 checked={form.voiceThoughtEngineEnabled}
                 onChange={set("voiceThoughtEngineEnabled")}
               />
-              Enable silence thought loop
+              Enable ambient voice thought loop
             </label>
           </div>
           {form.voiceThoughtEngineEnabled && (
             <>
               <label htmlFor="voice-thought-eagerness">
-                Thought eagerness: <strong>{form.voiceThoughtEngineEagerness}%</strong>
+                Ambient voice thought eagerness: <strong>{form.voiceThoughtEngineEagerness}%</strong>
               </label>
               <input
                 id="voice-thought-eagerness"
@@ -1238,7 +1238,7 @@ export function VoiceModeSettingsSection({
 
               <div className="split">
                 <div>
-                  <label htmlFor="voice-thought-silence-seconds">Silence seconds before thought attempt</label>
+                  <label htmlFor="voice-thought-silence-seconds">Silence seconds before ambient thought attempt</label>
                   <input
                     id="voice-thought-silence-seconds"
                     type="number"
@@ -1249,7 +1249,7 @@ export function VoiceModeSettingsSection({
                   />
                 </div>
                 <div>
-                  <label htmlFor="voice-thought-min-gap-seconds">Min seconds between thought attempts</label>
+                  <label htmlFor="voice-thought-min-gap-seconds">Min seconds between ambient thought attempts</label>
                   <input
                     id="voice-thought-min-gap-seconds"
                     type="number"

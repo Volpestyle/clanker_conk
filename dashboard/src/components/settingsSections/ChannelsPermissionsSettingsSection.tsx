@@ -6,8 +6,8 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
   return (
     <SettingsSection id={id} title="Channels & Permissions">
       <ChannelChecklist
-        label="Initiative + unsolicited reply channels (text)"
-        hint="This is the shared eligible pool for standalone initiative posts and unsolicited replies. Leave empty to disable bot-initiated text activity everywhere."
+        label="Ambient text pool + unsolicited reply channels"
+        hint="This is the shared eligible pool for ambient text posts and colder ambient text replies. Leave empty to keep text activity focused on direct engagement and already-active threads."
         value={form.replyChannels}
         onChange={set("replyChannels")}
         channelType="text"

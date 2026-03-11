@@ -427,9 +427,8 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       buildVoiceConversationContext(session) {
         if (session.id !== "session-1") return null;
         return {
-          engagementState: "engaged",
-          engaged: true,
-          engagedWithCurrentSpeaker: true,
+          attentionMode: "ACTIVE",
+          currentSpeakerActive: true,
           recentAssistantReply: true,
           recentDirectAddress: true,
           msSinceAssistantReply: 7_500,

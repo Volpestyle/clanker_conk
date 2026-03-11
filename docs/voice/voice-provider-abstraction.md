@@ -206,11 +206,11 @@ Canonical cadence settings:
 - `initiative.voice.minSilenceSeconds`
 - `initiative.voice.minSecondsBetweenThoughts`
 
-This is the voice transport for ambient attention. It is the spoken counterpart to ambient text initiative, not a separate behavioral system.
+This is the voice transport for ambient attention. It is the spoken counterpart to the ambient text cycle, not a separate behavioral system.
 
 Implementation note:
 
-- the thought generator resolves provider/model from the orchestrator binding during generation
+- the thought generator resolves provider/model from the resolved voice-initiative binding (`initiative.voice.execution`)
 
 Relevant modules:
 

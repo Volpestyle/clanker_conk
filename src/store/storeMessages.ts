@@ -228,7 +228,7 @@ export function deleteMessagesForGuild(store: MessageStore, guildId: string) {
 export function getRecentMessages(store: MessageStore, channelId, limit = 40) {
 return store.db
 .prepare<MessageSqlRow, [string, number]>(
-`SELECT message_id, created_at, channel_id, author_id, author_name, is_bot, content
+`SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content, referenced_message_id
          FROM messages
          WHERE channel_id = ?
          ORDER BY created_at DESC
@@ -241,7 +241,7 @@ return store.db
 export function getRecentMessagesAcrossGuild(store: MessageStore, guildId, limit = 120) {
 return store.db
 .prepare<MessageSqlRow, [string, number]>(
-`SELECT message_id, created_at, channel_id, author_id, author_name, is_bot, content
+`SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content, referenced_message_id
          FROM messages
          WHERE guild_id = ?
          ORDER BY created_at DESC

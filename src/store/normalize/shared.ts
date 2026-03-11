@@ -227,8 +227,7 @@ export function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
     normalized === "deterministic_only" ||
     normalized === "generation_decides" ||
     normalized === "generation_only" ||
-    normalized === "generation" ||
-    normalized === "adaptive"
+    normalized === "generation"
   ) {
     return "generation_decides";
   }

@@ -238,14 +238,14 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
   });
   assert.equal(voiceInitiativeExecution.mode, "dedicated_model");
   assert.deepEqual(voiceInitiativeExecution.model, {
-    provider: "anthropic",
-    model: "claude-sonnet-4-6"
+    provider: "claude-oauth",
+    model: "claude-opus-4-6"
   });
-  assert.equal(voiceInitiativeExecution.temperature, 2);
+  assert.equal(voiceInitiativeExecution.temperature, 1);
   assert.equal(normalized.initiative.voice.enabled, true);
-  assert.equal(normalized.initiative.voice.eagerness, 100);
-  assert.equal(normalized.initiative.voice.minSilenceSeconds, 1);
-  assert.equal(normalized.initiative.voice.minSecondsBetweenThoughts, 600);
+  assert.equal(normalized.initiative.voice.eagerness, 50);
+  assert.equal(normalized.initiative.voice.minSilenceSeconds, 45);
+  assert.equal(normalized.initiative.voice.minSecondsBetweenThoughts, 60);
   assert.deepEqual(normalized.agentStack.overrides.voiceAdmissionClassifier, {
     mode: "dedicated_model",
     model: {
@@ -277,14 +277,34 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
   assert.equal(normalized.music.ducking.targetGain, 0);
   assert.equal(normalized.music.ducking.fadeMs, 10_000);
 
-  assert.deepEqual(normalized.initiative.discovery.allowedImageModels, ["gpt-image-1.5", "grok-imagine-image"]);
-  assert.deepEqual(normalized.initiative.discovery.allowedVideoModels, ["grok-imagine-video"]);
-  assert.deepEqual(normalized.initiative.discovery.rssFeeds, ["https://ok.example/feed"]);
-  assert.deepEqual(normalized.initiative.discovery.xHandles, ["alice", "bob"]);
-  assert.deepEqual(normalized.initiative.discovery.redditSubreddits, ["memes", "memes"]);
-  assert.equal(normalized.initiative.discovery.xNitterBaseUrl, "https://nitter.example");
-  assert.equal(normalized.initiative.discovery.sources.reddit, false);
-  assert.equal(normalized.initiative.discovery.sources.x, true);
+  assert.deepEqual(normalized.initiative.discovery.allowedImageModels, [
+    "gpt-image-1.5",
+    "grok-imagine-image",
+    "grok-2-image-1212"
+  ]);
+  assert.deepEqual(normalized.initiative.discovery.allowedVideoModels, [
+    "grok-imagine-video",
+    "grok-2-video"
+  ]);
+  assert.deepEqual(normalized.initiative.discovery.rssFeeds, [
+    "https://www.theverge.com/rss/index.xml",
+    "https://feeds.arstechnica.com/arstechnica/index"
+  ]);
+  assert.deepEqual(normalized.initiative.discovery.xHandles, []);
+  assert.deepEqual(normalized.initiative.discovery.redditSubreddits, [
+    "technology",
+    "programming",
+    "games",
+    "memes"
+  ]);
+  assert.equal(normalized.initiative.discovery.xNitterBaseUrl, "https://nitter.net");
+  assert.deepEqual(normalized.initiative.discovery.sources, {
+    reddit: true,
+    hackerNews: true,
+    youtube: true,
+    rss: true,
+    x: false
+  });
 });
 
 test("normalizeSettings keeps explicit shared ASR bridge disable", () => {
@@ -689,23 +709,24 @@ test("normalizeSettings preserves the dedicated voice music brain runtime config
   });
 });
 
-test("normalizeSettings preserves legacy eagerness keys when upgrading saved settings", () => {
+test("normalizeSettings preserves canonical interaction and voice activity settings", () => {
   const normalized = normalizeSettings({
     interaction: {
       activity: {
-        replyEagerness: 61,
-        reactionLevel: 42
+        ambientReplyEagerness: 61,
+        responseWindowEagerness: 48,
+        reactivity: 42
       }
     },
     voice: {
       conversationPolicy: {
-        replyEagerness: 73
+        ambientReplyEagerness: 73
       }
     }
   });
 
   assert.equal(normalized.interaction.activity.ambientReplyEagerness, 61);
-  assert.equal(normalized.interaction.activity.responseWindowEagerness, 61);
+  assert.equal(normalized.interaction.activity.responseWindowEagerness, 48);
   assert.equal(normalized.interaction.activity.reactivity, 42);
   assert.equal(normalized.voice.conversationPolicy.ambientReplyEagerness, 73);
 });
@@ -783,44 +804,4 @@ test("normalizeSettings supports auto and fixed ASR language guidance in the can
   });
   assert.equal(invalid.voice.transcription.languageMode, "auto");
   assert.equal(invalid.voice.transcription.languageHint, "en");
-});
-
-test("normalizeSettings migrates legacy split initiative pacing and channels into the unified initiative model", () => {
-  const normalized = normalizeSettings({
-    permissions: {
-      replies: {
-        replyChannelIds: ["reply-1"]
-      }
-    },
-    initiative: {
-      text: {
-        minMinutesBetweenThoughts: 15,
-        maxThoughtsPerDay: 2
-      },
-      discovery: {
-        channelIds: ["disc-1"],
-        minMinutesBetweenPosts: 45,
-        maxPostsPerDay: 5,
-        enabled: false,
-        sources: {
-          reddit: true,
-          hackerNews: true,
-          youtube: true,
-          rss: true,
-          x: true
-        }
-      }
-    }
-  });
-
-  assert.deepEqual(normalized.permissions.replies.replyChannelIds, ["reply-1", "disc-1"]);
-  assert.equal(normalized.initiative.text.minMinutesBetweenPosts, 45);
-  assert.equal(normalized.initiative.text.maxPostsPerDay, 5);
-  assert.deepEqual(normalized.initiative.discovery.sources, {
-    reddit: false,
-    hackerNews: false,
-    youtube: false,
-    rss: false,
-    x: false
-  });
 });

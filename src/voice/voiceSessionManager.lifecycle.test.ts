@@ -4452,7 +4452,9 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
     settings: createTestSettings({
       voice: {
         ambientReplyEagerness: 100,
-        thoughtEngine: {
+      },
+      initiative: {
+        voice: {
           enabled: true,
           eagerness: 100,
           minSilenceSeconds: 20,
@@ -4473,7 +4475,9 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
     settings: createTestSettings({
       voice: {
         ambientReplyEagerness: 100,
-        thoughtEngine: {
+      },
+      initiative: {
+        voice: {
           enabled: true,
           eagerness: 100,
           minSilenceSeconds: 20,
@@ -4500,7 +4504,9 @@ test("evaluateVoiceThoughtLoopGate blocks thoughts in command-only mode", () => 
     settings: createTestSettings({
       voice: {
         commandOnlyMode: true,
-        thoughtEngine: {
+      },
+      initiative: {
+        voice: {
           enabled: true,
           eagerness: 100,
           minSilenceSeconds: 20,
@@ -4522,11 +4528,18 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
     botName: "clanker conk",
     voice: {
       enabled: true,
-      ambientReplyEagerness: 100,
-      thoughtEngine: {
+      ambientReplyEagerness: 100
+    },
+    initiative: {
+      voice: {
         enabled: true,
-        provider: "anthropic",
-        model: "claude-haiku-4-5",
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: "anthropic",
+            model: "claude-haiku-4-5"
+          }
+        },
         eagerness: 100,
         minSilenceSeconds: 20,
         minSecondsBetweenThoughts: 20
@@ -4578,11 +4591,18 @@ test("maybeRunVoiceThoughtLoop skips generation when eagerness probability roll 
     botName: "clanker conk",
     voice: {
       enabled: true,
-      ambientReplyEagerness: 10,
-      thoughtEngine: {
+      ambientReplyEagerness: 10
+    },
+    initiative: {
+      voice: {
         enabled: true,
-        provider: "anthropic",
-        model: "claude-haiku-4-5",
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: "anthropic",
+            model: "claude-haiku-4-5"
+          }
+        },
         eagerness: 10,
         minSilenceSeconds: 20,
         minSecondsBetweenThoughts: 20

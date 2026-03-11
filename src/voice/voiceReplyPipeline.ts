@@ -85,7 +85,6 @@ export interface VoiceReplyPipelineParams {
 }
 
 export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
-  | "buildVoiceAddressingState"
   | "buildVoiceConversationContext"
   | "buildVoiceReplyPlaybackPlan"
   | "buildVoiceToolCallbacks"
@@ -279,8 +278,8 @@ function logReplySkipped({
       skipCause,
       replyTextPreview: replyText ? replyText.slice(0, 220) : null,
       replyPrompts,
-      conversationState: resolvedConversationContext?.engagementState || null,
-      engagedWithCurrentSpeaker: Boolean(resolvedConversationContext?.engagedWithCurrentSpeaker),
+      attentionMode: resolvedConversationContext?.attentionMode || null,
+      currentSpeakerActive: Boolean(resolvedConversationContext?.currentSpeakerActive),
       contextTurnsSent: contextMessages.length,
       contextTurnsAvailable: contextTurns.length,
       contextCharsSent: contextMessageChars
@@ -428,7 +427,6 @@ export async function runVoiceReplyPipeline(
   const recentVoiceEffectEvents = host.getRecentVoiceChannelEffectEvents(session, {
     maxItems: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
   });
-  const contextNow = Date.now();
   const sessionTiming = host.sessionLifecycle.buildVoiceSessionTimingContext(session);
   const streamWatchBrainContext = host.getStreamWatchBrainContextForPrompt(session, params.settings);
   const streamWatchLatestFrame =
@@ -444,17 +442,11 @@ export async function runVoiceReplyPipeline(
     session.streamWatch?.active && Array.isArray(session.streamWatch?.durableScreenNotes)
       ? session.streamWatch.durableScreenNotes
       : [];
-  const voiceAddressingState = host.buildVoiceAddressingState({
-    session,
-    userId: params.userId,
-    now: contextNow
-  });
   const generationConversationContext = {
     ...(resolvedConversationContext || {}),
     sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
     sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none"),
-    streamWatchBrainContext,
-    voiceAddressingState
+    streamWatchBrainContext
   };
 
   const markInFlightAcceptedBrainTurnPhase = (phase: "generation_only" | "tool_call_started" | "playback_requested") => {
@@ -508,7 +500,9 @@ export async function runVoiceReplyPipeline(
       directAddressed: Boolean(params.directAddressed),
       contextMessages,
       sessionId: session.id,
-      isEagerTurn: !params.directAddressed && !generationConversationContext?.engaged,
+      isEagerTurn:
+        !params.directAddressed &&
+        !Boolean(generationConversationContext?.currentSpeakerActive),
       voiceAmbientReplyEagerness: Number(voiceConversation.ambientReplyEagerness) || 0,
       responseWindowEagerness: Number(activity.responseWindowEagerness) || 0,
       conversationContext: generationConversationContext,

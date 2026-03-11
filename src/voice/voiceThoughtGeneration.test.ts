@@ -78,15 +78,15 @@ function createThoughtHost({
   };
 }
 
-test("resolveVoiceThoughtEngineConfig uses orchestrator binding", () => {
+test("resolveVoiceThoughtEngineConfig uses the canonical voice initiative binding", () => {
   const settings = createTestSettings({});
 
   const config = resolveVoiceThoughtEngineConfig(settings);
 
   assert.equal(config.enabled, true);
-  assert.equal(config.provider, "anthropic");
-  assert.equal(config.model, "claude-sonnet-4-6");
-  assert.equal(config.temperature, 0.8);
+  assert.equal(config.provider, "claude-oauth");
+  assert.equal(config.model, "claude-opus-4-6");
+  assert.equal(config.temperature, 1);
   assert.equal(config.eagerness, 50);
   assert.ok(config.minSilenceSeconds >= 8);
   assert.ok(config.minSecondsBetweenThoughts >= 30);

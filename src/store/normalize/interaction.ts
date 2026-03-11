@@ -26,19 +26,19 @@ export function normalizeInteractionSection(
   return {
     activity: {
       ambientReplyEagerness: normalizeInt(
-        activity.ambientReplyEagerness ?? activity.replyEagerness,
+        activity.ambientReplyEagerness,
         DEFAULT_SETTINGS.interaction.activity.ambientReplyEagerness,
         0,
         100
       ),
       responseWindowEagerness: normalizeInt(
-        activity.responseWindowEagerness ?? activity.replyEagerness,
+        activity.responseWindowEagerness,
         DEFAULT_SETTINGS.interaction.activity.responseWindowEagerness,
         0,
         100
       ),
       reactivity: normalizeInt(
-        activity.reactivity ?? activity.reactionLevel,
+        activity.reactivity,
         DEFAULT_SETTINGS.interaction.activity.reactivity,
         0,
         100

@@ -3,14 +3,14 @@ import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import { getPromptBotName } from "../prompts/promptCore.ts";
 import {
   normalizeVoiceText,
-  isVoiceTurnAddressedToBot,
   isRealtimeMode,
   normalizeVoiceRuntimeEventContext
 } from "./voiceSessionHelpers.ts";
 import {
   buildVoiceAddressingState as buildVoiceAddressingStateFromTranscript,
   hasBotNameCueForTranscript as hasBotNameCueForTranscriptFromSettings,
-  normalizeVoiceAddressingAnnotation as normalizeVoiceAddressingAnnotationFromTranscript
+  normalizeVoiceAddressingAnnotation as normalizeVoiceAddressingAnnotationFromTranscript,
+  resolveVoiceDirectAddressSignal
 } from "./voiceAddressing.ts";
 import { parseBooleanFlag } from "../normalization/valueParsers.ts";
 import {
@@ -52,7 +52,6 @@ import { isCancelIntent } from "../tools/cancelDetection.ts";
 import {
   clearMusicWakeLatch,
   getMusicWakeLatchState,
-  resolveMusicWakeLatchSeconds,
   touchMusicWakeLatch
 } from "./musicWakeLatch.ts";
 
@@ -331,18 +330,25 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
     now
   });
 
-  const engagedWithCurrentSpeaker =
+  const currentSpeakerActive =
     Boolean(directAddressed) ||
     singleParticipantAssistantFollowup.active ||
     (activeVoiceCommandCountsAsEngagement && sameAsVoiceCommandUser) ||
     (recentAssistantReply && sameAsRecentDirectAddress) ||
-    (recentDirectAddress && sameAsRecentDirectAddress);
-  const engaged = engagedWithCurrentSpeaker;
+    (recentDirectAddress && sameAsRecentDirectAddress) ||
+    Boolean(interruptedAssistantReply);
+  const attentionMode =
+    Boolean(directAddressed) ||
+    recentAssistantReply ||
+    recentDirectAddress ||
+    singleParticipantAssistantFollowup.active ||
+    Boolean(interruptedAssistantReply)
+      ? "ACTIVE"
+      : "AMBIENT";
 
   return {
-    engagementState: engaged ? "engaged" : activeVoiceCommandState ? "command_only_engaged" : "wake_word_biased",
-    engaged,
-    engagedWithCurrentSpeaker,
+    attentionMode,
+    currentSpeakerActive,
     singleParticipantAssistantFollowup: singleParticipantAssistantFollowup.active,
     recentAssistantReply,
     recentDirectAddress,
@@ -431,55 +437,22 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       runtimeEventContext: normalizedRuntimeEventContext
     };
   }
-  const directAddressedByWakePhrase = normalizedInputKind === "event"
-    ? false
-    : normalizedTranscript
-      ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
-      : false;
-  const normalizeWakeTokens = (value = ""): string[] =>
-    (String(value || "")
-      .trim()
-      .toLowerCase()
-      .normalize("NFKD")
-      .replace(/\p{M}+/gu, "")
-      .match(/[\p{L}\p{N}]+/gu) || []) as string[];
-  const containsTokenSequence = (tokens = [], sequence = []) => {
-    if (!Array.isArray(tokens) || !Array.isArray(sequence)) return false;
-    if (!tokens.length || !sequence.length || sequence.length > tokens.length) return false;
-    for (let start = 0; start <= tokens.length - sequence.length; start += 1) {
-      let matched = true;
-      for (let index = 0; index < sequence.length; index += 1) {
-        if (tokens[start + index] !== sequence[index]) {
-          matched = false;
-          break;
-        }
+  const directAddressSignal =
+    normalizedInputKind === "event"
+      ? {
+        directAddressed: false,
+        nameCueDetected: false,
+        addressedOrNamed: false
       }
-      if (matched) return true;
-    }
-    return false;
-  };
-  const botWakeTokens = normalizeWakeTokens(getPromptBotName(settings));
-  const transcriptWakeTokens = normalizeWakeTokens(normalizedTranscript);
-  const transcriptWakeTokenSet = new Set(transcriptWakeTokens);
-  const mergedWakeToken = botWakeTokens.length >= 2 ? botWakeTokens.join("") : "";
-  const mergedWakeTokenAddressed = Boolean(mergedWakeToken) && transcriptWakeTokenSet.has(mergedWakeToken);
-  const exactWakeSequenceAddressed = containsTokenSequence(transcriptWakeTokens, botWakeTokens);
-  const primaryWakeToken = botWakeTokens.find((token) => token.length >= 4 && !["bot", "ai", "assistant"].includes(token))
-    || botWakeTokens.find((token) => token.length >= 4)
-    || "";
-  const primaryWakeTokenAddressed = primaryWakeToken ? transcriptWakeTokenSet.has(primaryWakeToken) : false;
-  const deterministicDirectAddressed =
-    directAddressedByWakePhrase &&
-    (
-      primaryWakeTokenAddressed ||
-      exactWakeSequenceAddressed ||
-      !mergedWakeTokenAddressed
-    );
+      : resolveVoiceDirectAddressSignal({
+        transcript: normalizedTranscript,
+        settings
+      });
   const directAddressAssessment = {
-    confidence: deterministicDirectAddressed ? 0.92 : 0,
+    confidence: directAddressSignal.directAddressed ? 0.92 : 0,
     threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-    addressed: deterministicDirectAddressed,
-    reason: deterministicDirectAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct"
+    addressed: directAddressSignal.directAddressed,
+    reason: directAddressSignal.directAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct"
   };
   const directAddressConfidence = Number(directAddressAssessment.confidence) || 0;
   const directAddressThreshold = Number(directAddressAssessment.threshold) || DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
@@ -514,21 +487,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     participantCount,
     now
   });
-  const voiceAddressingState = buildVoiceAddressingState(manager, {
-    session,
-    userId: normalizedUserId,
-    now
-  });
-  const currentTurnAddressing = normalizeVoiceAddressingAnnotation(manager, {
-    directAddressed,
-    directedConfidence: directAddressConfidence,
-    source: "decision",
-    reason: directAddressAssessment?.reason || null
-  });
   const buildConversationContext = () => ({
     ...baseConversationContext,
-    voiceAddressingState,
-    currentTurnAddressing,
     pendingCommandFollowupSignal: Boolean(sameSpeakerPendingCommandFollowup),
     musicActive: Boolean(musicActive),
     musicWakeLatched: Boolean(musicWakeLatched),
@@ -596,7 +556,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
 
   if (ownedToolFollowupActive) {
     if (isCancelIntent(normalizedTranscript)) {
-      if (activeCommandSpeaker === normalizedUserId || directAddressed || directAddressedByWakePhrase) {
+      if (activeCommandSpeaker === normalizedUserId || directAddressSignal.addressedOrNamed) {
         return {
           allow: true,
           reason: "owned_tool_followup_cancel",
@@ -638,7 +598,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   }
 
   if (manager.isCommandOnlyActive(session, settings)) {
-    if (directAddressed || directAddressedByWakePhrase) {
+    if (directAddressed) {
       if (musicActive) {
         touchMusicWakeLatch(session, settings, normalizedUserId, now);
         musicWakeLatchState = getMusicWakeLatchState(session, now);
@@ -659,24 +619,17 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       };
     }
     if (!musicActive) {
-      const latchWindowMs = Math.round(resolveMusicWakeLatchSeconds(settings) * 1000);
-      const lastDirectAddressAt = Number(session?.lastDirectAddressAt || 0);
-      const msSinceDirectAddress = lastDirectAddressAt > 0 ? Math.max(0, now - lastDirectAddressAt) : Infinity;
-      if (msSinceDirectAddress <= latchWindowMs) {
-        // Within the command mode latch window — fall through to classifier/generation
-      } else {
-        return {
-          allow: false,
-          reason: "command_only_not_addressed",
-          participantCount,
-          directAddressed,
-          directAddressConfidence,
-          directAddressThreshold,
-          transcript: normalizedTranscript,
-          conversationContext,
-          runtimeEventContext: normalizedRuntimeEventContext
-        };
-      }
+      return {
+        allow: false,
+        reason: "command_only_not_addressed",
+        participantCount,
+        directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
+        transcript: normalizedTranscript,
+        conversationContext,
+        runtimeEventContext: normalizedRuntimeEventContext
+      };
     }
     if (!musicWakeLatched) {
       return {
@@ -728,14 +681,9 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   }
 
   // Bridge mode: deterministic wake arms a short music follow-up latch.
-  const nameCueDetected = normalizedInputKind === "event"
-    ? false
-    : hasBotNameCueForTranscript(manager, {
-      transcript: normalizedTranscript,
-      settings
-    });
+  const nameCueDetected = directAddressSignal.nameCueDetected;
   if (musicActive) {
-    if (nameCueDetected || directAddressedByWakePhrase) {
+    if (nameCueDetected || directAddressed) {
       touchMusicWakeLatch(session, settings, normalizedUserId, now);
       musicWakeLatchState = getMusicWakeLatchState(session, now);
       musicWakeLatched = musicWakeLatchState.active;
@@ -801,8 +749,6 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     musicWakeLatched,
     msUntilMusicWakeLatchExpiry,
     activeCommandOwner,
-    currentSpeakerDirectedConfidence: Number(voiceAddressingState?.currentSpeakerDirectedConfidence || 0),
-    currentSpeakerTarget: String(voiceAddressingState?.currentSpeakerTarget || "").trim() || null,
     runtimeEventContext: normalizedRuntimeEventContext
   });
   if (classifierResult.allow && musicActive && musicWakeLatched) {
@@ -842,11 +788,20 @@ export type ClassifierPromptInput = {
   musicWakeLatched?: boolean;
   msUntilMusicWakeLatchExpiry?: number | null;
   activeCommandOwner?: string | null;
-  conversationContext: {
-    recentAssistantReply?: boolean;
-    msSinceAssistantReply?: number | null;
-    msSinceDirectAddress?: number | null;
-  };
+  conversationContext: Pick<
+    VoiceConversationContext,
+    | "attentionMode"
+    | "currentSpeakerActive"
+    | "recentAssistantReply"
+    | "recentDirectAddress"
+    | "sameAsRecentDirectAddress"
+    | "msSinceAssistantReply"
+    | "msSinceDirectAddress"
+    | "activeCommandSpeaker"
+    | "activeCommandIntent"
+    | "pendingCommandFollowupSignal"
+    | "interruptedAssistantReply"
+  >;
   recentHistory?: string;
   runtimeEventContext?: VoiceRuntimeEventContext | null;
 };
@@ -907,6 +862,17 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
     parts.push(`Transcript: "${input.transcript}"`);
   }
 
+  parts.push(`Shared attention: ${input.conversationContext.attentionMode === "ACTIVE" ? "ACTIVE" : "AMBIENT"}.`);
+  if (normalizedInputKind !== "event") {
+    if (input.conversationContext.currentSpeakerActive) {
+      parts.push("Current speaker is already in your active thread.");
+    } else if (input.conversationContext.attentionMode === "ACTIVE") {
+      parts.push("The room is active, but this speaker is not clearly part of your current thread.");
+    } else {
+      parts.push("Current speaker is not currently in an active thread with you.");
+    }
+  }
+
   // Conversation recency
   if (input.conversationContext.recentAssistantReply) {
     const msSince = Number(input.conversationContext.msSinceAssistantReply || 0);
@@ -926,7 +892,18 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
     }
   }
   if (input.conversationContext.msSinceDirectAddress != null) {
-    parts.push(`Last addressed by name ${Math.round(input.conversationContext.msSinceDirectAddress / 1000)}s ago.`);
+    const directAddressSeconds = Math.round(input.conversationContext.msSinceDirectAddress / 1000);
+    if (input.conversationContext.sameAsRecentDirectAddress) {
+      parts.push(`This same speaker addressed you by name ${directAddressSeconds}s ago.`);
+    } else {
+      parts.push(`A different speaker addressed you by name ${directAddressSeconds}s ago.`);
+    }
+  }
+  if (input.conversationContext.pendingCommandFollowupSignal) {
+    parts.push("Pending command follow-up signal: this speaker may be continuing a command or disambiguation turn.");
+  }
+  if (input.conversationContext.interruptedAssistantReply?.utteranceText) {
+    parts.push("Interrupted-reply recovery is active for this speaker.");
   }
 
   // History
@@ -938,11 +915,11 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
   // Music state
   if (input.musicActive) {
     parts.push(``);
-    parts.push(`Music playing.`);
+    parts.push(`Music overlay active.`);
     if (input.musicWakeLatched) {
-      parts.push(`Wake latch active — you are listening for music commands (skip, volume, queue, etc). Prefer YES for short control commands.`);
+      parts.push("Music wake overlay is open. Short playback-control or immediate follow-up turns are likelier to be for you, but this is not a separate command mode.");
       if (Number.isFinite(Number(input.msUntilMusicWakeLatchExpiry))) {
-        parts.push(`Latch expires in ${Math.max(0, Math.round(Number(input.msUntilMusicWakeLatchExpiry) / 1000))}s.`);
+        parts.push(`Music wake overlay expires in ${Math.max(0, Math.round(Number(input.msUntilMusicWakeLatchExpiry) / 1000))}s.`);
       }
     }
   }
@@ -999,7 +976,7 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
   parts.push(`Response-window eagerness: ${normalizedResponseWindowEagerness}/100.`);
 
   if (normalizedAmbientEagerness <= 10) {
-    parts.push("You are in lurker mode — you prefer to stay quiet unless someone clearly wants your attention. You're here to listen, not to lead.");
+    parts.push("You are very quiet in ambient voice — prefer to stay silent unless someone clearly wants your attention. You're here to listen, not to lead.");
   } else if (normalizedAmbientEagerness <= 25) {
     parts.push("You are selective — you engage when addressed or in active back-and-forth, but you're comfortable staying quiet when others are talking among themselves.");
   } else if (normalizedAmbientEagerness <= 50) {
@@ -1043,8 +1020,6 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   musicWakeLatched = false,
   msUntilMusicWakeLatchExpiry = null,
   activeCommandOwner = null,
-  currentSpeakerDirectedConfidence = 0,
-  currentSpeakerTarget = null,
   runtimeEventContext = null
 }: {
   session: ReplyDecisionSessionLike;
@@ -1065,8 +1040,6 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   musicWakeLatched?: boolean;
   msUntilMusicWakeLatchExpiry?: number | null;
   activeCommandOwner?: string | null;
-  currentSpeakerDirectedConfidence?: number;
-  currentSpeakerTarget?: string | null;
   runtimeEventContext?: VoiceRuntimeEventContext | null;
 }): Promise<{
   allow: boolean;
@@ -1088,8 +1061,6 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   const classifierMaxOutputTokens = resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel);
   const classifierDebugEnabled = parseBooleanFlag(process.env.VOICE_CLASSIFIER_DEBUG, false);
   const botName = getPromptBotName(settings);
-  const _normalizedDirectedConfidence = Math.max(0, Math.min(1, Number(currentSpeakerDirectedConfidence) || 0));
-  const _normalizedTarget = String(currentSpeakerTarget || "").trim() || null;
   const normalizedUserId = String(userId || "").trim() || null;
   const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
   const logClassifierDebug = ({
@@ -1148,9 +1119,11 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
           : null,
         conversationContext: conversationContext && typeof conversationContext === "object"
           ? {
-            engagementState: String(conversationContext.engagementState || "").trim() || null,
-            engaged: Boolean(conversationContext.engaged),
-            engagedWithCurrentSpeaker: Boolean(conversationContext.engagedWithCurrentSpeaker),
+            attentionMode:
+              String(conversationContext.attentionMode || "").trim().toUpperCase() === "ACTIVE"
+                ? "ACTIVE"
+                : "AMBIENT",
+            currentSpeakerActive: Boolean(conversationContext.currentSpeakerActive),
             recentAssistantReply: Boolean(conversationContext.recentAssistantReply),
             recentDirectAddress: Boolean(conversationContext.recentDirectAddress),
             sameAsRecentDirectAddress: Boolean(conversationContext.sameAsRecentDirectAddress),

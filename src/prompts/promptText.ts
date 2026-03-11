@@ -50,7 +50,7 @@ function describeInitiativeEagerness(eagerness) {
     return "Low-key. Stay selective and skip often unless something genuinely catches your eye.";
   }
   if (normalized <= 55) {
-    return "Balanced. Post when there is a natural fit, otherwise keep lurking.";
+    return "Balanced. Surface an ambient text thought when there is a natural fit, otherwise stay quiet.";
   }
   if (normalized <= 75) {
     return "Engaged. You can start conversations or share finds when they fit the room.";
@@ -87,6 +87,8 @@ export function buildReplyPrompt({
   ambientReplyEagerness = 35,
   responseWindowEagerness = 55,
   recentReplyWindowActive = false,
+  textAttentionMode = "AMBIENT",
+  textAttentionReason = "cold_ambient",
   reactivity = 20,
   addressing = null,
   webSearch = null,
@@ -177,6 +179,10 @@ export function buildReplyPrompt({
   const directlyAddressed = Boolean(addressing?.directlyAddressed);
   const directAddressConfidence = Number(addressing?.directAddressConfidence);
   const directAddressThreshold = Number(addressing?.directAddressThreshold);
+  const normalizedTextAttentionMode = String(textAttentionMode || "").trim().toUpperCase() === "ACTIVE"
+    ? "ACTIVE"
+    : "AMBIENT";
+  const normalizedTextAttentionReason = String(textAttentionReason || "").trim().toLowerCase() || "cold_ambient";
   if (Number.isFinite(directAddressConfidence)) {
     const boundedConfidence = Math.max(0, Math.min(1, directAddressConfidence));
     const boundedThreshold = Number.isFinite(directAddressThreshold)
@@ -194,18 +200,27 @@ export function buildReplyPrompt({
   );
   const ambientEagerness = Math.max(0, Math.min(100, Number(ambientReplyEagerness) || 0));
   const followupEagerness = Math.max(0, Math.min(100, Number(responseWindowEagerness) || 0));
+  parts.push(`Shared text attention mode right now: ${normalizedTextAttentionMode}.`);
+  if (normalizedTextAttentionMode === "ACTIVE") {
+    if (normalizedTextAttentionReason === "direct_address") {
+      parts.push("You were directly pulled into this thread, so treat it as an active conversation unless the best answer is still [SKIP].");
+    } else {
+      parts.push("This looks like an active follow-up thread, not a cold ambient chime-in.");
+    }
+  } else {
+    parts.push("This is an ambient text moment. You can still chime in, but only if you genuinely fit the room.");
+  }
   parts.push(`Your text ambient-reply eagerness is ${ambientEagerness}/100.`);
   parts.push(`Your response-window eagerness is ${followupEagerness}/100.`);
 
-  // Ambient conversation initiative
   if (ambientEagerness <= 15) {
-    parts.push("You are mostly a lurker. Only speak when someone is clearly talking to you or you have something genuinely important to say.");
+    parts.push("You are very quiet in ambient text. Only speak when someone is clearly pulling you in or you have something genuinely worth adding.");
   } else if (ambientEagerness <= 35) {
-    parts.push("You tend to observe more than talk. Only chime in when you genuinely have something to say or someone is clearly engaging with you.");
+    parts.push("You tend to observe more than talk. Only surface an ambient text reply when you genuinely have something to say or someone is clearly engaging with you.");
   } else if (ambientEagerness <= 55) {
     parts.push("Be selective about when you jump in. If you do not have something genuinely useful, interesting, or funny to add, output [SKIP].");
   } else if (ambientEagerness <= 75) {
-    parts.push("You are fairly engaged. Contribute when you have something that fits the flow, but still pick your moments.");
+    parts.push("You are fairly engaged. Contribute when you have something that fits the flow, but still pick your ambient moments.");
   } else if (ambientEagerness <= 90) {
     parts.push("You are an active participant. Jump in when you have something — even lighter contributions are fine if they fit naturally.");
   } else {
@@ -243,10 +258,10 @@ export function buildReplyPrompt({
 
   // Channel mode
   if (normalizedChannelMode === "reply_channel") {
-    parts.push("This is one of your reply/lurk channels. Short riffs and acknowledgements are fine when they fit naturally.");
+    parts.push("This channel is in your ambient text pool. Short riffs and acknowledgements are fine when they fit naturally.");
     parts.push("If your reply would derail, interrupt, or just repeat what was said, output [SKIP].");
   } else {
-    parts.push("This is not one of your reply/lurk channels. Only jump in if your message is worth the interruption.");
+    parts.push("This channel is outside your ambient text pool. Only jump in if your message is worth the interruption.");
   }
 
   const normalizedReactivity = Math.max(0, Math.min(100, Number(reactivity) || 0));
@@ -635,7 +650,7 @@ export function buildDiscoveryPrompt({
     }
   }
 
-  parts.push("Task: write one standalone Discord message that feels timely and human.");
+  parts.push("Task: write one ambient Discord message that feels timely and human.");
   parts.push("Keep it open, honest, non-spammy, and slightly surprising.");
   parts.push("If there is genuinely nothing good to post, output exactly [SKIP].");
 
@@ -668,12 +683,12 @@ export function buildInitiativePrompt({
   const parts = [];
   const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
 
-  parts.push("=== INITIATIVE MODE ===");
-  parts.push(`You are ${String(botName || "the bot").trim() || "the bot"}. You have a moment to look around your Discord channels and decide whether you want to post something.`);
-  parts.push("This initiative action is always a normal text-channel post into one of the eligible text channels below.");
+  parts.push("=== AMBIENT TEXT MODE ===");
+  parts.push(`You are ${String(botName || "the bot").trim() || "the bot"}. You have a moment to look around your Discord channels and decide whether you want to surface an ambient text thought.`);
+  parts.push("This ambient action is always a normal text-channel post into one of the eligible text channels below.");
   parts.push("Some recent lines may be marked [vc], meaning they are transcripts from voice chat linked to that text channel. Use them as room context, but the action you choose here is still a text post in the linked text channel.");
   parts.push(`Persona: ${String(persona || "").trim() || "playful slang, open, honest, exploratory"}`);
-  parts.push(`Social mode: ${describeInitiativeEagerness(initiativeEagerness)} (initiative eagerness ${Math.max(0, Math.min(100, Number(initiativeEagerness) || 0))}/100)`);
+  parts.push(`Social mode: ${describeInitiativeEagerness(initiativeEagerness)} (ambient text eagerness ${Math.max(0, Math.min(100, Number(initiativeEagerness) || 0))}/100)`);
 
   parts.push("=== CHANNELS ===");
   parts.push(formatInitiativeChannelSummaries(channelSummaries));
@@ -737,11 +752,11 @@ export function buildInitiativePrompt({
     parts.push("Media prompt hard constraints: no visible text, letters, numbers, logos, captions, subtitles, UI, or watermarks.");
     parts.push(mediaGuidance);
   } else {
-    parts.push("Media generation is unavailable for this initiative cycle. Use mediaDirective=\"none\".");
+    parts.push("Media generation is unavailable for this ambient text cycle. Use mediaDirective=\"none\".");
   }
 
   parts.push("=== TASK ===");
-  parts.push("Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, [SKIP] and check back later.");
+  parts.push("Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, [SKIP] and stay ambient.");
   parts.push("That can mean reacting to a live conversation, sharing something from your feed, or following your own curiosity.");
   parts.push("If you notice a source consistently is not producing anything useful, or the community's interests point toward sources you do not have yet, you can adjust your feed.");
   parts.push("Choose the channel that best fits what you want to say. Do not pick a channel at random.");

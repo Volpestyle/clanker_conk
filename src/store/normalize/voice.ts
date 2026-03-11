@@ -87,7 +87,7 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
     },
     conversationPolicy: {
       ambientReplyEagerness: normalizeInt(
-        conversationPolicy.ambientReplyEagerness ?? conversationPolicy.replyEagerness,
+        conversationPolicy.ambientReplyEagerness,
         DEFAULT_SETTINGS.voice.conversationPolicy.ambientReplyEagerness,
         0,
         100

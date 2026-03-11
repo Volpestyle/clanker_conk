@@ -54,9 +54,8 @@ function buildClassifierArgs() {
     participantCount: 1,
     participantList: ["alice"],
     conversationContext: {
-      engagementState: "wake_word_biased",
-      engaged: false,
-      engagedWithCurrentSpeaker: false,
+      attentionMode: "AMBIENT",
+      currentSpeakerActive: false,
       recentAssistantReply: true,
       recentDirectAddress: false,
       sameAsRecentDirectAddress: false,
@@ -83,6 +82,11 @@ test("runVoiceReplyClassifier emits debug prompt/result logs when VOICE_CLASSIFI
     assert.equal(result.replyPrompts.hiddenByDefault, true);
     assert.match(String(result.replyPrompts.systemPrompt || ""), /Return exactly YES or NO/i);
     assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Transcript: "Yo\."/);
+    assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Shared attention: AMBIENT\./);
+    assert.match(
+      String(result.replyPrompts.initialUserPrompt || ""),
+      /Current speaker is not currently in an active thread with you\./
+    );
     assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Response-window eagerness: 65\/100\./);
     const debugLogs = logs.filter((entry) => entry.content === "voice_reply_classifier_debug");
     assert.equal(debugLogs.length, 2);

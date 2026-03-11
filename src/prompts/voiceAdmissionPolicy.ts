@@ -1,8 +1,8 @@
 import { normalizeVoiceRuntimeEventContext } from "../voice/voiceSessionHelpers.ts";
 
 type VoiceAdmissionPolicyContext = {
-  engaged?: boolean;
-  engagedWithCurrentSpeaker?: boolean;
+  attentionMode?: "ACTIVE" | "AMBIENT";
+  currentSpeakerActive?: boolean;
 };
 
 type VoiceAdmissionPolicyOptions = {
@@ -24,7 +24,7 @@ type VoiceAdmissionPolicyOptions = {
 
 function getAmbientReplyTier(eagerness: number): string {
   if (eagerness <= 0) {
-    return "You are in lurker mode — you prefer to stay quiet unless someone clearly wants your attention or you have something genuinely important to say. Default to [SKIP].";
+    return "You are very quiet in ambient voice. Prefer silence unless someone clearly wants your attention or you have something genuinely important to say. Default to [SKIP].";
   }
   if (eagerness <= 25) {
     return "You are selective — you engage when addressed or when you have something clearly worth contributing. You're comfortable with silence and default to [SKIP] for ambient chatter.";
@@ -81,8 +81,7 @@ export function buildVoiceAdmissionPolicyLines({
     Math.min(100, Number(responseWindowEagerness) || 0)
   );
   const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
-  const engagedWithCurrentSpeaker = Boolean(conversationContext?.engagedWithCurrentSpeaker);
-  const _engaged = Boolean(conversationContext?.engaged);
+  const currentSpeakerActive = Boolean(conversationContext?.currentSpeakerActive);
 
   lines.push(`Voice ambient-reply eagerness: ${normalizedAmbientEagerness}/100.`);
   lines.push(getAmbientReplyTier(normalizedAmbientEagerness));
@@ -143,7 +142,7 @@ export function buildVoiceAdmissionPolicyLines({
 
   if (normalizedIsEagerTurn) {
     lines.push("You were NOT directly addressed. You're considering whether to chime in.");
-    if (engagedWithCurrentSpeaker) {
+    if (currentSpeakerActive) {
       if (normalizedResponseWindowEagerness <= 25) {
         lines.push("You are actively in this speaker's thread, but do not force a reply unless the continuation is clearly for you.");
       } else if (normalizedResponseWindowEagerness <= 70) {

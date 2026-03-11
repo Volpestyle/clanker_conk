@@ -308,9 +308,8 @@ test("buildVoiceTurnPrompt includes interruption recovery context for the next t
     speakerName: "alice",
     transcript: "actually make it rock instead",
     conversationContext: {
-      engagementState: "engaged",
-      engaged: true,
-      engagedWithCurrentSpeaker: true,
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: true,
       recentAssistantReply: true,
       recentDirectAddress: true,
       sameAsRecentDirectAddress: true,
@@ -339,9 +338,8 @@ test("buildVoiceTurnPrompt keeps soft addressing guesses out of the prompt", () 
     speakerName: "alice",
     transcript: "can you queue that up",
     conversationContext: {
-      engagementState: "engaged",
-      engaged: true,
-      engagedWithCurrentSpeaker: true,
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: true,
       recentAssistantReply: true,
       recentDirectAddress: true,
       sameAsRecentDirectAddress: true,

@@ -1,4 +1,4 @@
-# Unified Initiative System
+# Ambient Text Cycle
 
 > **Scope:** Current shipped ambient text delivery cycle.
 > Shared attention model: [`presence-and-attention.md`](presence-and-attention.md)
@@ -9,7 +9,7 @@ This document describes the text-side ambient delivery system in `src/bot/initia
 
 ## Core Model
 
-One text initiative cycle handles the text spoke of `AMBIENT` attention:
+One ambient text cycle handles the text spoke of `AMBIENT` attention:
 
 - conversational chime-ins in active channels
 - standalone proactive posts
@@ -62,10 +62,10 @@ Canonical settings:
 - `initiative.text.minMinutesBetweenPosts`
 - `initiative.text.maxPostsPerDay`
 
-Implementation note:
+The canonical persisted action history for this cycle is the initiative action log:
 
-- daily-cap accounting includes both `initiative_post` and `text_thought_loop_post` action kinds in persisted action history
-- min-gap cooldown resets after either an `initiative_post`, an `initiative_skip`, or a `text_thought_loop_post`
+- `initiative_post` counts as a surfaced ambient text thought
+- `initiative_skip` starts the same minimum-gap cooldown after the bot looked around and decided to stay quiet
 
 ### 3. Context Assembly
 
@@ -148,10 +148,10 @@ The model can:
 
 ## Prompt Structure
 
-The shipped initiative prompt in `src/prompts/promptText.ts` is structured like this:
+The shipped ambient-text prompt in `src/prompts/promptText.ts` is structured like this:
 
 ```text
-=== INITIATIVE MODE ===
+=== AMBIENT TEXT MODE ===
 === CHANNELS ===
 === YOUR FEED ===
 === FEED SOURCES ===
@@ -165,14 +165,14 @@ The shipped initiative prompt in `src/prompts/promptText.ts` is structured like 
 
 Behavior guidance comes from memory-backed `guidance` and `behavioral` facts.
 
-The prompt explicitly frames initiative as a text-channel action. Voice-derived transcript lines may still appear in channel summaries when they were persisted into the linked text channel, but they are context only, not a separate voice-delivery path.
+The prompt explicitly frames this cycle as an ambient text action. Voice-derived transcript lines may still appear in channel summaries when they were persisted into the linked text channel, but they are context only, not a separate voice-delivery path.
 
 ## Relationship To Shared Attention
 
 In the shared attention model:
 
 - direct mentions and active exchanges promote Clanker into `ACTIVE`
-- this initiative loop is the current text transport for `AMBIENT`
+- this ambient text cycle is the current text transport for `AMBIENT`
 - the voice thought engine is the corresponding voice transport for `AMBIENT`
 
 The transports stay different, but the behavioral intent is the same: Clanker is present, occasionally thinks of something worth surfacing, and may still choose silence.
@@ -183,15 +183,15 @@ The transports stay different, but the behavioral intent is the same: Clanker is
 
 | Setting | Purpose |
 |---|---|
-| `initiative.text.enabled` | Master initiative toggle |
-| `initiative.text.execution` | Execution policy for the initiative LLM call |
+| `initiative.text.enabled` | Master ambient-text toggle |
+| `initiative.text.execution` | Execution policy for the ambient-text LLM call |
 | `initiative.text.eagerness` | Probability gate before consultation |
-| `initiative.text.minMinutesBetweenPosts` | Minimum spacing between initiative considerations |
-| `initiative.text.maxPostsPerDay` | Daily initiative budget |
+| `initiative.text.minMinutesBetweenPosts` | Minimum spacing between ambient-text considerations |
+| `initiative.text.maxPostsPerDay` | Daily ambient-text budget |
 | `initiative.text.lookbackMessages` | Channel context window |
 | `initiative.text.allowActiveCuriosity` | Enables `web_search` and `browser_browse` |
-| `initiative.text.maxToolSteps` | Max initiative tool-loop steps |
-| `initiative.text.maxToolCalls` | Max initiative tool calls |
+| `initiative.text.maxToolSteps` | Max ambient-text tool-loop steps |
+| `initiative.text.maxToolCalls` | Max ambient-text tool calls |
 
 ### Discovery Infrastructure Settings
 

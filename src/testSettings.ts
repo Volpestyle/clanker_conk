@@ -32,15 +32,20 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
   const browser = isRecord(raw.browser) ? raw.browser : {};
   const voice = isRecord(raw.voice) ? raw.voice : {};
   const permissions = isRecord(raw.permissions) ? raw.permissions : {};
-  const discovery = isRecord(raw.discovery) ? raw.discovery : {};
+  const initiative = isRecord(raw.initiative) ? raw.initiative : {};
+  const initiativeText = isRecord(initiative.text) ? initiative.text : {};
+  const initiativeVoice = isRecord(initiative.voice) ? initiative.voice : {};
+  const initiativeVoiceExecution = isRecord(initiativeVoice.execution) ? initiativeVoice.execution : {};
+  const initiativeVoiceExecutionModel = isRecord(initiativeVoiceExecution.model)
+    ? initiativeVoiceExecution.model
+    : {};
+  const discovery = isRecord(initiative.discovery) ? initiative.discovery : {};
   const startup = isRecord(raw.startup) ? raw.startup : {};
-  const textThoughtLoop = isRecord(raw.textThoughtLoop) ? raw.textThoughtLoop : {};
   const memory = isRecord(raw.memory) ? raw.memory : {};
   const reflection = isRecord(memory.reflection) ? memory.reflection : {};
   const codeAgent = isRecord(raw.codeAgent) ? raw.codeAgent : {};
   const automations = isRecord(raw.automations) ? raw.automations : {};
   const subAgentOrchestration = isRecord(raw.subAgentOrchestration) ? raw.subAgentOrchestration : {};
-  const voiceThoughtEngine = isRecord(voice.thoughtEngine) ? voice.thoughtEngine : {};
   const voiceGenerationLlm = isRecord(voice.generationLlm) ? voice.generationLlm : {};
   const voiceReplyDecisionLlm = isRecord(voice.replyDecisionLlm) ? voice.replyDecisionLlm : {};
   const vision = isRecord(raw.vision) ? raw.vision : {};
@@ -100,9 +105,9 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
     },
     interaction: {
       activity: {
-        ambientReplyEagerness: activity.ambientReplyEagerness ?? activity.replyEagerness,
-        responseWindowEagerness: activity.responseWindowEagerness ?? activity.replyEagerness,
-        reactivity: activity.reactivity ?? activity.reactionLevel,
+        ambientReplyEagerness: activity.ambientReplyEagerness,
+        responseWindowEagerness: activity.responseWindowEagerness,
+        reactivity: activity.reactivity,
         minSecondsBetweenMessages: activity.minSecondsBetweenMessages,
         replyCoalesceWindowSeconds: activity.replyCoalesceWindowSeconds,
         replyCoalesceMaxMessages: activity.replyCoalesceMaxMessages
@@ -281,31 +286,31 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
     },
     initiative: {
       text: {
-        enabled: textThoughtLoop.enabled,
+        enabled: initiativeText.enabled,
         execution: {
           mode: "inherit_orchestrator"
         },
-        eagerness: textThoughtLoop.eagerness,
-        minMinutesBetweenPosts: textThoughtLoop.minMinutesBetweenThoughts ?? textThoughtLoop.minMinutesBetweenPosts,
-        maxPostsPerDay: textThoughtLoop.maxThoughtsPerDay ?? textThoughtLoop.maxPostsPerDay,
-        lookbackMessages: textThoughtLoop.lookbackMessages,
-        allowActiveCuriosity: textThoughtLoop.allowActiveCuriosity,
-        maxToolSteps: textThoughtLoop.maxToolSteps,
-        maxToolCalls: textThoughtLoop.maxToolCalls
+        eagerness: initiativeText.eagerness,
+        minMinutesBetweenPosts: initiativeText.minMinutesBetweenPosts,
+        maxPostsPerDay: initiativeText.maxPostsPerDay,
+        lookbackMessages: initiativeText.lookbackMessages,
+        allowActiveCuriosity: initiativeText.allowActiveCuriosity,
+        maxToolSteps: initiativeText.maxToolSteps,
+        maxToolCalls: initiativeText.maxToolCalls
       },
       voice: {
-        enabled: voiceThoughtEngine.enabled,
+        enabled: initiativeVoice.enabled,
         execution: {
           mode: "dedicated_model",
           model: {
-            provider: voiceThoughtEngine.provider,
-            model: voiceThoughtEngine.model
+            provider: initiativeVoiceExecutionModel.provider,
+            model: initiativeVoiceExecutionModel.model
           },
-          temperature: voiceThoughtEngine.temperature
+          temperature: initiativeVoiceExecution.temperature
         },
-        eagerness: voiceThoughtEngine.eagerness,
-        minSilenceSeconds: voiceThoughtEngine.minSilenceSeconds,
-        minSecondsBetweenThoughts: voiceThoughtEngine.minSecondsBetweenThoughts
+        eagerness: initiativeVoice.eagerness,
+        minSilenceSeconds: initiativeVoice.minSilenceSeconds,
+        minSecondsBetweenThoughts: initiativeVoice.minSecondsBetweenThoughts
       },
       discovery: isRecord(discovery)
         ? {
@@ -360,7 +365,7 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
         maxConcurrentSessions: voice.maxConcurrentSessions
       },
       conversationPolicy: {
-        ambientReplyEagerness: voice.ambientReplyEagerness ?? voice.replyEagerness,
+        ambientReplyEagerness: voice.ambientReplyEagerness,
         commandOnlyMode: voice.commandOnlyMode,
         allowNsfwHumor: voice.allowNsfwHumor,
         textOnlyMode: voice.textOnlyMode,

@@ -2,7 +2,7 @@ import { clamp } from "../utils.ts";
 import {
   applyOrchestratorOverrideSettings,
   getMemorySettings,
-  getResolvedOrchestratorBinding,
+  getResolvedVoiceInitiativeBinding,
   getVoiceConversationPolicy,
   getVoiceInitiativeSettings
 } from "../settings/agentStack.ts";
@@ -172,11 +172,11 @@ function collectSessionGuidanceFacts(session: VoiceSession) {
 
 export function resolveVoiceThoughtEngineConfig(settings: ThoughtSettings = null): VoiceThoughtEngineConfig {
   const thoughtEngine = getVoiceInitiativeSettings(settings);
-  const orchestrator = getResolvedOrchestratorBinding(settings);
+  const binding = getResolvedVoiceInitiativeBinding(settings);
   const enabled = Boolean(thoughtEngine.enabled);
-  const provider = normalizeLlmProvider(orchestrator.provider, "anthropic");
-  const model = String(orchestrator.model || "").trim().slice(0, 120) || "claude-opus-4-6";
-  const temperature = clamp(0.8, 0, 2);
+  const provider = normalizeLlmProvider(binding.provider, "anthropic");
+  const model = String(binding.model || "").trim().slice(0, 120) || "claude-opus-4-6";
+  const temperature = clamp(Number(binding.temperature) || 0.8, 0, 2);
   const eagerness = clamp(Number(thoughtEngine.eagerness) || 0, 0, 100);
   const minSilenceSeconds = clamp(
     Number(thoughtEngine.minSilenceSeconds) || 20,
@@ -382,7 +382,6 @@ export async function evaluateVoiceThoughtDecision(
     };
   }
 
-  const orchestrator = getResolvedOrchestratorBinding(settings);
   if (!host.llm?.generate) {
     return {
       allow: false,
@@ -393,8 +392,9 @@ export async function evaluateVoiceThoughtDecision(
     };
   }
 
-  const llmProvider = normalizeLlmProvider(orchestrator.provider, "anthropic");
-  const llmModel = String(orchestrator.model || "").trim().slice(0, 120) || "claude-opus-4-6";
+  const binding = getResolvedVoiceInitiativeBinding(settings);
+  const llmProvider = normalizeLlmProvider(binding.provider, "anthropic");
+  const llmModel = String(binding.model || "").trim().slice(0, 120) || "claude-opus-4-6";
   const participants = host.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
   const recentHistory = host.formatVoiceDecisionHistory(session, 8, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
   const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));

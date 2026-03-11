@@ -307,6 +307,40 @@ test("maybeHandleMusicPlaybackTurn sends direct-addressed music turns to the mai
   assert.equal(stopCheckEvent?.metadata?.gateDecisionReason, "direct_address");
 });
 
+test("maybeHandleMusicPlaybackTurn sends fuzzy bot-name music turns to the main brain", async () => {
+  const { manager, pauseCalls, musicBrainPrompts, loggedEvents } = createPlaybackHost();
+  const session = {
+    id: "session-playing-name-cue",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    ending: false,
+    musicWakeLatchedUntil: 0,
+    musicWakeLatchedByUserId: null
+  };
+  ensureSessionMusicState(manager, session);
+  setMusicPhase(manager, session, "playing");
+
+  const handled = await maybeHandleMusicPlaybackTurn(manager, {
+    session,
+    settings: createDedicatedMusicBrainSettings(),
+    userId: "user-1",
+    pcmBuffer: Buffer.alloc(0),
+    source: "realtime",
+    transcript: "hey clunker what do you think about kanye"
+  });
+
+  assert.equal(handled, false);
+  assert.equal(session.music?.phase, "playing");
+  assert.equal(session.music?.replyHandoffMode, null);
+  assert.equal(pauseCalls.length, 0);
+  assert.equal(musicBrainPrompts.length, 0);
+  const stopCheckEvent = loggedEvents.find((entry) => entry.content === "voice_music_stop_check");
+  assert.equal(stopCheckEvent?.metadata?.decisionReason, "main_brain_decides");
+  assert.equal(stopCheckEvent?.metadata?.gateDecisionReason, "name_cue");
+  assert.equal(stopCheckEvent?.metadata?.nameCueDetected, true);
+});
+
 test("maybeHandleMusicPlaybackTurn sends latch-open followups to the main brain", async () => {
   const { manager, loggedEvents, musicBrainPrompts } = createPlaybackHost();
   const session = {

@@ -47,7 +47,7 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         style={rangeStyle(form.textAmbientReplyEagerness)}
       />
       <p>
-        How willing the bot is to jump into active text conversations when nobody has directly pulled it in yet. Higher values widen unsolicited participation.
+        How willing the bot is to surface an ambient text reply when nobody has directly pulled it in yet. Higher values widen colder ambient participation.
       </p>
 
       <label htmlFor="response-window-eagerness">
@@ -64,11 +64,11 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         style={rangeStyle(form.responseWindowEagerness)}
       />
       <p>
-        How sticky follow-up conversations are after the bot was recently engaged. Higher values keep it in the thread longer before it goes back to lurking.
+        How sticky `ACTIVE` follow-up conversations are after the bot was recently engaged. Higher values keep it in the thread longer before it fades back to ambient.
       </p>
 
       <label htmlFor="text-initiative-eagerness">
-        Standalone post initiative: <strong>{form.textInitiativeEagerness}%</strong>
+        Ambient text thought eagerness: <strong>{form.textInitiativeEagerness}%</strong>
       </label>
       <input
         id="text-initiative-eagerness"
@@ -81,7 +81,7 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         style={rangeStyle(form.textInitiativeEagerness)}
       />
       <p>
-        This gates how often the bot even considers making a standalone post on its own. The model still decides whether to post, where to post, or to skip.
+        This gates how often the bot even considers surfacing an ambient text thought on its own. The model still decides whether to post, where to post, or to skip.
       </p>
 
       <label htmlFor="reactivity">
@@ -120,7 +120,7 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
             checked={form.textInitiativeEnabled}
             onChange={set("textInitiativeEnabled")}
           />
-          Enable text initiative
+          Enable ambient text thoughts
         </label>
         <label>
           <input type="checkbox" checked={form.allowReactions} onChange={set("allowReactions")} />
@@ -143,7 +143,7 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
       {form.textInitiativeEnabled && (
         <div className="split">
           <div>
-            <label htmlFor="text-initiative-min-minutes">Min minutes between initiative considerations</label>
+            <label htmlFor="text-initiative-min-minutes">Min minutes between ambient text considerations</label>
             <input
               id="text-initiative-min-minutes"
               type="number"
@@ -154,7 +154,7 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
             />
           </div>
           <div>
-            <label htmlFor="text-initiative-max-per-day">Max initiative posts/day</label>
+            <label htmlFor="text-initiative-max-per-day">Max ambient text posts/day</label>
             <input
               id="text-initiative-max-per-day"
               type="number"
@@ -171,7 +171,7 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         <>
           <div className="split">
             <div>
-              <label htmlFor="text-initiative-lookback">Recent messages to inspect per channel</label>
+              <label htmlFor="text-initiative-lookback">Recent messages to inspect per ambient-text channel</label>
               <input
                 id="text-initiative-lookback"
                 type="number"
@@ -182,7 +182,7 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
               />
             </div>
             <div>
-              <label htmlFor="text-initiative-max-tool-steps">Max initiative tool loop steps</label>
+              <label htmlFor="text-initiative-max-tool-steps">Max ambient text tool-loop steps</label>
               <input
                 id="text-initiative-max-tool-steps"
                 type="number"
@@ -196,7 +196,7 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
 
           <div className="split">
             <div>
-              <label htmlFor="text-initiative-max-tool-calls">Max initiative tool calls</label>
+              <label htmlFor="text-initiative-max-tool-calls">Max ambient text tool calls</label>
               <input
                 id="text-initiative-max-tool-calls"
                 type="number"

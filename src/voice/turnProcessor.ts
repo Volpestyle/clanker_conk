@@ -32,7 +32,6 @@ import {
 import {
   getRealtimeCommitMinimumBytes,
   isRealtimeMode,
-  isVoiceTurnAddressedToBot,
   normalizeVoiceText,
   resolveVoiceAsrLanguageGuidance
 } from "./voiceSessionHelpers.ts";
@@ -54,6 +53,7 @@ import type {
 } from "./voiceSessionTypes.ts";
 import { providerSupports } from "./voiceModes.ts";
 import { isSystemSpeechOpportunitySource } from "./systemSpeechOpportunity.ts";
+import { resolveVoiceDirectAddressSignal } from "./voiceAddressing.ts";
 
 type TurnProcessorSettings = Record<string, unknown> | null;
 
@@ -469,9 +469,8 @@ export class TurnProcessor {
         Number.isFinite(Number(logContext?.pendingQueueDepth))
           ? Math.round(Number(logContext?.pendingQueueDepth))
           : undefined,
-      conversationState: decision.conversationContext?.engagementState || null,
-      conversationEngaged: Boolean(decision.conversationContext?.engaged),
-      engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
+      attentionMode: decision.conversationContext?.attentionMode || null,
+      currentSpeakerActive: Boolean(decision.conversationContext?.currentSpeakerActive),
       recentAssistantReply: Boolean(decision.conversationContext?.recentAssistantReply),
       msSinceAssistantReply: Number.isFinite(decision.conversationContext?.msSinceAssistantReply)
         ? Math.round(decision.conversationContext.msSinceAssistantReply)
@@ -728,9 +727,18 @@ export class TurnProcessor {
         .filter(Boolean)
         .some((ownerUserId) => ownerUserId === normalizedUserId)
     );
-    const directAddressed = normalizedTranscript
-      ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
-      : false;
+    const directAddressSignal = normalizedTranscript
+      ? resolveVoiceDirectAddressSignal({
+        transcript: normalizedTranscript,
+        settings
+      })
+      : {
+        directAddressed: false,
+        nameCueDetected: false,
+        addressedOrNamed: false
+      };
+    const directAddressed = directAddressSignal.directAddressed;
+    const nameCueDetected = directAddressSignal.nameCueDetected;
     const implicitSingleSpeakerStanding = participantCount > 0 && participantCount <= 1;
     const hasCancelableWork = Boolean(
       pendingResponse ||
@@ -753,8 +761,9 @@ export class TurnProcessor {
       commandOwnerUserId,
       ownerMatched,
       directAddressed,
+      nameCueDetected,
       implicitSingleSpeakerStanding,
-      speakerHasStanding: ownerMatched || directAddressed || implicitSingleSpeakerStanding,
+      speakerHasStanding: ownerMatched || directAddressSignal.addressedOrNamed || implicitSingleSpeakerStanding,
       hasCancelableWork,
       activeVoiceGeneration
     };
@@ -849,6 +858,7 @@ export class TurnProcessor {
         speakerHasStanding: resolvedCancelContext.speakerHasStanding,
         ownerMatched: resolvedCancelContext.ownerMatched,
         directAddressed: resolvedCancelContext.directAddressed,
+        nameCueDetected: resolvedCancelContext.nameCueDetected,
         implicitSingleSpeakerStanding: resolvedCancelContext.implicitSingleSpeakerStanding,
         participantCount: resolvedCancelContext.participantCount,
         pendingResponseOwnerUserId: resolvedCancelContext.pendingResponseOwnerUserId,

@@ -46,9 +46,8 @@ export type VoiceAddressingState = {
 };
 
 export type VoiceConversationContext = {
-    engagementState: string;
-    engaged: boolean;
-    engagedWithCurrentSpeaker: boolean;
+    attentionMode: "ACTIVE" | "AMBIENT";
+    currentSpeakerActive: boolean;
     singleParticipantAssistantFollowup?: boolean;
     recentAssistantReply: boolean;
     recentDirectAddress: boolean;
@@ -59,8 +58,6 @@ export type VoiceConversationContext = {
     activeCommandDomain?: string | null;
     activeCommandIntent?: string | null;
     msUntilCommandSessionExpiry?: number | null;
-    voiceAddressingState?: VoiceAddressingState | null;
-    currentTurnAddressing?: VoiceAddressingAnnotation | null;
     pendingCommandFollowupSignal?: boolean;
     musicActive?: boolean;
     musicWakeLatched?: boolean;

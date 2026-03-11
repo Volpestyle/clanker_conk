@@ -23,7 +23,7 @@ Current shared voice catalog size:
 
 - `91` scenarios total
 - `8` scenario groups
-- Running both active voice suites exercises those same `91` scenarios twice: once in `voiceAdmission.live.test.ts` and once in the voice section of `replyGeneration.live.test.ts`
+- The same `91` scenarios intentionally exercise two different contracts: voice admission in `voiceAdmission.live.test.ts` and voice generation in the voice section of `replyGeneration.live.test.ts`
 - Voice generation expectations are now exact for `82` of those `91` shared scenarios
 - The remaining `9` generation `either` cases are raw room-event cues, where admission may allow but the brain is still intentionally free to speak or `[SKIP]`
 
@@ -48,7 +48,7 @@ Coverage assessment:
 
 ### Structured Reply Live Test (Generation LLM only — no classifier)
 
-This exercises the real structured reply contract for both text and voice generation.
+This exercises the real structured reply contract for both text and voice generation across `ACTIVE` and `AMBIENT` situations.
 It tests the **generation LLM brain only** — the classifier admission pipeline is NOT involved.
 Each scenario builds a full generation prompt (`buildSystemPrompt` + `buildVoiceTurnPrompt`)
 and sends it directly to the LLM via `llm.generate()`, then asserts whether the structured

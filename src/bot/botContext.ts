@@ -159,9 +159,12 @@ type ShouldAttemptReplyDecisionRuntimeFn = (payload: {
   settings: Record<string, unknown>;
   recentMessages: Array<Record<string, unknown>>;
   addressSignal: Record<string, unknown> | null;
+  isReplyChannel?: boolean;
   forceRespond?: boolean;
   forceDecisionLoop?: boolean;
   triggerMessageId?: string | null;
+  triggerAuthorId?: string | null;
+  triggerReferenceMessageId?: string | null;
 }) => ReturnType<ShouldAttemptReplyDecisionFn>;
 type HasBotMessageInRecentWindowRuntimeFn = (payload: {
   recentMessages: Array<Record<string, unknown>>;

@@ -65,8 +65,8 @@ export function LlmConfigurationSettingsSection({
         </div>
       </div>
 
-      <h4>Text Initiative LLM</h4>
-      <p>Optional override for the standalone initiative cycle. Leave this on inherit unless you want proactive posts to use a different model.</p>
+      <h4>Ambient Text LLM</h4>
+      <p>Optional override for the ambient text cycle. Leave this on inherit unless you want ambient posts to use a different model.</p>
       <div className="toggles">
         <label>
           <input

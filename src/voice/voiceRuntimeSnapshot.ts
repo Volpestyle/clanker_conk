@@ -573,10 +573,9 @@ export function buildVoiceRuntimeSnapshot(
           : null,
         musicWakeLatchedByUserId: session.musicWakeLatchedByUserId || null,
         wake: {
-          state: wakeContext?.engaged ? "awake" : "listening",
-          active: Boolean(wakeContext?.engaged),
-          engagementState: wakeContext?.engagementState || "wake_word_biased",
-          engagedWithCurrentSpeaker: Boolean(wakeContext?.engagedWithCurrentSpeaker),
+          attentionMode: wakeContext?.attentionMode || "AMBIENT",
+          active: wakeContext?.attentionMode === "ACTIVE",
+          currentSpeakerActive: Boolean(wakeContext?.currentSpeakerActive),
           recentAssistantReply: Boolean(wakeContext?.recentAssistantReply),
           recentDirectAddress: Boolean(wakeContext?.recentDirectAddress),
           msSinceAssistantReply: Number.isFinite(wakeContext?.msSinceAssistantReply)

@@ -477,28 +477,29 @@ function buildVoicePrompt(sc: VoiceLiveScenario): PromptEnvelope {
   const singleParticipant = participantRoster.length <= 1;
   const singleParticipantFollowup = singleParticipant && recentAssistantReply;
 
-  const engagedWithCurrentSpeaker =
+  const currentSpeakerActive =
     Boolean(directAddressed) ||
     singleParticipantFollowup ||
     (recentAssistantReply && sameAsRecentDirectAddress) ||
     (recentDirectAddress && sameAsRecentDirectAddress);
-  const engaged = engagedWithCurrentSpeaker;
-  const engagementState = engaged ? "engaged" : "wake_word_biased";
+  const attentionMode =
+    currentSpeakerActive || recentAssistantReply || recentDirectAddress
+      ? "ACTIVE"
+      : "AMBIENT";
 
   const conversationContext = {
     recentAssistantReply,
     recentDirectAddress,
     msSinceAssistantReply: sc.msSinceAssistantReply ?? null,
     msSinceDirectAddress: sc.msSinceDirectAddress ?? null,
-    engaged,
-    engagedWithCurrentSpeaker,
-    engagementState,
+    attentionMode,
+    currentSpeakerActive,
     sameAsRecentDirectAddress,
     pendingCommandFollowupSignal: Boolean(sc.musicActive && sc.recentAssistantReply),
     musicActive: Boolean(sc.musicActive),
     musicWakeLatched: Boolean(sc.musicWakeLatched)
   };
-  const isEagerTurn = !directAddressed && !engaged;
+  const isEagerTurn = !directAddressed && attentionMode !== "ACTIVE";
 
   return {
     binding: getResolvedOrchestratorBinding(tunedSettings),
