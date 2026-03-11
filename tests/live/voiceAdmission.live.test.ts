@@ -124,7 +124,7 @@ function buildMockManager(sc: VoiceLiveScenario): ReplyDecisionHost {
       replyDecisionLlm: {
         provider: CLASSIFIER_PROVIDER,
         model: MODEL,
-        realtimeAdmissionMode: "hard_classifier"
+        realtimeAdmissionMode: "classifier_gate"
       }
     }
   });

@@ -592,9 +592,12 @@ export function settingsToForm(settings: unknown) {
     voiceThoughtEngineMinSecondsBetweenThoughts:
       resolved?.voice?.thoughtEngine?.minSecondsBetweenThoughts ??
       defaultVoiceThoughtEngine.minSecondsBetweenThoughts,
-    voiceReplyDecisionRealtimeAdmissionMode: normalizeVoiceAdmissionModeForDashboard(
-      resolved?.voice?.replyDecisionLlm?.realtimeAdmissionMode ?? defaultVoice.replyDecisionLlm.realtimeAdmissionMode
-    ),
+    voiceReplyDecisionRealtimeAdmissionMode: resolveVoiceAdmissionModeForSettings({
+      value:
+        resolved?.voice?.replyDecisionLlm?.realtimeAdmissionMode ??
+        defaultVoice.replyDecisionLlm.realtimeAdmissionMode,
+      replyPath: resolved?.voice?.replyPath ?? defaultVoice.replyPath
+    }),
     voiceReplyDecisionMusicWakeLatchSeconds:
       resolved?.voice?.replyDecisionLlm?.musicWakeLatchSeconds ?? defaultVoice.replyDecisionLlm.musicWakeLatchSeconds,
     voiceReplyDecisionLlmProvider:

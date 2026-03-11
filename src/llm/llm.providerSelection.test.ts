@@ -95,17 +95,6 @@ test("resolveProviderAndModel accepts standard model IDs for claude-oauth", () =
   assert.deepEqual(resolved, { provider: "claude-oauth", model: "claude-haiku-4-5" });
 });
 
-test("resolveProviderAndModel canonicalizes legacy codex-oauth provider strings", () => {
-  const service = createService({ anthropicApiKey: "test-anthropic-key" });
-  service.codexOAuth = {
-    tokens: { refreshToken: "test", accessToken: "", idToken: "", expiresAt: 0, accountId: "acct_123" },
-    client: {}
-  } as never;
-
-  const resolved = service.resolveProviderAndModel({ provider: "codex-oauth", model: "gpt-5-codex" });
-  assert.deepEqual(resolved, { provider: "openai-oauth", model: "gpt-5-codex" });
-});
-
 test("resolveDefaultModel uses claude-haiku-4-5 for anthropic fallback", () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key", defaultAnthropicModel: "" });
   const resolved = service.resolveProviderAndModel({ provider: "anthropic", model: "" });

@@ -3,10 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { getResolvedVoiceAdmissionClassifierBinding } from "../settings/agentStack.ts";
 import { Store } from "./store.ts";
-import { normalizeSettings } from "./settingsNormalization.ts";
 import { createTestSettingsPatch } from "../testSettings.ts";
 
 async function withTempStore(run) {
@@ -218,34 +216,13 @@ test("memory facts can be updated and soft-deleted while clearing stale vectors"
   });
 });
 
-test("rewriteRuntimeSettingsRow migrates legacy claude_oauth bootstrap defaults to sonnet brain generation", async () => {
-  await withTempStore(async (store) => {
-    const legacyDefaultSettingsJson = JSON.stringify(normalizeSettings(DEFAULT_SETTINGS));
-
-    store.db
-      .prepare("UPDATE settings SET value = ? WHERE key = ?")
-      .run(legacyDefaultSettingsJson, "runtime_settings");
-
-    const rewritten = store.rewriteRuntimeSettingsRow(legacyDefaultSettingsJson);
-    const stored = store.getSettings();
-    const generation = stored.agentStack.runtimeConfig.voice.generation as {
-      mode: string;
-      model?: { provider: string; model: string };
-    };
-
-    assert.equal(rewritten.agentStack.preset, "claude_oauth");
-    assert.equal(generation.mode, "dedicated_model");
-    assert.deepEqual(generation.model, {
-      provider: "claude-oauth",
-      model: "claude-sonnet-4-6"
-    });
-  });
-});
-
 test("voice reply decision llm settings normalize provider and model", async () => {
   await withTempStore(async (store) => {
     const patched = store.patchSettings(createTestSettingsPatch({
       voice: {
+        conversationPolicy: {
+          replyPath: "bridge"
+        },
         admission: {
           mode: "classifier_gate"
         }

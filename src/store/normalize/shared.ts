@@ -161,17 +161,17 @@ export function normalizeReplyPath(value: unknown, fallback: string) {
 export function normalizeOperationalMessages(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 40).toLowerCase();
   if (normalized === "all") return "all";
-  if (normalized === "essential" || normalized === "important_only") return "essential";
+  if (normalized === "essential") return "essential";
   if (normalized === "minimal") return "minimal";
-  if (normalized === "none" || normalized === "off") return "none";
+  if (normalized === "none") return "none";
   return fallback;
 }
 
 export function normalizeVoiceDefaultInterruptionMode(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 40).toLowerCase();
-  if (normalized === "speaker" || normalized === "requester_only") return "speaker";
-  if (normalized === "none" || normalized === "off" || normalized === "uninterruptible") return "none";
-  if (normalized === "anyone" || normalized === "all") return "anyone";
+  if (normalized === "speaker") return "speaker";
+  if (normalized === "none") return "none";
+  if (normalized === "anyone") return "anyone";
   return fallback;
 }
 
@@ -222,15 +222,8 @@ export function normalizeDiscoverySourceMap(
 
 export function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 40).toLowerCase();
-  if (normalized === "classifier_gate" || normalized === "hard_classifier") return "classifier_gate";
-  if (
-    normalized === "deterministic_only" ||
-    normalized === "generation_decides" ||
-    normalized === "generation_only" ||
-    normalized === "generation"
-  ) {
-    return "generation_decides";
-  }
+  if (normalized === "classifier_gate") return "classifier_gate";
+  if (normalized === "generation_decides") return "generation_decides";
   return fallback;
 }
 

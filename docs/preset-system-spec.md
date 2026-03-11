@@ -39,7 +39,7 @@ Each preset sets defaults for:
 5. **Voice runtime** — `openai_realtime`, `voice_agent`, etc.
 6. **Voice reply path** — `native`, `bridge`, or `brain`
 7. **Voice TTS mode** — `realtime` or `api` (only relevant for brain path)
-8. **Voice admission policy** — `generation_decides` or `classifier_gate`
+8. **Voice admission policy** — public admission mode after reply-path normalization (`bridge` resolves to `classifier_gate`; `brain` preserves explicit `generation_decides` or `classifier_gate`; `native` resolves to `generation_decides`)
 9. **Voice admission classifier** — provider + model for the reply classifier
 10. **Voice generation** — provider + model for brain-path text generation (when different from orchestrator)
 11. **Dev team** — orchestrator, role bindings, coding workers
@@ -68,7 +68,7 @@ The preset defines the starting point. User changes layer on top.
 
 ### Preset Selector
 
-The Stack Preset section shows a dropdown with all 6 presets. The dropdown labels, preset reset defaults, admission-mode labels, and preset alias handling all come from the shared preset catalog instead of separate dashboard-only mappings. Selecting a new preset fetches preview defaults from `/api/settings/preset-defaults` and applies them to the form, updating orchestrator, voice runtime, voice reply path, admission mode, and generation models.
+The Stack Preset section shows a dropdown with all 6 presets. The dropdown labels, preset reset defaults, and admission-mode labels all come from the shared preset catalog instead of separate dashboard-only mappings. Selecting a new preset fetches preview defaults from `/api/settings/preset-defaults` and applies them to the form, updating orchestrator, voice runtime, voice reply path, admission mode, and generation models.
 
 The preview is local-only. The dirty indicator stays on until the user clicks Save, and runtime settings do not change just from selecting a preset in the dashboard.
 
@@ -100,6 +100,7 @@ User settings (data/settings.json)
 Normalization (settingsNormalization.ts + store/normalize/*)
   ├── Preset name normalization via agentStackCatalog.ts
   ├── Preset config seeds defaults for admission mode, reply path, TTS mode
+  ├── Store bootstrap rewrites old persisted rows into canonical preset/admission names before normalization
   └── Per-section normalization (bounds, validation) via settingsConstraints.ts
   ↓
 Resolved Agent Stack (agentStack.ts → resolveAgentStack())
@@ -108,17 +109,3 @@ Resolved Agent Stack (agentStack.ts → resolveAgentStack())
   ↓
 Dashboard + runtime use the same preset catalog and numeric constraints
 ```
-
-## Accepted Preset Identifiers
-
-Normalization accepts these preset identifiers and resolves them to canonical preset names:
-
-| Input Name | Canonical Name |
-|---|---|
-| `claude_oauth_local_tools` | `claude_oauth` |
-| `claude_oauth_openai_tools` | `claude_oauth` |
-| `claude_oauth_max` | `claude_oauth` |
-| `anthropic_brain_openai_tools` | `claude_api` |
-| `anthropic_api_openai_tools` | `claude_api` |
-| `openai_native` | `openai_native_realtime` |
-| `custom` | `openai_api` |

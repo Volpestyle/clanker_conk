@@ -52,7 +52,6 @@ export type AgentStackPresetName = (typeof AGENT_STACK_PRESETS)[number];
 
 export type AgentStackPresetDefinition = AgentStackPresetDefaults & {
   label: string;
-  aliases?: readonly string[];
   browserFallback?: ModelBinding;
   visionFallback?: ModelBinding;
 };
@@ -60,11 +59,6 @@ export type AgentStackPresetDefinition = AgentStackPresetDefaults & {
 export const AGENT_STACK_PRESET_DEFINITIONS = {
   claude_oauth: {
     label: "Claude OAuth",
-    aliases: [
-      "claude_oauth_local_tools",
-      "claude_oauth_openai_tools",
-      "claude_oauth_max"
-    ],
     harness: "internal",
     orchestrator: {
       provider: "claude-oauth",
@@ -114,10 +108,6 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
   },
   claude_api: {
     label: "Claude API",
-    aliases: [
-      "anthropic_brain_openai_tools",
-      "anthropic_api_openai_tools"
-    ],
     harness: "internal",
     orchestrator: {
       provider: "anthropic",
@@ -159,9 +149,6 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
   },
   openai_native_realtime: {
     label: "OpenAI Native Realtime",
-    aliases: [
-      "openai_native"
-    ],
     harness: "responses_native",
     orchestrator: {
       provider: "openai",
@@ -199,9 +186,6 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
   },
   openai_api: {
     label: "OpenAI API",
-    aliases: [
-      "custom"
-    ],
     harness: "internal",
     orchestrator: {
       provider: "openai",
@@ -330,22 +314,14 @@ export const AGENT_STACK_PRESET_OPTIONS = AGENT_STACK_PRESETS.map((preset) => ({
   label: AGENT_STACK_PRESET_DEFINITIONS[preset].label
 })) as readonly { value: AgentStackPresetName; label: string }[];
 
-const AGENT_STACK_PRESET_ALIAS_MAP = new Map<string, AgentStackPresetName>(
-  Object.entries(AGENT_STACK_PRESET_DEFINITIONS).flatMap(([preset, definition]) => {
-    const normalizedDefinition = definition as AgentStackPresetDefinition;
-    return [
-      [preset, preset as AgentStackPresetName],
-      ...((normalizedDefinition.aliases || []).map((alias) => [alias, preset as AgentStackPresetName] as const))
-    ];
-  })
-);
-
 export function normalizeAgentStackPresetName(
   value: unknown,
   fallback: AgentStackPresetName = "claude_oauth"
 ): AgentStackPresetName {
   const normalized = String(value || "").trim();
-  return AGENT_STACK_PRESET_ALIAS_MAP.get(normalized) || fallback;
+  return AGENT_STACK_PRESETS.includes(normalized as AgentStackPresetName)
+    ? normalized as AgentStackPresetName
+    : fallback;
 }
 
 export function getAgentStackPresetDefinition(

@@ -111,15 +111,23 @@ export function normalizeDiscoveryRssFeeds(value: unknown, fallback: readonly st
 }
 
 export function normalizeXHandles(value: unknown) {
-  return normalizeStringList(value, 50, 120)
-    .map((entry) => entry.replace(/^@+/, "").trim().toLowerCase())
-    .filter(Boolean);
+  return [
+    ...new Set(
+      normalizeStringList(value, 50, 120)
+        .map((entry) => entry.replace(/^@+/, "").trim().toLowerCase())
+        .filter(Boolean)
+    )
+  ];
 }
 
 export function normalizeSubreddits(value: unknown, fallback: readonly string[]) {
-  return normalizeStringList(value, 50, 80, fallback)
-    .map((entry) => entry.replace(/^r\//i, "").trim().toLowerCase())
-    .filter(Boolean);
+  return [
+    ...new Set(
+      normalizeStringList(value, 50, 80, fallback)
+        .map((entry) => entry.replace(/^r\//i, "").trim().toLowerCase())
+        .filter(Boolean)
+    )
+  ];
 }
 
 export function normalizeLanguageHint(value: unknown, fallback: string) {

@@ -4,8 +4,8 @@ import { Collapse } from "../Collapse";
 import { rangeStyle } from "../../utils";
 import { LlmProviderOptions, VISION_LLM_PROVIDER_OPTIONS } from "./LlmProviderOptions";
 import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
-import { normalizeVoiceAdmissionModeForDashboard } from "../../../../src/settings/voiceDashboardMappings.ts";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
+import { normalizeVoiceAdmissionModeForDashboard } from "../../../../src/settings/voiceDashboardMappings.ts";
 
 /* ── Screen share mental model ── */
 
@@ -179,24 +179,26 @@ export function VoiceModeSettingsSection({
     asrModeConfigVisible &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration = isRealtimeMode && isBrainPath;
+  const normalizedAdmissionMode = normalizeVoiceAdmissionModeForDashboard(
+    form.voiceReplyDecisionRealtimeAdmissionMode
+  );
   const classifierAlwaysOn = isRealtimeMode && isBridgePath;
-  const classifierToggleable = isRealtimeMode && isBrainPath && !form.voiceCommandOnlyMode;
-  const classifierVisible = classifierAlwaysOn || classifierToggleable;
-  const inputStageVisible = isRealtimeMode && (isBridgePath || isBrainPath || isNativePath);
+  const classifierSelectable = isRealtimeMode && isBrainPath;
+  const classifierActive = classifierAlwaysOn ||
+    (classifierSelectable && normalizedAdmissionMode === "classifier_gate");
+  const admissionStageVisible = isRealtimeMode && (isBridgePath || isBrainPath || isNativePath);
+  const inputStageVisible = admissionStageVisible;
   const inputStageCount = inputStageVisible ? 1 : 0;
   const musicBrainVisible = isRealtimeMode;
   const musicBrainDisabled = String(form.voiceMusicBrainMode || "disabled").trim().toLowerCase() === "disabled";
-  const realtimeAdmissionMode = normalizeVoiceAdmissionModeForDashboard(
-    form.voiceReplyDecisionRealtimeAdmissionMode
-  );
-  const hardClassifierMode = realtimeAdmissionMode === "classifier_gate";
+  const admissionPathTag = isBridgePath ? "Bridge" : isBrainPath ? "Brain" : "Native";
   const classifierStageNumber = inputStageVisible ? 2 : 1;
-  const musicBrainStageNumber = inputStageCount + (classifierVisible ? 1 : 0) + 1;
+  const musicBrainStageNumber = inputStageCount + (admissionStageVisible ? 1 : 0) + 1;
   const brainStageNumber =
-    inputStageCount + (classifierVisible ? 1 : 0) + (musicBrainVisible ? 1 : 0) + 1;
+    inputStageCount + (admissionStageVisible ? 1 : 0) + (musicBrainVisible ? 1 : 0) + 1;
   const voiceOutputStageNumber =
     inputStageCount +
-    (classifierVisible ? 1 : 0) +
+    (admissionStageVisible ? 1 : 0) +
     (musicBrainVisible ? 1 : 0) +
     (usesBrainGeneration ? 1 : 0) +
     1;
@@ -598,52 +600,58 @@ export function VoiceModeSettingsSection({
           )}
 
           {/* ── Reply admission / classifier ── */}
-          {classifierVisible && (
+          {admissionStageVisible && (
             <StagePanel
               number={classifierStageNumber}
               label="Reply Admission"
-              pathTag={classifierAlwaysOn ? "Bridge" : "Brain"}
+              pathTag={admissionPathTag}
             >
               {classifierAlwaysOn ? (
                 <p>
-                  Bridge mode requires a classifier to decide whether to speak each turn, since the realtime provider always generates audio when given input. This gives the bot the same ability to stay silent that brain mode has natively.
+                  Bridge mode requires a classifier to decide whether to speak each turn, since the realtime provider always generates audio when given input. This preserves the bot's ability to stay silent before bridge forwarding begins.
+                </p>
+              ) : classifierActive ? (
+                <p>
+                  Full Brain is running classifier-first admission here. Deterministic floor gates still run first, then a small YES/NO model decides whether the main brain should spend a full reply turn.
+                </p>
+              ) : isBrainPath ? (
+                <p>
+                  Full Brain is generation-owned here. Deterministic floor gates run first, then surviving turns go straight to the main reply brain, which can still choose silence via [SKIP].
                 </p>
               ) : (
-                <>
-                  <p>
-                    In brain mode the generation LLM decides whether to reply via [SKIP]. Enable the classifier to add a cheaper pre-filter before the full generation call.
-                  </p>
-                  <div className="split">
-                    <div>
-                      <label htmlFor="voice-realtime-admission-mode">Admission gate</label>
-                      <select
-                        id="voice-realtime-admission-mode"
-                        value={realtimeAdmissionMode}
-                        onChange={set("voiceReplyDecisionRealtimeAdmissionMode")}
-                      >
-                        <option value="generation_decides">Off (generation decides)</option>
-                        <option value="classifier_gate">On (classifier gate)</option>
-                      </select>
-                    </div>
-                  </div>
-                </>
+                <p>
+                  Native path uses deterministic floor gates here. Surviving turns stay inside the realtime model, which handles reply vs silence on its own path.
+                </p>
               )}
-              {(classifierAlwaysOn || hardClassifierMode) && (
-                <>
-                  <div className="split">
-                    <div>
-                      <label htmlFor="voice-music-wake-latch-seconds">Music wake latch seconds</label>
-                      <input
-                        id="voice-music-wake-latch-seconds"
-                        type="number"
-                        min={SETTINGS_NUMERIC_CONSTRAINTS.voice.admission.musicWakeLatchSeconds.min}
-                        max={SETTINGS_NUMERIC_CONSTRAINTS.voice.admission.musicWakeLatchSeconds.max}
-                        step="1"
-                        value={form.voiceReplyDecisionMusicWakeLatchSeconds}
-                        onChange={set("voiceReplyDecisionMusicWakeLatchSeconds")}
-                      />
-                    </div>
+              <div className="split">
+                {classifierSelectable && (
+                  <div>
+                    <label htmlFor="voice-reply-decision-realtime-admission-mode">Admission mode</label>
+                    <select
+                      id="voice-reply-decision-realtime-admission-mode"
+                      value={normalizedAdmissionMode}
+                      onChange={set("voiceReplyDecisionRealtimeAdmissionMode")}
+                    >
+                      <option value="generation_decides">Generation decides ([SKIP])</option>
+                      <option value="classifier_gate">Classifier gate</option>
+                    </select>
                   </div>
+                )}
+                <div>
+                  <label htmlFor="voice-music-wake-latch-seconds">Music wake latch seconds</label>
+                  <input
+                    id="voice-music-wake-latch-seconds"
+                    type="number"
+                    min={SETTINGS_NUMERIC_CONSTRAINTS.voice.admission.musicWakeLatchSeconds.min}
+                    max={SETTINGS_NUMERIC_CONSTRAINTS.voice.admission.musicWakeLatchSeconds.max}
+                    step="1"
+                    value={form.voiceReplyDecisionMusicWakeLatchSeconds}
+                    onChange={set("voiceReplyDecisionMusicWakeLatchSeconds")}
+                  />
+                </div>
+              </div>
+              {classifierActive && (
+                <>
                   <div className="split">
                     <div>
                       <label htmlFor="voice-reply-decision-provider">Provider</label>

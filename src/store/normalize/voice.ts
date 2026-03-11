@@ -12,9 +12,9 @@ import {
 import {
   normalizeOperationalMessages,
   normalizeReplyPath,
-  normalizeVoiceDefaultInterruptionMode,
-  normalizeVoiceAdmissionMode
+  normalizeVoiceDefaultInterruptionMode
 } from "./shared.ts";
+import { resolveVoiceAdmissionModeForSettings } from "../../settings/voiceDashboardMappings.ts";
 
 export function normalizeVoiceSection(section: Settings["voice"]): Settings["voice"] {
   const transcription = section.transcription;
@@ -134,7 +134,10 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
       }
     },
     admission: {
-      mode: normalizeVoiceAdmissionMode(admission.mode, DEFAULT_SETTINGS.voice.admission.mode),
+      mode: resolveVoiceAdmissionModeForSettings({
+        value: admission.mode,
+        replyPath: normalizedReplyPath
+      }),
       wakeSignals: normalizeStringList(
         admission.wakeSignals,
         10,

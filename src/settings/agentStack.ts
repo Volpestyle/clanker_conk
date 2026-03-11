@@ -12,6 +12,7 @@ import {
   type AgentStackPresetName,
   type AgentStackPresetDefaults as PresetDefaults
 } from "./agentStackCatalog.ts";
+import { resolveVoiceAdmissionModeForSettings } from "./voiceDashboardMappings.ts";
 
 type ModelBinding = {
   provider?: string;
@@ -513,6 +514,7 @@ export function getResolvedVoiceInitiativeBinding(settings: unknown) {
 
 export function getResolvedVoiceAdmissionClassifierBinding(settings: unknown) {
   const voiceAdmission = getVoiceAdmissionSettings(settings);
+  const voiceConversation = getVoiceConversationPolicy(settings);
   const agentStack = getAgentStackSettings(settings);
   const presetDefaults = getPresetDefaults(settings);
   const fallback = presetDefaults.voiceAdmissionClassifier || presetDefaults.orchestrator;
@@ -520,8 +522,11 @@ export function getResolvedVoiceAdmissionClassifierBinding(settings: unknown) {
     agentStack.overrides?.voiceAdmissionClassifier,
     fallback
   );
-  const mode = String(voiceAdmission.mode || "");
-  if (mode === "generation_decides") {
+  const mode = resolveVoiceAdmissionModeForSettings({
+    value: voiceAdmission.mode,
+    replyPath: voiceConversation.replyPath
+  });
+  if (mode !== "classifier_gate") {
     return null;
   }
   const binding = overridePolicy.mode === "dedicated_model"

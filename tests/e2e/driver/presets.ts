@@ -165,9 +165,107 @@ type ParsedFlags = {
   overrides: Record<string, unknown>;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function resolveVoiceRuntimeMode(provider: string): string | undefined {
+  switch (String(provider || "").trim().toLowerCase()) {
+    case "openai":
+      return "openai_realtime";
+    case "xai":
+      return "voice_agent";
+    case "gemini":
+      return "gemini_realtime";
+    case "elevenlabs":
+      return "elevenlabs_realtime";
+    default:
+      return undefined;
+  }
+}
+
+function defaultBrainModelForProvider(provider: string): string | undefined {
+  switch (String(provider || "").trim().toLowerCase()) {
+    case "openai":
+      return "gpt-5";
+    case "anthropic":
+      return "claude-haiku-4-5";
+    case "xai":
+      return "grok-4-latest";
+    case "gemini":
+      return "gemini-2.5-flash";
+    default:
+      return undefined;
+  }
+}
+
+function upsertVoiceRuntime(agentStackOverrides: Record<string, unknown>, runtimeMode: string) {
+  const existingOverrides = isRecord(agentStackOverrides.overrides) ? agentStackOverrides.overrides : {};
+  const existingRuntimeConfig = isRecord(agentStackOverrides.runtimeConfig) ? agentStackOverrides.runtimeConfig : {};
+  const existingVoiceRuntimeConfig = isRecord(existingRuntimeConfig.voice) ? existingRuntimeConfig.voice : {};
+
+  agentStackOverrides.advancedOverridesEnabled = true;
+  agentStackOverrides.overrides = {
+    ...existingOverrides,
+    voiceRuntime: runtimeMode
+  };
+  agentStackOverrides.runtimeConfig = {
+    ...existingRuntimeConfig,
+    voice: {
+      ...existingVoiceRuntimeConfig,
+      runtimeMode
+    }
+  };
+}
+
+function upsertBrainBinding(
+  agentStackOverrides: Record<string, unknown>,
+  {
+    provider,
+    model
+  }: {
+    provider?: string;
+    model?: string;
+  }
+) {
+  const existingOverrides = isRecord(agentStackOverrides.overrides) ? agentStackOverrides.overrides : {};
+  const existingOrchestrator = isRecord(existingOverrides.orchestrator) ? existingOverrides.orchestrator : {};
+  const existingRuntimeConfig = isRecord(agentStackOverrides.runtimeConfig) ? agentStackOverrides.runtimeConfig : {};
+  const existingVoiceRuntimeConfig = isRecord(existingRuntimeConfig.voice) ? existingRuntimeConfig.voice : {};
+  const existingGeneration = isRecord(existingVoiceRuntimeConfig.generation) ? existingVoiceRuntimeConfig.generation : {};
+  const existingGenerationModel = isRecord(existingGeneration.model) ? existingGeneration.model : {};
+
+  agentStackOverrides.advancedOverridesEnabled = true;
+  agentStackOverrides.overrides = {
+    ...existingOverrides,
+    orchestrator: {
+      ...existingOrchestrator,
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {})
+    }
+  };
+  agentStackOverrides.runtimeConfig = {
+    ...existingRuntimeConfig,
+    voice: {
+      ...existingVoiceRuntimeConfig,
+      generation: {
+        ...existingGeneration,
+        mode: "dedicated_model",
+        model: {
+          ...existingGenerationModel,
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {})
+        }
+      }
+    }
+  };
+}
+
 export function parseE2EPipelineFlags(argv: string[]): ParsedFlags {
   let presetName = DEFAULT_PRESET;
   const voiceOverrides: Record<string, unknown> = {};
+  const initiativeOverrides: Record<string, unknown> = {};
+  const agentStackOverrides: Record<string, unknown> = {};
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = String(argv[i] || "").trim();
@@ -183,62 +281,102 @@ export function parseE2EPipelineFlags(argv: string[]): ParsedFlags {
         break;
 
       case "reply-path":
-        if (hasValue) voiceOverrides.replyPath = next;
+        if (hasValue) {
+          voiceOverrides.conversationPolicy = {
+            ...(voiceOverrides.conversationPolicy as Record<string, unknown> | undefined),
+            replyPath: next
+          };
+        }
         break;
 
       case "voice-provider":
-        if (hasValue) voiceOverrides.voiceProvider = next;
+        if (hasValue) {
+          const runtimeMode = resolveVoiceRuntimeMode(next);
+          if (runtimeMode) {
+            upsertVoiceRuntime(agentStackOverrides, runtimeMode);
+          }
+        }
         break;
 
       case "brain-provider":
-        if (hasValue) voiceOverrides.brainProvider = next;
+        if (hasValue) {
+          upsertBrainBinding(agentStackOverrides, {
+            provider: next,
+            model: defaultBrainModelForProvider(next)
+          });
+        }
         break;
 
       case "brain-model":
         if (hasValue) {
-          voiceOverrides.generationLlm = {
-            ...(voiceOverrides.generationLlm as Record<string, unknown> | undefined),
-            model: next,
-            provider: next
-          };
-          const provider = inferProviderFromModel(next);
-          if (provider) {
-            (voiceOverrides.generationLlm as Record<string, unknown>).provider = provider;
-          }
+          upsertBrainBinding(agentStackOverrides, {
+            provider: inferProviderFromModel(next),
+            model: next
+          });
         }
         break;
 
       case "voice-model":
         if (hasValue) {
-          voiceOverrides.openaiRealtime = {
-            ...(voiceOverrides.openaiRealtime as Record<string, unknown> | undefined),
-            model: next
+          const existingRuntimeConfig = isRecord(agentStackOverrides.runtimeConfig)
+            ? agentStackOverrides.runtimeConfig
+            : {};
+          const existingVoiceRuntimeConfig = isRecord(existingRuntimeConfig.voice)
+            ? existingRuntimeConfig.voice
+            : {};
+          const existingOpenAiRealtime = isRecord(existingVoiceRuntimeConfig.openaiRealtime)
+            ? existingVoiceRuntimeConfig.openaiRealtime
+            : {};
+          agentStackOverrides.runtimeConfig = {
+            ...existingRuntimeConfig,
+            voice: {
+              ...existingVoiceRuntimeConfig,
+              openaiRealtime: {
+                ...existingOpenAiRealtime,
+                model: next
+              }
+            }
           };
         }
         break;
 
       case "voice-name":
         if (hasValue) {
-          voiceOverrides.openaiRealtime = {
-            ...(voiceOverrides.openaiRealtime as Record<string, unknown> | undefined),
-            voice: next
+          const existingRuntimeConfig = isRecord(agentStackOverrides.runtimeConfig)
+            ? agentStackOverrides.runtimeConfig
+            : {};
+          const existingVoiceRuntimeConfig = isRecord(existingRuntimeConfig.voice)
+            ? existingRuntimeConfig.voice
+            : {};
+          const existingOpenAiRealtime = isRecord(existingVoiceRuntimeConfig.openaiRealtime)
+            ? existingVoiceRuntimeConfig.openaiRealtime
+            : {};
+          agentStackOverrides.runtimeConfig = {
+            ...existingRuntimeConfig,
+            voice: {
+              ...existingVoiceRuntimeConfig,
+              openaiRealtime: {
+                ...existingOpenAiRealtime,
+                voice: next
+              }
+            }
           };
         }
         break;
 
       case "classifier":
         if (hasValue) {
-          voiceOverrides.replyDecisionLlm = {
-            ...(voiceOverrides.replyDecisionLlm as Record<string, unknown> | undefined),
-            realtimeAdmissionMode: next === "on" ? "hard_classifier" : "generation_only"
+          voiceOverrides.admission = {
+            ...(voiceOverrides.admission as Record<string, unknown> | undefined),
+            mode: next === "on" ? "classifier_gate" : "generation_decides"
           };
         }
         break;
 
       case "thought-engine":
         if (hasValue) {
-          voiceOverrides.thoughtEngine = {
-            ...(voiceOverrides.thoughtEngine as Record<string, unknown> | undefined),
+          initiativeOverrides.voice = {
+            ...(initiativeOverrides.voice as Record<string, unknown> | undefined),
             enabled: next === "on"
           };
         }
@@ -246,14 +384,25 @@ export function parseE2EPipelineFlags(argv: string[]): ParsedFlags {
 
       case "command-only":
         if (hasValue) {
-          voiceOverrides.commandOnlyMode = next === "on";
+          voiceOverrides.conversationPolicy = {
+            ...(voiceOverrides.conversationPolicy as Record<string, unknown> | undefined),
+            commandOnlyMode: next === "on"
+          };
         }
         break;
     }
   }
 
-  const flagOverrides: Record<string, unknown> =
-    Object.keys(voiceOverrides).length > 0 ? { voice: voiceOverrides } : {};
+  const flagOverrides: Record<string, unknown> = {};
+  if (Object.keys(voiceOverrides).length > 0) {
+    flagOverrides.voice = voiceOverrides;
+  }
+  if (Object.keys(initiativeOverrides).length > 0) {
+    flagOverrides.initiative = initiativeOverrides;
+  }
+  if (Object.keys(agentStackOverrides).length > 0) {
+    flagOverrides.agentStack = agentStackOverrides;
+  }
 
   return { presetName, overrides: flagOverrides };
 }

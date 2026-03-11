@@ -7,7 +7,7 @@
 > Reply orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
 > Output and barge-in: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
 
-This document describes the voice spoke of the shared attention model: capture, transcription, admission, transport, output, and voice-side ambient delivery.
+This document describes the voice spoke under the shared attention contract: capture, transcription, admission, transport, output, and voice-side ambient delivery.
 
 ## 1. Canonical Settings Surface
 
@@ -39,7 +39,7 @@ The voice stack keeps transport and behavior separate:
 4. `generation` and `tools` run either in the provider-native loop or the orchestrator loop
 5. `output` speaks through realtime or API TTS, then `clankvoxClient` paces generated PCM into the Rust mixer while preserving queued speech unless an interruption clears it
 
-Shared attention sits above this stack. Voice does not own the whole conversational mind; it owns how attention becomes audible in a live room.
+Shared continuity can inform this stack. Voice does not own the whole conversational mind; it owns how that continuity becomes audible in a live room.
 
 Runtime mode values:
 
@@ -155,7 +155,7 @@ The public admission surface is:
 
 Canonical music playback / wake-latch semantics live in [`music.md`](music.md).
 
-This stage is the voice spoke's cost and floor gate. It is not a second conversational policy layer separate from shared attention. Its job is to decide when a voice turn is eligible to reach the main reply brain under live-room constraints.
+This stage is the voice spoke's cost and floor gate. It is not a second conversational policy layer separate from the shared continuity contract. Its job is to decide when a voice turn is eligible to reach the main reply brain under live-room constraints.
 
 Classifier binding is resolved through:
 
@@ -165,6 +165,9 @@ Classifier binding is resolved through:
 Important runtime behavior:
 
 - if `replyPath = "bridge"`, the runtime always behaves as classifier-first
+- if `replyPath = "brain"`, the public admission mode preserves `generation_decides` or `classifier_gate`; `generation_decides` is the default and `classifier_gate` is an optional classifier-first cost gate before the main brain
+- if `replyPath = "native"`, the canonical public admission mode normalizes to `generation_decides`
+- surviving `brain` turns are generation-owned by default and the model decides reply vs `[SKIP]`
 - `classifier_gate` and `generation_decides` are the canonical public settings values
 - internal labels like `hard_classifier` and `generation_only` are implementation details used by `voiceReplyDecision.ts`
 
@@ -243,7 +246,7 @@ Implementation note:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `interaction.activity.responseWindowEagerness` | `55` | How strongly recent engagement keeps a voice follow-up window alive |
+| `interaction.activity.responseWindowEagerness` | `55` | How strongly recent engagement is framed to voice follow-up prompting/classification; the core voice recency window is still runtime-owned |
 | `interaction.activity.reactivity` | `40` | Shared tendency for emoji beats and other lightweight reactions |
 
 ### Conversation Policy

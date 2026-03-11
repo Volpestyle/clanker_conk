@@ -6,11 +6,6 @@ import {
   PERSONA_FLAVOR_MAX_CHARS
 } from "./settingsNormalization.ts";
 import { resolveAgentStack } from "../settings/agentStack.ts";
-import { normalizeLegacyTestSettingsInput } from "../testSettings.ts";
-
-function normalizeLegacyView(input: unknown): ReturnType<typeof normalizeSettings> {
-  return normalizeSettings(normalizeLegacyTestSettingsInput(input));
-}
 
 test("normalizeSettings interprets string booleans from form-style payloads correctly", () => {
   const normalized = normalizeSettings({
@@ -28,96 +23,144 @@ test("normalizeSettings interprets string booleans from form-style payloads corr
   assert.equal(normalized.permissions.replies.allowReactions, true);
 });
 
-test("normalizeSettings migrates and clamps complex legacy settings into the canonical schema", () => {
-  const normalized = normalizeLegacyView({
-    botName: "x".repeat(120),
-    botNameAliases: ["clank", "clank", "  ", "conk", "alias-".repeat(20)],
-    llm: {
-      provider: "XAI",
-      model: "",
-      temperature: 9,
-      maxOutputTokens: 1
+test("normalizeSettings clamps and canonicalizes complex settings payloads", () => {
+  const normalized = normalizeSettings({
+    identity: {
+      botName: "x".repeat(120),
+      botNameAliases: ["clank", "clank", "  ", "conk", "alias-".repeat(20)]
     },
-    replyFollowupLlm: {
-      enabled: true,
-      provider: "not-real",
-      model: "",
-      maxToolSteps: 99,
-      maxTotalToolCalls: -5,
-      maxWebSearchCalls: 7,
-      maxMemoryLookupCalls: -2,
-      maxImageLookupCalls: 999,
-      toolTimeoutMs: 999999
-    },
-    webSearch: {
-      enabled: true,
-      maxSearchesPerHour: 999,
-      maxResults: 0,
-      maxPagesToRead: 99,
-      maxCharsPerPage: 80,
-      safeSearch: false,
-      providerOrder: ["serpapi", "serpapi", "brave", "unknown"],
-      recencyDaysDefault: 0,
-      maxConcurrentFetches: 99
-    },
-    browser: {
-      enabled: true,
-      headed: true,
-      llm: {
-        provider: "OPENAI",
-        model: ""
+    agentStack: {
+      preset: "claude_api",
+      advancedOverridesEnabled: true,
+      overrides: {
+        orchestrator: {
+          provider: "XAI",
+          model: ""
+        },
+        voiceAdmissionClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: "CLAUDE-CODE",
+            model: ""
+          }
+        }
       },
-      maxBrowseCallsPerHour: 999,
-      maxStepsPerTask: 0,
-      stepTimeoutMs: 1000,
-      sessionTimeoutMs: 999999
+      runtimeConfig: {
+        research: {
+          enabled: true,
+          maxSearchesPerHour: 999,
+          localExternalSearch: {
+            safeSearch: false,
+            providerOrder: ["serpapi", "serpapi", "brave", "unknown"],
+            maxResults: 0,
+            maxPagesToRead: 99,
+            maxCharsPerPage: 80,
+            recencyDaysDefault: 0,
+            maxConcurrentFetches: 99
+          }
+        },
+        browser: {
+          enabled: true,
+          headed: true,
+          localBrowserAgent: {
+            execution: {
+              mode: "dedicated_model",
+              model: {
+                provider: "OPENAI",
+                model: ""
+              }
+            },
+            maxBrowseCallsPerHour: 999,
+            maxStepsPerTask: 0,
+            stepTimeoutMs: 1000,
+            sessionTimeoutMs: 999999
+          }
+        },
+        voice: {
+          generation: {
+            mode: "dedicated_model",
+            model: {
+              provider: "not-real",
+              model: ""
+            }
+          },
+          openaiRealtime: {
+            inputAudioFormat: "bad-format",
+            outputAudioFormat: "g711_alaw"
+          },
+          geminiRealtime: {
+            apiBaseUrl: "ftp://invalid.example/path",
+            inputSampleRateHz: 0,
+            outputSampleRateHz: 99_000
+          }
+        }
+      }
     },
-    activity: {
-      ambientReplyEagerness: 999,
-      responseWindowEagerness: 999,
-      reactivity: 999
-    },
-    videoContext: {
-      enabled: true,
-      maxLookupsPerHour: -1,
-      maxVideosPerMessage: 99,
-      maxTranscriptChars: 99_999,
-      keyframeIntervalSeconds: -5,
-      maxKeyframesPerVideo: 30,
-      allowAsrFallback: true,
-      maxAsrSeconds: 2
-    },
-    voice: {
-      voiceProvider: "openai",
-      brainProvider: "native",
-      asrLanguageMode: "FIXED",
-      asrLanguageHint: "EN_us",
-      generationLlm: {
-        provider: "not-real",
-        model: ""
+    interaction: {
+      activity: {
+        ambientReplyEagerness: 999,
+        responseWindowEagerness: 999,
+        reactivity: 999
       },
-      thoughtEngine: {
-        enabled: "yes",
-        provider: "NOT-REAL",
-        model: "",
+      replyGeneration: {
         temperature: 9,
+        maxOutputTokens: 1
+      },
+      followup: {
+        enabled: true,
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: "not-real",
+            model: ""
+          }
+        },
+        toolBudget: {
+          maxToolSteps: 99,
+          maxTotalToolCalls: -5,
+          maxWebSearchCalls: 7,
+          maxMemoryLookupCalls: -2,
+          maxImageLookupCalls: 999,
+          toolTimeoutMs: 999999
+        }
+      }
+    },
+    media: {
+      videoContext: {
+        enabled: true,
+        maxLookupsPerHour: -1,
+        maxVideosPerMessage: 99,
+        maxTranscriptChars: 99_999,
+        keyframeIntervalSeconds: -5,
+        maxKeyframesPerVideo: 30,
+        allowAsrFallback: true,
+        maxAsrSeconds: 2
+      }
+    },
+    initiative: {
+      voice: {
+        enabled: true,
         eagerness: 999,
         minSilenceSeconds: 1,
         minSecondsBetweenThoughts: 9999
       },
-      replyDecisionLlm: {
-        provider: "CLAUDE-CODE",
-        model: "",
-        reasoningEffort: "HIGH"
-      },
-      openaiRealtime: {
-        inputAudioFormat: "bad-format",
-        outputAudioFormat: "g711_alaw"
-      },
-      geminiRealtime: {
-        apiBaseUrl: "ftp://invalid.example/path",
-        inputSampleRateHz: 0,
-        outputSampleRateHz: 99_000
+      discovery: {
+        allowedImageModels: "gpt-image-1.5, gpt-image-1.5, grok-imagine-image",
+        allowedVideoModels: ["grok-imagine-video", "grok-imagine-video"],
+        rssFeeds: ["https://ok.example/feed", "not-a-url"],
+        xHandles: ["@alice", "@alice", "bob"],
+        redditSubreddits: ["r/memes", "memes"],
+        xNitterBaseUrl: "https://nitter.example/path",
+        sources: {
+          reddit: false,
+          x: true
+        }
+      }
+    },
+    voice: {
+      transcription: {
+        languageMode: "FIXED",
+        languageHint: "EN_us"
       },
       streamWatch: {
         minCommentaryIntervalSeconds: 1,
@@ -133,22 +176,12 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
       soundboard: {
         eagerness: 999,
         preferredSoundIds: ["first", "first", "second"]
-      },
-      musicDucking: {
-        targetGain: -2,
-        fadeMs: 99999
       }
     },
-    discovery: {
-      allowedImageModels: "gpt-image-1.5, gpt-image-1.5, grok-imagine-image",
-      allowedVideoModels: ["grok-imagine-video", "grok-imagine-video"],
-      rssFeeds: ["https://ok.example/feed", "not-a-url"],
-      xHandles: ["@alice", "@alice", "bob"],
-      redditSubreddits: ["r/memes", "memes"],
-      xNitterBaseUrl: "https://nitter.example/path",
-      sources: {
-        reddit: false,
-        x: true
+    music: {
+      ducking: {
+        targetGain: -2,
+        fadeMs: 99999
       }
     }
   });
@@ -231,6 +264,7 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
 
   assert.equal(normalized.voice.transcription.languageMode, "fixed");
   assert.equal(normalized.voice.transcription.languageHint, "en-us");
+  assert.equal(normalized.voice.admission.mode, "generation_decides");
   assert.equal(voiceGeneration.mode, "dedicated_model");
   assert.deepEqual(voiceGeneration.model, {
     provider: "anthropic",
@@ -243,9 +277,9 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
   });
   assert.equal(voiceInitiativeExecution.temperature, 1);
   assert.equal(normalized.initiative.voice.enabled, true);
-  assert.equal(normalized.initiative.voice.eagerness, 50);
-  assert.equal(normalized.initiative.voice.minSilenceSeconds, 45);
-  assert.equal(normalized.initiative.voice.minSecondsBetweenThoughts, 60);
+  assert.equal(normalized.initiative.voice.eagerness, 100);
+  assert.equal(normalized.initiative.voice.minSilenceSeconds, 1);
+  assert.equal(normalized.initiative.voice.minSecondsBetweenThoughts, 600);
   assert.deepEqual(normalized.agentStack.overrides.voiceAdmissionClassifier, {
     mode: "dedicated_model",
     model: {
@@ -279,39 +313,35 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
 
   assert.deepEqual(normalized.initiative.discovery.allowedImageModels, [
     "gpt-image-1.5",
-    "grok-imagine-image",
-    "grok-2-image-1212"
+    "grok-imagine-image"
   ]);
   assert.deepEqual(normalized.initiative.discovery.allowedVideoModels, [
-    "grok-imagine-video",
-    "grok-2-video"
+    "grok-imagine-video"
   ]);
   assert.deepEqual(normalized.initiative.discovery.rssFeeds, [
-    "https://www.theverge.com/rss/index.xml",
-    "https://feeds.arstechnica.com/arstechnica/index"
+    "https://ok.example/feed"
   ]);
-  assert.deepEqual(normalized.initiative.discovery.xHandles, []);
-  assert.deepEqual(normalized.initiative.discovery.redditSubreddits, [
-    "technology",
-    "programming",
-    "games",
-    "memes"
-  ]);
-  assert.equal(normalized.initiative.discovery.xNitterBaseUrl, "https://nitter.net");
+  assert.deepEqual(normalized.initiative.discovery.xHandles, ["alice", "bob"]);
+  assert.deepEqual(normalized.initiative.discovery.redditSubreddits, ["memes"]);
+  assert.equal(normalized.initiative.discovery.xNitterBaseUrl, "https://nitter.example");
   assert.deepEqual(normalized.initiative.discovery.sources, {
-    reddit: true,
+    reddit: false,
     hackerNews: true,
     youtube: true,
     rss: true,
-    x: false
+    x: true
   });
 });
 
 test("normalizeSettings keeps explicit shared ASR bridge disable", () => {
-  const normalized = normalizeLegacyView({
-    voice: {
-      openaiRealtime: {
-        usePerUserAsrBridge: false
+  const normalized = normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            usePerUserAsrBridge: false
+          }
+        }
       }
     }
   });
@@ -321,8 +351,10 @@ test("normalizeSettings keeps explicit shared ASR bridge disable", () => {
 
 test("normalizeSettings keeps up to 100 bot aliases", () => {
   const aliases = Array.from({ length: BOT_NAME_ALIAS_MAX_ITEMS + 5 }, (_, index) => `alias-${index + 1}`);
-  const normalized = normalizeLegacyView({
-    botNameAliases: aliases
+  const normalized = normalizeSettings({
+    identity: {
+      botNameAliases: aliases
+    }
   });
 
   assert.equal(normalized.identity.botNameAliases.length, BOT_NAME_ALIAS_MAX_ITEMS);
@@ -330,7 +362,7 @@ test("normalizeSettings keeps up to 100 bot aliases", () => {
 });
 
 test("normalizeSettings includes the canonical default bot aliases", () => {
-  const normalized = normalizeLegacyView({});
+  const normalized = normalizeSettings({});
 
   assert.equal(normalized.identity.botNameAliases.includes("link"), true);
   assert.equal(normalized.identity.botNameAliases.includes("crank"), true);
@@ -340,10 +372,14 @@ test("normalizeSettings includes the canonical default bot aliases", () => {
 });
 
 test("normalizeSettings preserves explicit file_wav transcription mode", () => {
-  const normalized = normalizeLegacyView({
-    voice: {
-      openaiRealtime: {
-        transcriptionMethod: "file_wav"
+  const normalized = normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            transcriptionMethod: "file_wav"
+          }
+        }
       }
     }
   });
@@ -352,10 +388,12 @@ test("normalizeSettings preserves explicit file_wav transcription mode", () => {
 });
 
 test("normalizeSettings forces bridge replies onto realtime output", () => {
-  const normalized = normalizeLegacyView({
+  const normalized = normalizeSettings({
     voice: {
-      replyPath: "bridge",
-      ttsMode: "api"
+      conversationPolicy: {
+        replyPath: "bridge",
+        ttsMode: "api"
+      }
     }
   });
 
@@ -363,12 +401,39 @@ test("normalizeSettings forces bridge replies onto realtime output", () => {
   assert.equal(normalized.voice.conversationPolicy.ttsMode, "realtime");
 });
 
+test("normalizeSettings preserves optional full-brain classifier admission", () => {
+  const normalized = normalizeSettings({
+    voice: {
+      conversationPolicy: {
+        replyPath: "brain"
+      },
+      admission: {
+        mode: "classifier_gate"
+      }
+    }
+  });
+
+  assert.equal(normalized.voice.conversationPolicy.replyPath, "brain");
+  assert.equal(normalized.voice.admission.mode, "classifier_gate");
+  assert.equal(resolveAgentStack(normalized).voiceAdmissionPolicy.mode, "classifier_gate");
+});
+
 test("normalizeSettings restricts browser model providers to supported browser runtimes", () => {
-  const normalized = normalizeLegacyView({
-    browser: {
-      llm: {
-        provider: "xai",
-        model: ""
+  const normalized = normalizeSettings({
+    agentStack: {
+      preset: "claude_api",
+      runtimeConfig: {
+        browser: {
+          localBrowserAgent: {
+            execution: {
+              mode: "dedicated_model",
+              model: {
+                provider: "xai",
+                model: ""
+              }
+            }
+          }
+        }
       }
     }
   });
@@ -383,11 +448,20 @@ test("normalizeSettings restricts browser model providers to supported browser r
 });
 
 test("normalizeSettings preserves claude oauth browser model providers", () => {
-  const normalized = normalizeLegacyView({
-    browser: {
-      llm: {
-        provider: "claude-oauth",
-        model: "claude-haiku-4-5"
+  const normalized = normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        browser: {
+          localBrowserAgent: {
+            execution: {
+              mode: "dedicated_model",
+              model: {
+                provider: "claude-oauth",
+                model: "claude-haiku-4-5"
+              }
+            }
+          }
+        }
       }
     }
   });
@@ -399,34 +473,6 @@ test("normalizeSettings preserves claude oauth browser model providers", () => {
     provider: "claude-oauth",
     model: "claude-haiku-4-5"
   });
-});
-
-test("normalizeSettings migrates legacy code agent provider fields into dev-team runtime settings", () => {
-  const fallback = normalizeLegacyView({
-    codeAgent: {
-      provider: "not-real",
-      model: "",
-      codexModel: ""
-    }
-  });
-
-  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.enabled, false);
-  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5.4");
-  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codexCli.enabled, false);
-  assert.equal(fallback.agentStack.runtimeConfig.devTeam.claudeCode.enabled, false);
-  assert.equal(fallback.agentStack.runtimeConfig.devTeam.claudeCode.model, "sonnet");
-
-  const codex = normalizeLegacyView({
-    codeAgent: {
-      provider: "CODEX",
-      model: "opus",
-      codexModel: "gpt-5-codex"
-    }
-  });
-
-  assert.equal(codex.agentStack.runtimeConfig.devTeam.codex.enabled, true);
-  assert.equal(codex.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
-  assert.equal(codex.agentStack.runtimeConfig.devTeam.claudeCode.enabled, false);
 });
 
 test("normalizeSettings keeps valid coding worker role overrides and drops invalid ones", () => {
@@ -514,46 +560,13 @@ test("resolveAgentStack routes implementation through available workers", () => 
   assert.equal(resolvedOnlyClaude.devTeam.roles.review, "claude_code");
 });
 
-test("normalizeSettings migrates claude_oauth_local_tools to claude_oauth and preserves session config", () => {
-  const normalized = normalizeSettings({
-    agentStack: {
-      preset: "claude_oauth_local_tools",
-      runtimeConfig: {
-        claudeOAuthSession: {
-          sessionScope: "channel",
-          inactivityTimeoutMs: 45_000,
-          contextPruningStrategy: "sliding_window",
-          maxPinnedStateChars: 18_000,
-          voiceToolPolicy: "fast_only",
-          textToolPolicy: "full"
-        }
-      }
-    }
-  });
-
-  assert.equal(normalized.agentStack.preset, "claude_oauth");
-  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.sessionScope, "channel");
-  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.inactivityTimeoutMs, 45_000);
-  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.contextPruningStrategy, "sliding_window");
-  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.maxPinnedStateChars, 18_000);
-  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.voiceToolPolicy, "fast_only");
-  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.textToolPolicy, "full");
-  assert.equal(normalized.voice.admission.mode, "generation_decides");
-  assert.equal(normalized.agentStack.overrides.voiceAdmissionClassifier, undefined);
-  assert.deepEqual(normalized.agentStack.runtimeConfig.voice.generation, {
-    mode: "dedicated_model",
-    model: {
-      provider: "claude-oauth",
-      model: "claude-sonnet-4-6"
-    }
-  });
-});
-
 test("normalizeSettings preserves canonical command-only and automation toggles", () => {
-  const normalized = normalizeLegacyView({
+  const normalized = normalizeSettings({
     voice: {
-      commandOnlyMode: true,
-      defaultInterruptionMode: "uninterruptible"
+      conversationPolicy: {
+        commandOnlyMode: true,
+        defaultInterruptionMode: "none"
+      }
     },
     automations: {
       enabled: false
@@ -566,21 +579,27 @@ test("normalizeSettings preserves canonical command-only and automation toggles"
 });
 
 test("normalizeSettings dedupes guidance and preserves discovery source booleans", () => {
-  const normalized = normalizeLegacyView({
+  const normalized = normalizeSettings({
     memoryLlm: {},
-    discovery: {
-      sources: {
-        reddit: undefined,
-        hackerNews: undefined,
-        youtube: undefined,
-        rss: undefined,
-        x: undefined
+    initiative: {
+      discovery: {
+        sources: {
+          reddit: undefined,
+          hackerNews: undefined,
+          youtube: undefined,
+          rss: undefined,
+          x: undefined
+        }
       }
     },
-    prompt: {
-      textGuidance: ["  one ", "one", "", "two"],
-      voiceGuidance: [" alpha ", "alpha", "beta"],
-      voiceOperationalGuidance: ["a", "a", "b"]
+    prompting: {
+      text: {
+        guidance: ["  one ", "one", "", "two"]
+      },
+      voice: {
+        guidance: [" alpha ", "alpha", "beta"],
+        operationalGuidance: ["a", "a", "b"]
+      }
     }
   });
 
@@ -603,57 +622,40 @@ test("normalizeSettings leaves memoryLlm empty when no explicit override is conf
 });
 
 test("normalizeSettings defaults reply max output tokens to 2500 and preserves higher values", () => {
-  const defaulted = normalizeLegacyView({
-    llm: {}
+  const defaulted = normalizeSettings({
+    interaction: {
+      replyGeneration: {}
+    }
   });
   assert.equal(defaulted.interaction.replyGeneration.maxOutputTokens, 2500);
 
-  const highValue = normalizeLegacyView({
-    llm: {
-      maxOutputTokens: 9_999
+  const highValue = normalizeSettings({
+    interaction: {
+      replyGeneration: {
+        maxOutputTokens: 9_999
+      }
     }
   });
   assert.equal(highValue.interaction.replyGeneration.maxOutputTokens, 9_999);
 });
 
-test("normalizeSettings migrates voice generation useTextModel to inherit orchestrator", () => {
-  const normalized = normalizeLegacyView({
-    llm: {
-      provider: "openai",
-      model: "gpt-5"
-    },
-    voice: {
-      generationLlm: {
-        useTextModel: true,
-        provider: "anthropic",
-        model: "grok-3-mini-latest"
-      }
-    },
-    replyFollowupLlm: {
-      enabled: true,
-      useTextModel: true,
-      provider: "anthropic",
-      model: "grok-3-mini-latest"
-    }
-  });
-
-  const generation = normalized.agentStack.runtimeConfig.voice.generation as {
-    mode: string;
-    model?: { provider: string; model: string };
-  };
-  assert.equal(generation.mode, "inherit_orchestrator");
-  assert.equal("useTextModel" in normalized.interaction.followup.execution, false);
-});
-
 test("normalizeSettings keeps elevenlabs voice runtime settings under canonical voice runtime config", () => {
-  const normalized = normalizeLegacyView({
-    voice: {
-      voiceProvider: "elevenlabs",
-      elevenLabsRealtime: {
-        agentId: "   agent_abc   ",
-        apiBaseUrl: "ftp://not-allowed.example/path",
-        inputSampleRateHz: 200000,
-        outputSampleRateHz: 4000
+  const normalized = normalizeSettings({
+    agentStack: {
+      advancedOverridesEnabled: true,
+      overrides: {
+        voiceRuntime: "elevenlabs_realtime"
+      },
+      runtimeConfig: {
+        voice: {
+          runtimeMode: "elevenlabs_realtime",
+          elevenLabsRealtime: {
+            agentId: "   agent_abc   ",
+            apiBaseUrl: "ftp://not-allowed.example/path",
+            inputSampleRateHz: 200000,
+            outputSampleRateHz: 4000
+          }
+        }
       }
     }
   });
@@ -731,28 +733,13 @@ test("normalizeSettings preserves canonical interaction and voice activity setti
   assert.equal(normalized.voice.conversationPolicy.ambientReplyEagerness, 73);
 });
 
-test("normalizeSettings drops removed replyDecisionLlm prompts and migrates enabled false to generation_decides", () => {
-  const normalized = normalizeLegacyView({
-    voice: {
-      replyDecisionLlm: {
-        enabled: false,
-        prompts: {
-          wakeVariantHint: "custom wake rule",
-          systemPromptCompact: "compact prompt"
-        }
-      }
-    }
-  });
-
-  assert.equal(normalized.voice.admission.mode, "generation_decides");
-  assert.equal(normalized.voice.admission.musicWakeLatchSeconds, 30);
-});
-
 test("normalizeSettings preserves long media prompt craft guidance blocks", () => {
   const longGuidance = `line one\n${"x".repeat(1200)}\nline three`;
-  const normalized = normalizeLegacyView({
-    prompt: {
-      mediaPromptCraftGuidance: longGuidance
+  const normalized = normalizeSettings({
+    prompting: {
+      media: {
+        promptCraftGuidance: longGuidance
+      }
     }
   });
 
@@ -761,7 +748,7 @@ test("normalizeSettings preserves long media prompt craft guidance blocks", () =
 
 test("normalizeSettings allows longer persona flavor values", () => {
   const withinLimit = "x".repeat(PERSONA_FLAVOR_MAX_CHARS);
-  const normalizedWithinLimit = normalizeLegacyView({
+  const normalizedWithinLimit = normalizeSettings({
     persona: {
       flavor: withinLimit
     }
@@ -769,7 +756,7 @@ test("normalizeSettings allows longer persona flavor values", () => {
   assert.equal(normalizedWithinLimit.persona.flavor, withinLimit);
 
   const overLimit = `${"y".repeat(PERSONA_FLAVOR_MAX_CHARS)}overflow`;
-  const normalizedOverLimit = normalizeLegacyView({
+  const normalizedOverLimit = normalizeSettings({
     persona: {
       flavor: overLimit
     }
@@ -778,28 +765,34 @@ test("normalizeSettings allows longer persona flavor values", () => {
 });
 
 test("normalizeSettings supports auto and fixed ASR language guidance in the canonical voice schema", () => {
-  const autoHint = normalizeLegacyView({
+  const autoHint = normalizeSettings({
     voice: {
-      asrLanguageMode: "auto",
-      asrLanguageHint: "EN"
+      transcription: {
+        languageMode: "auto",
+        languageHint: "EN"
+      }
     }
   });
   assert.equal(autoHint.voice.transcription.languageMode, "auto");
   assert.equal(autoHint.voice.transcription.languageHint, "en");
 
-  const fixedHint = normalizeLegacyView({
+  const fixedHint = normalizeSettings({
     voice: {
-      asrLanguageMode: "fixed",
-      asrLanguageHint: "en-US"
+      transcription: {
+        languageMode: "fixed",
+        languageHint: "en-US"
+      }
     }
   });
   assert.equal(fixedHint.voice.transcription.languageMode, "fixed");
   assert.equal(fixedHint.voice.transcription.languageHint, "en-us");
 
-  const invalid = normalizeLegacyView({
+  const invalid = normalizeSettings({
     voice: {
-      asrLanguageMode: "not-real",
-      asrLanguageHint: "!!!!!!"
+      transcription: {
+        languageMode: "not-real",
+        languageHint: "!!!!!!"
+      }
     }
   });
   assert.equal(invalid.voice.transcription.languageMode, "auto");

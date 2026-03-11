@@ -98,33 +98,28 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
   };
 }
 
-test("normalizeVoiceAdmissionModeForDashboard maps legacy aliases to canonical values", () => {
-  assert.equal(normalizeVoiceAdmissionModeForDashboard("generation_only"), "generation_decides");
+test("normalizeVoiceAdmissionModeForDashboard preserves canonical values", () => {
   assert.equal(normalizeVoiceAdmissionModeForDashboard("generation_decides"), "generation_decides");
-  assert.equal(normalizeVoiceAdmissionModeForDashboard("adaptive"), "generation_decides");
-  assert.equal(normalizeVoiceAdmissionModeForDashboard("hard_classifier"), "classifier_gate");
   assert.equal(normalizeVoiceAdmissionModeForDashboard("classifier_gate"), "classifier_gate");
+  assert.equal(normalizeVoiceAdmissionModeForDashboard(""), "generation_decides");
 });
 
 test("voice admission select renders canonical classifier mode as selected", () => {
   const markup = renderToStaticMarkup(
-    React.createElement(VoiceModeSettingsSection, buildProps("classifier_gate"))
+    React.createElement(
+      VoiceModeSettingsSection,
+      buildProps("classifier_gate", {
+        voiceReplyPath: "bridge"
+      })
+    )
   );
 
-  assert.match(markup, /<option value="generation_decides">Off \(generation decides\)<\/option>/);
-  assert.match(markup, /<option value="classifier_gate" selected="">On \(classifier gate\)<\/option>/);
+  assert.equal(markup.includes("Bridge mode requires a classifier"), true);
+  assert.equal(markup.includes("voice-reply-decision-provider"), true);
+  assert.equal(markup.includes("voice-reply-decision-model-preset"), true);
 });
 
-test("voice admission select renders legacy generation_only as the off option", () => {
-  const markup = renderToStaticMarkup(
-    React.createElement(VoiceModeSettingsSection, buildProps("generation_only"))
-  );
-
-  assert.match(markup, /<option value="generation_decides" selected="">Off \(generation decides\)<\/option>/);
-  assert.match(markup, /<option value="classifier_gate">On \(classifier gate\)<\/option>/);
-});
-
-test("voice mode settings expose the dedicated music brain controls even when the classifier UI is hidden", () => {
+test("voice mode settings keep the admission stage and brain admission selector without classifier pickers in generation-owned mode", () => {
   const markup = renderToStaticMarkup(
     React.createElement(
       VoiceModeSettingsSection,
@@ -134,11 +129,31 @@ test("voice mode settings expose the dedicated music brain controls even when th
     )
   );
 
-  assert.equal(markup.includes("Reply Admission"), false);
+  assert.equal(markup.includes("Reply Admission"), true);
+  assert.equal(markup.includes("Full Brain is generation-owned here"), true);
+  assert.equal(markup.includes("voice-reply-decision-realtime-admission-mode"), true);
+  assert.equal(markup.includes("voice-reply-decision-provider"), false);
+  assert.equal(markup.includes("voice-reply-decision-model-preset"), false);
   assert.equal(markup.includes("Music Brain"), true);
   assert.equal(markup.includes("Music brain mode"), true);
   assert.equal(markup.includes("Music brain provider"), true);
   assert.equal(markup.includes("Music brain model ID"), true);
+});
+
+test("voice mode settings show brain classifier pickers when classifier-first admission is selected", () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(
+      VoiceModeSettingsSection,
+      buildProps("classifier_gate", {
+        voiceReplyPath: "brain"
+      })
+    )
+  );
+
+  assert.equal(markup.includes("Full Brain is running classifier-first admission here"), true);
+  assert.equal(markup.includes("voice-reply-decision-realtime-admission-mode"), true);
+  assert.equal(markup.includes("voice-reply-decision-provider"), true);
+  assert.equal(markup.includes("voice-reply-decision-model-preset"), true);
 });
 
 test("voice mode settings hide dedicated music-brain model pickers when main-brain handoff mode is selected", () => {

@@ -464,7 +464,8 @@ Shared test defaults layered onto every preset:
 Admission note:
 
 - on `bridge`, the live runtime behaves as classifier-first regardless of the stored public mode because bridge has no native `[SKIP]`
-- on non-bridge paths, the public setting surface is `voice.admission.mode`
+- on `brain`, `voice.admission.mode` controls generation-owned vs classifier-first admission
+- on `native`, the public setting surface canonicalizes to `generation_decides`
 - internal runtime labels such as `hard_classifier` and `generation_only` are implementation details, not canonical docs keys
 
 ### CLI Flags
@@ -480,7 +481,7 @@ Flags override individual pipeline settings on top of a preset. The canonical ma
 | `--brain-model` | effective brain generation override via orchestrator / voice generation binding | string |
 | `--voice-model` | `agentStack.runtimeConfig.voice.openaiRealtime.model` | string |
 | `--voice-name` | `agentStack.runtimeConfig.voice.openaiRealtime.voice` | string |
-| `--classifier` | public intent is `voice.admission.mode`; on bridge the runtime is classifier-first either way | `on` / `off` |
+| `--classifier` | public intent is `voice.admission.mode`; on bridge the runtime is classifier-first either way, on brain it toggles generation-owned vs classifier-first admission, and on native it resolves back to generation-owned | `on` / `off` |
 | `--thought-engine` | `initiative.voice.enabled` | `on` / `off` |
 | `--command-only` | `voice.conversationPolicy.commandOnlyMode` | `on` / `off` |
 

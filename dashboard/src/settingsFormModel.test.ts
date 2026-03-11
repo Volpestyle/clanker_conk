@@ -657,10 +657,10 @@ test("settingsFormModel enables role-selected coding workers even when provider 
   );
 });
 
-test("settingsFormModel supports the claude_oauth preset (migrated from claude_oauth_local_tools)", () => {
+test("settingsFormModel supports the canonical claude_oauth preset", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
-      preset: "claude_oauth_local_tools"
+      preset: "claude_oauth"
     }
   })));
 
@@ -737,7 +737,7 @@ test("settingsFormModel persists disabled music brain mode", () => {
   });
 });
 
-test("settingsFormModel persists voice classifier overrides even when advanced overrides are off", () => {
+test("settingsFormModel persists bridge classifier overrides even when advanced overrides are off", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       preset: "claude_oauth"
@@ -745,6 +745,9 @@ test("settingsFormModel persists voice classifier overrides even when advanced o
     voice: {
       admission: {
         mode: "classifier_gate"
+      },
+      conversationPolicy: {
+        replyPath: "bridge"
       }
     }
   })));
@@ -754,12 +757,45 @@ test("settingsFormModel persists voice classifier overrides even when advanced o
   form.voiceReplyDecisionLlmModel = "claude-haiku-4-5";
 
   const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.conversationPolicy.replyPath, "bridge");
   assert.equal(patch.voice.admission.mode, "classifier_gate");
   assert.deepEqual(patch.agentStack.overrides.voiceAdmissionClassifier, {
     mode: "dedicated_model",
     model: {
       provider: "anthropic",
       model: "claude-haiku-4-5"
+    }
+  });
+});
+
+test("settingsFormModel preserves optional full-brain classifier admission", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      preset: "claude_oauth"
+    },
+    voice: {
+      admission: {
+        mode: "classifier_gate"
+      },
+      conversationPolicy: {
+        replyPath: "brain"
+      }
+    }
+  })));
+
+  assert.equal(form.voiceReplyPath, "brain");
+  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "classifier_gate");
+  assert.equal(form.voiceReplyDecisionLlmProvider, "claude-oauth");
+  assert.equal(form.voiceReplyDecisionLlmModel, "claude-sonnet-4-6");
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.conversationPolicy.replyPath, "brain");
+  assert.equal(patch.voice.admission.mode, "classifier_gate");
+  assert.deepEqual(patch.agentStack.overrides.voiceAdmissionClassifier, {
+    mode: "dedicated_model",
+    model: {
+      provider: "claude-oauth",
+      model: "claude-sonnet-4-6"
     }
   });
 });
@@ -803,7 +839,7 @@ test("settingsFormModel persists classifier selections even when they match the 
   });
 });
 
-test("settingsFormModel uses canonical voice fallbacks when legacy form fields are blank", () => {
+test("settingsFormModel uses canonical voice fallbacks when form fields are blank", () => {
   const form = settingsToForm(withResolved(normalizeSettings({})));
   form.voiceReplyPath = "";
   form.voiceOperationalMessages = "";
@@ -877,7 +913,7 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   );
 });
 
-test("settingsFormModel surfaces explicit legacy memory LLM overrides in the form view", () => {
+test("settingsFormModel surfaces explicit memory LLM overrides in the form view", () => {
   const form = settingsToForm({
     memoryLlm: {
       provider: "anthropic",

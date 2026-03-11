@@ -383,7 +383,7 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
         mode:
           voiceReplyDecisionLlm.enabled === false
             ? "generation_decides"
-            : voiceReplyDecisionLlm.realtimeAdmissionMode ?? "classifier_gate",
+            : voiceReplyDecisionLlm.realtimeAdmissionMode,
         intentConfidenceThreshold: voice.intentConfidenceThreshold,
         musicWakeLatchSeconds: voiceReplyDecisionLlm.musicWakeLatchSeconds
       },
