@@ -152,41 +152,54 @@ function patchTestSettings(store, patch) {
 
 function applyBaselineSettings(store, channelId) {
   patchTestSettings(store, {
-    activity: {
-      replyEagerness: 65,
-      reactionLevel: 20,
-      minSecondsBetweenMessages: 5,
-      replyCoalesceWindowSeconds: 0,
-      replyCoalesceMaxMessages: 1
+    interaction: {
+      activity: {
+        ambientReplyEagerness: 65,
+        reactivity: 20,
+        minSecondsBetweenMessages: 5,
+        replyCoalesceWindowSeconds: 0,
+        replyCoalesceMaxMessages: 1
+      }
     },
     permissions: {
-      allowReplies: true,
-      allowUnsolicitedReplies: true,
-      allowReactions: true,
-      replyChannelIds: [],
-      allowedChannelIds: [channelId],
-      blockedChannelIds: [],
-      blockedUserIds: [],
-      maxMessagesPerHour: 120,
-      maxReactionsPerHour: 120
+      replies: {
+        allowReplies: true,
+        allowUnsolicitedReplies: true,
+        allowReactions: true,
+        replyChannelIds: [],
+        allowedChannelIds: [channelId],
+        blockedChannelIds: [],
+        blockedUserIds: [],
+        maxMessagesPerHour: 120,
+        maxReactionsPerHour: 120
+      }
     },
     memory: {
       enabled: false,
-      maxRecentMessages: 12
+      promptSlice: {
+        maxRecentMessages: 12
+      }
     },
-    webSearch: {
-      enabled: false,
-      maxSearchesPerHour: 0
+    agentStack: {
+      runtimeConfig: {
+        research: {
+          enabled: false,
+          maxSearchesPerHour: 0
+        }
+      }
     },
-    videoContext: {
-      enabled: false,
-      maxLookupsPerHour: 0
+    media: {
+      videoContext: {
+        enabled: false,
+        maxLookupsPerHour: 0
+      }
     },
-    discovery: {
-      enabled: false,
-      allowReplyImages: false,
-      allowReplyVideos: false,
-      allowReplyGifs: false
+    initiative: {
+      discovery: {
+        allowReplyImages: false,
+        allowReplyVideos: false,
+        allowReplyGifs: false
+      }
     }
   });
 }
@@ -264,7 +277,10 @@ test("non-addressed non-initiative turn can still post when model contributes va
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       recentMessages,
@@ -363,7 +379,10 @@ test("non-addressed non-initiative turn is skipped when model declines", async (
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       recentMessages,
@@ -500,7 +519,9 @@ test("non-addressed initiative turn can still contribute when model responds", a
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        replyChannelIds: [channelId]
+        replies: {
+          replyChannelIds: [channelId]
+        }
       }
     });
 
@@ -572,7 +593,10 @@ test("non-addressed initiative turn can still contribute when model responds", a
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       recentMessages,
@@ -598,7 +622,9 @@ test("reply channels do not immediately evaluate cold non-addressed turns withou
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        replyChannelIds: [channelId]
+        replies: {
+          replyChannelIds: [channelId]
+        }
       }
     });
 
@@ -776,7 +802,10 @@ test("non-addressed turn is dropped before llm when unsolicited gate is closed",
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       recentMessages,
@@ -802,7 +831,9 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        allowUnsolicitedReplies: false
+        replies: {
+          allowUnsolicitedReplies: false
+        }
       }
     });
 
@@ -861,7 +892,10 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       forceRespond: true,
@@ -1184,8 +1218,10 @@ test("reply follow-up regeneration can add history images when model requests im
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
     store.patchSettings({
-      activity: {
-        replyEagerness: 100
+      interaction: {
+        activity: {
+          ambientReplyEagerness: 100
+        }
       }
     });
 
@@ -1275,7 +1311,10 @@ test("reply follow-up regeneration can add history images when model requests im
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       forceRespond: true,
@@ -1391,7 +1430,10 @@ test("image lookup tool accepts direct IMG refs from chat history", async () => 
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       forceRespond: true,
@@ -1583,7 +1625,9 @@ test("reply generation passes a structured JSON schema contract for voice intent
     store.patchSettings({
       voice: {
         enabled: true,
-        intentConfidenceThreshold: 0.75
+        admission: {
+          intentConfidenceThreshold: 0.75
+        }
       }
     });
 
@@ -1644,7 +1688,10 @@ test("reply generation passes a structured JSON schema contract for voice intent
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       forceRespond: true,
@@ -1672,7 +1719,9 @@ test("voice intent below confidence threshold falls back to normal text reply pa
     store.patchSettings({
       voice: {
         enabled: true,
-        intentConfidenceThreshold: 0.9
+        admission: {
+          intentConfidenceThreshold: 0.9
+        }
       }
     });
 
@@ -1734,7 +1783,10 @@ test("voice intent below confidence threshold falls back to normal text reply pa
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       forceRespond: true,
@@ -1872,7 +1924,9 @@ test("initiative-channel direct turns can be routed to thread replies when polic
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        replyChannelIds: [channelId]
+        replies: {
+          replyChannelIds: [channelId]
+        }
       }
     });
 
@@ -1930,7 +1984,10 @@ test("initiative-channel direct turns can be routed to thread replies when polic
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       forceRespond: true,
@@ -1954,7 +2011,9 @@ test("initiative-channel direct turns can be routed to standalone channel messag
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        replyChannelIds: [channelId]
+        replies: {
+          replyChannelIds: [channelId]
+        }
       }
     });
 
@@ -2012,7 +2071,10 @@ test("initiative-channel direct turns can be routed to standalone channel messag
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       forceRespond: true,

@@ -77,9 +77,11 @@ test("maybeAttachReplyGif reports configuration blocking when GIF search is unav
   await withTempMediaAttachmentContext(async (ctx) => {
     ctx.gifs.isConfigured = () => false;
     const settings = createTestSettings({
-      discovery: {
-        allowReplyGifs: true,
-        maxGifsPerDay: 3
+      initiative: {
+        discovery: {
+          allowReplyGifs: true,
+          maxGifsPerDay: 3
+        }
       }
     });
 
@@ -103,8 +105,10 @@ test("resolveMediaAttachment handles simple image directives through the shared 
       imageUrl: "https://cdn.example.com/generated.png"
     });
     const settings = createTestSettings({
-      discovery: {
-        maxImagesPerDay: 2
+      initiative: {
+        discovery: {
+          maxImagesPerDay: 2
+        }
       }
     });
 
@@ -130,8 +134,10 @@ test("resolveMediaAttachment propagates video capability blocking through the sh
   await withTempMediaAttachmentContext(async (ctx) => {
     ctx.llm.isVideoGenerationReady = () => false;
     const settings = createTestSettings({
-      discovery: {
-        maxVideosPerDay: 2
+      initiative: {
+        discovery: {
+          maxVideosPerDay: 2
+        }
       }
     });
 
@@ -158,9 +164,11 @@ test("resolveMediaAttachment handles GIF directives through the shared cascade",
       url: "https://media.example.com/party.gif"
     });
     const settings = createTestSettings({
-      discovery: {
-        allowReplyGifs: true,
-        maxGifsPerDay: 2
+      initiative: {
+        discovery: {
+          allowReplyGifs: true,
+          maxGifsPerDay: 2
+        }
       }
     });
 

@@ -37,45 +37,67 @@ async function withTempStore(run: (store: Store) => Promise<void>) {
 
 function applyBaselineSettings(store: Store, channelId: string) {
   store.patchSettings(createTestSettingsPatch({
-    botName: "clanker conk",
-    activity: {
-      replyEagerness: 65,
-      reactionLevel: 0,
-      minSecondsBetweenMessages: 0,
-      replyCoalesceWindowSeconds: 0,
-      replyCoalesceMaxMessages: 1
+    identity: {
+      botName: "clanker conk"
+    },
+    interaction: {
+      activity: {
+        ambientReplyEagerness: 65,
+        reactivity: 0,
+        minSecondsBetweenMessages: 0,
+        replyCoalesceWindowSeconds: 0,
+        replyCoalesceMaxMessages: 1
+      }
     },
     permissions: {
-      allowReplies: true,
-      allowUnsolicitedReplies: true,
-      allowReactions: false,
-      replyChannelIds: [],
-      allowedChannelIds: [channelId],
-      blockedChannelIds: [],
-      blockedUserIds: [],
-      maxMessagesPerHour: 120,
-      maxReactionsPerHour: 0
+      replies: {
+        allowReplies: true,
+        allowUnsolicitedReplies: true,
+        allowReactions: false,
+        replyChannelIds: [],
+        allowedChannelIds: [channelId],
+        blockedChannelIds: [],
+        blockedUserIds: [],
+        maxMessagesPerHour: 120,
+        maxReactionsPerHour: 0
+      }
     },
     memory: {
       enabled: false,
-      maxRecentMessages: 12
+      promptSlice: {
+        maxRecentMessages: 12
+      }
     },
-    webSearch: {
-      enabled: false,
-      maxSearchesPerHour: 0
+    agentStack: {
+      runtimeConfig: {
+        research: {
+          enabled: false,
+          maxSearchesPerHour: 0
+        }
+      }
     },
-    videoContext: {
-      enabled: false,
-      maxLookupsPerHour: 0
+    media: {
+      videoContext: {
+        enabled: false,
+        maxLookupsPerHour: 0
+      },
+      vision: {
+        enabled: false
+      }
     },
-    discovery: {
-      enabled: false,
-      allowReplyImages: false,
-      allowReplyVideos: false,
-      allowReplyGifs: false
-    },
-    vision: {
-      enabled: false
+    initiative: {
+      discovery: {
+        allowReplyImages: false,
+        allowReplyVideos: false,
+        allowReplyGifs: false,
+        sources: {
+          reddit: false,
+          hackerNews: false,
+          youtube: false,
+          rss: false,
+          x: false
+        }
+      }
     }
   }));
 }

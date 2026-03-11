@@ -85,6 +85,16 @@ export function hasBotMessageInRecentWindow({
     .some((row) => String(row?.author_id || "").trim() === normalizedBotUserId);
 }
 
+export function getResponseWindowMessageCount(eagerness: unknown) {
+  const normalized = clamp(Number(eagerness) || 0, 0, 100);
+  if (normalized <= 0) return 0;
+  if (normalized <= 20) return 1;
+  if (normalized <= 40) return 2;
+  if (normalized <= 60) return 4;
+  if (normalized <= 80) return 6;
+  return 8;
+}
+
 export function hasStartupFollowupAfterMessage({
   botUserId,
   messages,
@@ -153,29 +163,32 @@ export function shouldAttemptReplyDecision({
   if (forceRespond || forceDecisionLoop || isHardAddressSignal(addressSignal)) return true;
   if (!getReplyPermissions(settings).allowUnsolicitedReplies) return false;
 
-  // Bot already in the recent window — always admit for continuity.
-  if (hasBotMessageInRecentWindow({ botUserId, recentMessages, windowSize, triggerMessageId })) {
-    return true;
-  }
-
-  // Cost gate: at high eagerness, admit messages even without recent window
-  // presence so the model can decide via [SKIP]. At lower eagerness the gate
-  // stays narrow to save LLM calls — the model is told to be quiet anyway.
-  const eagerness = clamp(
-    Number(settings?.interaction?.activity?.replyEagerness ?? 0),
+  const ambientReplyEagerness = clamp(
+    Number(settings?.interaction?.activity?.ambientReplyEagerness ?? 0),
     0,
     100
   );
-  return eagerness >= 75;
-}
+  const responseWindowSize = getResponseWindowMessageCount(
+    settings?.interaction?.activity?.responseWindowEagerness
+  );
 
-export function shouldForceRespondForAddressSignal(addressSignal: Partial<ReplyAddressSignal> | null = null) {
-  if (!addressSignal || typeof addressSignal !== "object") return false;
-  if (!addressSignal.triggered) return false;
-  const reason = String(addressSignal.reason || "")
-    .trim()
-    .toLowerCase();
-  return reason !== "name_variant" && reason !== "llm_direct_address";
+  // Recent continuity is its own dial. At zero, there is no follow-up bias.
+  // At higher values the recent-thread window gets wider and stickier.
+  if (
+    responseWindowSize > 0 &&
+    hasBotMessageInRecentWindow({
+      botUserId,
+      recentMessages,
+      windowSize: responseWindowSize,
+      triggerMessageId
+    })
+  ) {
+    return true;
+  }
+
+  // Ambient replies are a separate cost gate. At high values, admit unprompted
+  // turns even without a recent thread so the model can decide via [SKIP].
+  return ambientReplyEagerness >= 75;
 }
 
 export async function getReplyAddressSignal(

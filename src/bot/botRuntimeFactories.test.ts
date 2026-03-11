@@ -30,7 +30,9 @@ function createBot() {
     store: {
       getSettings() {
         return createTestSettings({
-          botName: "clanker conk"
+          identity: {
+            botName: "clanker conk"
+          }
         });
       },
       logAction() {
@@ -157,9 +159,13 @@ test("buildBotContext maps the core bot services and trims botUserId", () => {
 test("buildReplyPipelineRuntime maps bot fields and preserves runtime delegation behavior", async () => {
   const { bot, calls } = createBot();
   const settings = createTestSettings({
-    botName: "clanker conk",
+    identity: {
+      botName: "clanker conk"
+    },
     permissions: {
-      allowUnsolicitedReplies: true
+      replies: {
+        allowUnsolicitedReplies: true
+      }
     }
   });
   const runtime = buildReplyPipelineRuntime(bot, {
@@ -223,10 +229,14 @@ test("buildReplyPipelineRuntime maps bot fields and preserves runtime delegation
 test("buildQueueGatewayRuntime exposes live bot state through getters, setters, and delegating helpers", async () => {
   const { bot, calls } = createBot();
   const settings = createTestSettings({
-    botName: "clanker conk",
+    identity: {
+      botName: "clanker conk"
+    },
     permissions: {
-      allowedChannelIds: ["channel-1"],
-      blockedUserIds: ["blocked-user"]
+      replies: {
+        allowedChannelIds: ["channel-1"],
+        blockedUserIds: ["blocked-user"]
+      }
     }
   });
   const runtime = buildQueueGatewayRuntime(bot);

@@ -2,11 +2,13 @@ import {
   ChatInputCommandInteraction,
   Client,
   GatewayIntentBits,
+  MessageType,
   Partials,
   REST,
   Routes
 } from "discord.js";
 import { clankCommand } from "./commands/clankCommand.ts";
+import type { Settings } from "./settings/settingsSchema.ts";
 import {
   runCodeAgent,
   isCodeAgentUserAllowed,
@@ -53,8 +55,7 @@ import {
 import {
   getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
   hasStartupFollowupAfterMessage as hasStartupFollowupAfterMessageForReplyAdmission,
-  shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission,
-  shouldForceRespondForAddressSignal as shouldForceRespondForAddressSignalForReplyAdmission
+  shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission
 } from "./bot/replyAdmission.ts";
 import { runStartupCatchup as runStartupCatchupForStartupCatchup } from "./bot/startupCatchup.ts";
 import {
@@ -243,6 +244,11 @@ function isSendableChannel(
     channel.isTextBased?.() === true &&
     typeof channel.send === "function" &&
     typeof channel.sendTyping === "function";
+}
+
+function isAppCommandInvocationMessage(message: { type?: number | null } | null | undefined) {
+  return message?.type === MessageType.ChatInputCommand ||
+    message?.type === MessageType.ContextMenuCommand;
 }
 
 export class ClankerBot {
@@ -436,7 +442,7 @@ export class ClankerBot {
 
   async handleClankBrowseSlashCommand(
     interaction: ChatInputCommandInteraction,
-    settings: Record<string, unknown> | null
+    settings: Settings
   ) {
     await interaction.deferReply();
     const browseInstruction = interaction.options.getString("task", true);
@@ -502,7 +508,7 @@ export class ClankerBot {
 
   async handleClankCodeSlashCommand(
     interaction: ChatInputCommandInteraction,
-    settings: Record<string, unknown> | null
+    settings: Settings
   ) {
     await interaction.deferReply();
     const codeInstruction = interaction.options.getString("task", true);
@@ -870,6 +876,21 @@ export class ClankerBot {
     return results;
   }
 
+  purgeGuildMemoryRuntime(guildId: string) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return false;
+
+    const session = this.voiceSessionManager.getSession(normalizedGuildId);
+    if (!session) return false;
+
+    session.factProfiles = new Map();
+    session.guildFactProfile = null;
+    session.behavioralFactCache = null;
+    session.conversationHistoryCaches = null;
+    this.voiceSessionManager.primeSessionFactProfiles(session);
+    return true;
+  }
+
   async requestVoiceJoinFromDashboard({
     guildId = null,
     requesterUserId = null,
@@ -1082,6 +1103,7 @@ export class ClankerBot {
 
   async handleMessage(message) {
     if (!message.guild || !message.channel || !message.author) return;
+    if (isAppCommandInvocationMessage(message)) return;
 
     const settings = this.store.getSettings();
 
@@ -1192,7 +1214,6 @@ export class ClankerBot {
       settings,
       recentMessages,
       addressSignal,
-      forceRespond: false,
       triggerMessageId: message.id,
       windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
     });
@@ -1200,7 +1221,6 @@ export class ClankerBot {
     this.enqueueReplyJob({
       source: "message_event",
       message,
-      forceRespond: shouldForceRespondForAddressSignalForReplyAdmission(addressSignal),
       addressSignal
     });
   }

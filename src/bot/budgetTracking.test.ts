@@ -79,8 +79,10 @@ async function withTempBudgetContext(
 test("getImageBudgetState counts recent image calls and clamps remaining budget", async () => {
   await withTempBudgetContext(async (ctx) => {
     const settings = createTestSettings({
-      discovery: {
-        maxImagesPerDay: 2
+      initiative: {
+        discovery: {
+          maxImagesPerDay: 2
+        }
       }
     });
 
@@ -102,9 +104,13 @@ test("getImageBudgetState counts recent image calls and clamps remaining budget"
 test("getWebSearchBudgetState counts successful and failed searches in the hourly window", async () => {
   await withTempBudgetContext(async (ctx) => {
     const settings = createTestSettings({
-      webSearch: {
-        enabled: true,
-        maxSearchesPerHour: 3
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true,
+            maxSearchesPerHour: 3
+          }
+        }
       }
     });
 
@@ -126,9 +132,13 @@ test("buildWebSearchContext carries opt-out state and search configuration", asy
   await withTempBudgetContext(async (ctx) => {
     ctx.search.isConfigured = () => false;
     const settings = createTestSettings({
-      webSearch: {
-        enabled: true,
-        maxSearchesPerHour: 4
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true,
+            maxSearchesPerHour: 4
+          }
+        }
       }
     });
 
@@ -150,9 +160,15 @@ test("buildBrowserBrowseContext disables openai computer use when no OpenAI clie
     async (ctx) => {
       ctx.llm.openai = null;
       const settings = createTestSettings({
-        browser: {
-          enabled: true,
-          maxBrowseCallsPerHour: 5
+        agentStack: {
+          runtimeConfig: {
+            browser: {
+              enabled: true,
+              localBrowserAgent: {
+                maxBrowseCallsPerHour: 5
+              }
+            }
+          }
         }
       });
       const patchedSettings = {
@@ -179,10 +195,12 @@ test("buildBrowserBrowseContext disables openai computer use when no OpenAI clie
 test("buildVideoReplyContext reports budget blocking before fetching video context", async () => {
   await withTempBudgetContext(async (ctx) => {
     const settings = createTestSettings({
-      videoContext: {
-        enabled: true,
-        maxLookupsPerHour: 1,
-        maxVideosPerMessage: 1
+      media: {
+        videoContext: {
+          enabled: true,
+          maxLookupsPerHour: 1,
+          maxVideosPerMessage: 1
+        }
       }
     });
     ctx.store.logAction({ kind: "video_context_call" });

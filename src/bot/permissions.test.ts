@@ -10,8 +10,10 @@ import {
 test("isChannelAllowed blocks explicit blocked channels before allow logic", () => {
   const settings = createTestSettings({
     permissions: {
-      blockedChannelIds: ["blocked-1"],
-      allowedChannelIds: ["blocked-1", "allowed-1"]
+      replies: {
+        blockedChannelIds: ["blocked-1"],
+        allowedChannelIds: ["blocked-1", "allowed-1"]
+      }
     }
   });
 
@@ -22,8 +24,10 @@ test("isChannelAllowed blocks explicit blocked channels before allow logic", () 
 test("isChannelAllowed defaults open when allowlist is empty", () => {
   const settings = createTestSettings({
     permissions: {
-      allowedChannelIds: [],
-      blockedChannelIds: []
+      replies: {
+        allowedChannelIds: [],
+        blockedChannelIds: []
+      }
     }
   });
 
@@ -33,7 +37,9 @@ test("isChannelAllowed defaults open when allowlist is empty", () => {
 test("isReplyChannel matches the unified initiative channel list", () => {
   const settings = createTestSettings({
     permissions: {
-      replyChannelIds: ["reply-1"]
+      replies: {
+        replyChannelIds: ["reply-1"]
+      }
     }
   });
 
@@ -44,7 +50,9 @@ test("isReplyChannel matches the unified initiative channel list", () => {
 test("isUserBlocked matches normalized blocked user ids", () => {
   const settings = createTestSettings({
     permissions: {
-      blockedUserIds: ["user-1"]
+      replies: {
+        blockedUserIds: ["user-1"]
+      }
     }
   });
 

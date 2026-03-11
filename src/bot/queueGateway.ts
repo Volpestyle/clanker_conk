@@ -1,8 +1,5 @@
 import { clamp, sleep } from "../utils.ts";
-import {
-  shouldForceRespondForAddressSignal,
-  type ReplyAddressSignal
-} from "./replyAdmission.ts";
+import { type ReplyAddressSignal } from "./replyAdmission.ts";
 import type { QueueGatewayRuntime } from "./botContext.ts";
 import {
   getActivitySettings,
@@ -320,20 +317,7 @@ export async function processReplyQueue(bot: QueueGatewayRuntime, channelId: str
           addressSignal.reason = String(signal.reason || "direct");
         }
       }
-      const forceRespond = burstJobs.some((job) => {
-        const signal = job?.addressSignal || null;
-        if (job?.forceRespond) {
-          if (!signal || typeof signal !== "object") return true;
-          return shouldForceRespondForAddressSignal(signal);
-        }
-        return shouldForceRespondForAddressSignal(signal);
-      });
-      if (forceRespond && !addressSignal.triggered) {
-        addressSignal.triggered = true;
-        addressSignal.reason = "direct";
-        addressSignal.confidence = 1;
-        addressSignal.confidenceSource = "direct";
-      }
+      const forceRespond = burstJobs.some((job) => Boolean(job?.forceRespond));
       const source = burstJobs.length > 1
         ? `${latestJob.source || "message_event"}_coalesced`
         : latestJob.source || "message_event";

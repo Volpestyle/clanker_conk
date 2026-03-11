@@ -25,38 +25,49 @@ async function withTempStore(run: (store: Store) => Promise<void>) {
 
 function configureStore(store: Store, channelId: string) {
   store.patchSettings(createTestSettingsPatch({
-    activity: {
-      minSecondsBetweenMessages: 0,
-      replyCoalesceWindowSeconds: 0,
-      replyCoalesceMaxMessages: 1
+    interaction: {
+      activity: {
+        minSecondsBetweenMessages: 0,
+        replyCoalesceWindowSeconds: 0,
+        replyCoalesceMaxMessages: 1
+      }
     },
     permissions: {
-      allowReplies: true,
-      allowUnsolicitedReplies: false,
-      allowReactions: true,
-      replyChannelIds: [],
-      allowedChannelIds: [channelId],
-      blockedChannelIds: [],
-      blockedUserIds: [],
-      maxMessagesPerHour: 100,
-      maxReactionsPerHour: 100
+      replies: {
+        allowReplies: true,
+        allowUnsolicitedReplies: false,
+        allowReactions: true,
+        replyChannelIds: [],
+        allowedChannelIds: [channelId],
+        blockedChannelIds: [],
+        blockedUserIds: [],
+        maxMessagesPerHour: 100,
+        maxReactionsPerHour: 100
+      }
     },
     memory: {
       enabled: false
     },
-    webSearch: {
-      enabled: false,
-      maxSearchesPerHour: 0
+    agentStack: {
+      runtimeConfig: {
+        research: {
+          enabled: false,
+          maxSearchesPerHour: 0
+        }
+      }
     },
-    videoContext: {
-      enabled: false,
-      maxLookupsPerHour: 0
+    media: {
+      videoContext: {
+        enabled: false,
+        maxLookupsPerHour: 0
+      }
     },
-    discovery: {
-      enabled: false,
-      allowReplyImages: false,
-      allowReplyVideos: false,
-      allowReplyGifs: false
+    initiative: {
+      discovery: {
+        allowReplyImages: false,
+        allowReplyVideos: false,
+        allowReplyGifs: false
+      }
     }
   }));
 }

@@ -445,8 +445,7 @@ export async function generateAutomationPayload(
   };
   const userPrompt = buildAutomationPrompt({
     ...promptBase,
-    memoryLookup,
-    allowMemoryLookupDirective: false
+    memoryLookup
   });
   const automationSystemPrompt = buildSystemPrompt(settings);
 

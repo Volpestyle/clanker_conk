@@ -2,14 +2,15 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   getReplyAddressSignal,
-  shouldAttemptReplyDecision,
-  shouldForceRespondForAddressSignal
+  shouldAttemptReplyDecision
 } from "./replyAdmission.ts";
 import { createTestSettings } from "../testSettings.ts";
 
 const BASE_SETTINGS = createTestSettings({
-  botName: "clanker conk",
-  botNameAliases: ["clank"]
+  identity: {
+    botName: "clanker conk",
+    botNameAliases: ["clank"]
+  }
 });
 
 const BASE_RUNTIME = {
@@ -105,6 +106,12 @@ test("reply admission unsolicited turns require followup window when not directl
   const settings = {
     permissions: {
       allowUnsolicitedReplies: true
+    },
+    interaction: {
+      activity: {
+        ambientReplyEagerness: 10,
+        responseWindowEagerness: 60
+      }
     }
   };
 
@@ -113,10 +120,10 @@ test("reply admission unsolicited turns require followup window when not directl
     settings,
     recentMessages: [],
     addressSignal: {
-      direct: true,
-      inferred: true,
-      triggered: true,
-      reason: "llm_direct_address"
+      direct: false,
+      inferred: false,
+      triggered: false,
+      reason: "llm_decides"
     },
     triggerMessageId: "msg-1"
   });
@@ -142,14 +149,49 @@ test("reply admission unsolicited turns require followup window when not directl
   assert.equal(withWindow, true);
 });
 
+test("reply admission disables recent-window followups when response-window eagerness is zero", () => {
+  const noAddress = {
+    direct: false,
+    inferred: false,
+    triggered: false,
+    reason: "llm_decides"
+  };
+
+  assert.equal(
+    shouldAttemptReplyDecision({
+      botUserId: "bot-1",
+      settings: {
+        permissions: {
+          allowUnsolicitedReplies: true
+        },
+        interaction: {
+          activity: {
+            ambientReplyEagerness: 10,
+            responseWindowEagerness: 0
+          }
+        }
+      },
+      recentMessages: [
+        {
+          message_id: "bot-ctx-1",
+          author_id: "bot-1"
+        }
+      ],
+      addressSignal: noAddress,
+      triggerMessageId: "msg-1"
+    }),
+    false
+  );
+});
+
 test("reply admission admits at high eagerness even without recent window", () => {
   const highEagernessSettings = {
     permissions: { allowUnsolicitedReplies: true },
-    interaction: { activity: { replyEagerness: 80 } }
+    interaction: { activity: { ambientReplyEagerness: 80 } }
   };
   const lowEagernessSettings = {
     permissions: { allowUnsolicitedReplies: true },
-    interaction: { activity: { replyEagerness: 50 } }
+    interaction: { activity: { ambientReplyEagerness: 50 } }
   };
   const noAddress = {
     direct: false,
@@ -183,22 +225,35 @@ test("reply admission admits at high eagerness even without recent window", () =
   );
 });
 
-test("reply admission only force-responds for non-fuzzy address signals", () => {
+test("reply admission uses response-window eagerness separately from ambient eagerness", () => {
+  const noAddress = {
+    direct: false,
+    inferred: false,
+    triggered: false,
+    reason: "llm_decides"
+  };
+  const settings = {
+    permissions: { allowUnsolicitedReplies: true },
+    interaction: {
+      activity: {
+        ambientReplyEagerness: 10,
+        responseWindowEagerness: 80
+      }
+    }
+  };
+
   assert.equal(
-    shouldForceRespondForAddressSignal({
-      direct: true,
-      inferred: true,
-      triggered: true,
-      reason: "name_variant"
-    }),
-    false
-  );
-  assert.equal(
-    shouldForceRespondForAddressSignal({
-      direct: true,
-      inferred: false,
-      triggered: true,
-      reason: "name_exact"
+    shouldAttemptReplyDecision({
+      botUserId: "bot-1",
+      settings,
+      recentMessages: [
+        { message_id: "older-1", author_id: "someone-else" },
+        { message_id: "older-2", author_id: "someone-else" },
+        { message_id: "older-3", author_id: "someone-else" },
+        { message_id: "bot-ctx", author_id: "bot-1" }
+      ],
+      addressSignal: noAddress,
+      triggerMessageId: "msg-1"
     }),
     true
   );

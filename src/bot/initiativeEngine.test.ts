@@ -51,28 +51,32 @@ test("maybeRunInitiativeCycle starts the min-gap cooldown after an initiative sk
 
     store.patchSettings(createTestSettingsPatch({
       permissions: {
-        allowReplies: true,
-        allowUnsolicitedReplies: true,
-        allowReactions: false,
-        replyChannelIds: [channelId],
-        allowedChannelIds: [channelId],
-        blockedChannelIds: [],
-        blockedUserIds: [],
-        maxMessagesPerHour: 100,
-        maxReactionsPerHour: 0
+        replies: {
+          allowReplies: true,
+          allowUnsolicitedReplies: true,
+          allowReactions: false,
+          replyChannelIds: [channelId],
+          allowedChannelIds: [channelId],
+          blockedChannelIds: [],
+          blockedUserIds: [],
+          maxMessagesPerHour: 100,
+          maxReactionsPerHour: 0
+        }
       },
       memory: {
         enabled: false
       },
-      textThoughtLoop: {
-        enabled: true,
-        eagerness: 100,
-        minMinutesBetweenPosts: 60,
-        maxPostsPerDay: 3,
-        lookbackMessages: 12,
-        allowActiveCuriosity: false,
-        maxToolSteps: 0,
-        maxToolCalls: 0
+      initiative: {
+        text: {
+          enabled: true,
+          eagerness: 100,
+          minMinutesBetweenPosts: 60,
+          maxPostsPerDay: 3,
+          lookbackMessages: 12,
+          allowActiveCuriosity: false,
+          maxToolSteps: 0,
+          maxToolCalls: 0
+        }
       }
     }));
 

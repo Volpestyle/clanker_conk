@@ -52,9 +52,16 @@ describe("resolveVisionProviderSettings", () => {
             isProviderConfigured: (provider) => provider === "anthropic" || provider === "openai"
         };
         const settings = createTestSettings({
-            vision: {
-                provider: "anthropic",
-                model: "claude-sonnet-4-5-20250929"
+            media: {
+                vision: {
+                    execution: {
+                        mode: "dedicated_model",
+                        model: {
+                            provider: "anthropic",
+                            model: "claude-sonnet-4-5-20250929"
+                        }
+                    }
+                }
             }
         });
         const result = resolveVisionProviderSettings(llm, settings);
@@ -67,9 +74,16 @@ describe("resolveVisionProviderSettings", () => {
             isProviderConfigured: (provider) => provider === "anthropic"
         };
         const settings = createTestSettings({
-            vision: {
-                provider: "xai",
-                model: "grok-2-vision-latest"
+            media: {
+                vision: {
+                    execution: {
+                        mode: "dedicated_model",
+                        model: {
+                            provider: "xai",
+                            model: "grok-2-vision-latest"
+                        }
+                    }
+                }
             }
         });
         const result = resolveVisionProviderSettings(llm, settings);

@@ -50,9 +50,13 @@ export class ActiveReplyRegistry {
   private readonly repliesByScope = new Map<string, Set<ActiveReply>>();
   private readonly abortCutoffs = new Map<string, number>();
 
+  reserveTimestamp() {
+    return nextRegistryTimestamp();
+  }
+
   begin(scopeKey: string, kind: ReplyKind, toolNames: string[] = []): ActiveReply {
     const normalizedScopeKey = normalizeScopeKey(scopeKey);
-    const startedAt = nextRegistryTimestamp();
+    const startedAt = this.reserveTimestamp();
     activeReplyCounter += 1;
     const reply: ActiveReply = {
       id: `${normalizedScopeKey}:${startedAt}:${activeReplyCounter}`,

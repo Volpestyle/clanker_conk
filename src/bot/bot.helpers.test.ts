@@ -36,8 +36,6 @@ test("parseStructuredReplyOutput rejects unstructured plain text", () => {
   assert.equal(parsed.text, "");
   assert.equal(parsed.mediaDirective, null);
   assert.equal(parsed.automationAction.operation, null);
-  assert.equal(parsed.voiceAddressing.talkingTo, null);
-  assert.equal(parsed.voiceAddressing.directedConfidence, 0);
   assert.equal(parsed.parseState, "unstructured");
 });
 
@@ -55,7 +53,6 @@ test("parseStructuredReplyOutput ignores removed structured memory fields", () =
   );
 
   assert.equal(parsed.text, "bet");
-  assert.equal(parsed.memoryLookupQuery, null);
   assert.equal(parsed.mediaDirective, null);
 });
 
@@ -123,8 +120,6 @@ test("parseStructuredReplyOutput honors skip flag", () => {
       skip: true,
       reactionEmoji: null,
       media: null,
-      webSearchQuery: null,
-      memoryLookupQuery: null,
       memoryLine: null,
     })
   );
@@ -140,8 +135,6 @@ test("parseStructuredReplyOutput accepts screen share offer intent", () => {
       skip: false,
       reactionEmoji: null,
       media: null,
-      webSearchQuery: null,
-      memoryLookupQuery: null,
       memoryLine: null,
       screenShareIntent: {
         action: "offer_link",
@@ -175,22 +168,6 @@ test("parseStructuredReplyOutput ignores deprecated screen share aliases", () =>
   assert.equal(parsed.screenShareIntent.reason, null);
 });
 
-test("parseStructuredReplyOutput preserves model-provided voice addressing target", () => {
-  const parsed = parseStructuredReplyOutput(
-    JSON.stringify({
-      text: "yup",
-      skip: false,
-      voiceAddressing: {
-        talkingTo: "assistant",
-        directedConfidence: 1.4
-      }
-    })
-  );
-
-  assert.equal(parsed.voiceAddressing.talkingTo, "assistant");
-  assert.equal(parsed.voiceAddressing.directedConfidence, 1);
-});
-
 test("parseStructuredReplyOutput normalizes automation create payload", () => {
   const parsed = parseStructuredReplyOutput(
     JSON.stringify({
@@ -198,8 +175,6 @@ test("parseStructuredReplyOutput normalizes automation create payload", () => {
       skip: false,
       reactionEmoji: null,
       media: null,
-      webSearchQuery: null,
-      memoryLookupQuery: null,
       memoryLine: null,
       automationAction: {
         operation: "create",
@@ -237,31 +212,4 @@ test("parseStructuredReplyOutput maps automation stop to pause", () => {
 
   assert.equal(parsed.automationAction.operation, "pause");
   assert.equal(parsed.automationAction.targetQuery, "giraffe");
-});
-
-test("parseStructuredReplyOutput parses voice tool-call fields", () => {
-  const parsed = parseStructuredReplyOutput(
-    JSON.stringify({
-      text: "say less",
-      skip: false,
-      reactionEmoji: null,
-      media: null,
-      soundboardRefs: ["1234567890@555666777", "111222333@444555666"],
-      leaveVoiceChannel: true,
-      automationAction: { operation: "none" },
-      screenShareIntent: { action: "offer_link", confidence: 0.88, reason: "needs visual context" }
-    })
-  );
-
-  assert.equal(parsed.text, "say less");
-  assert.deepEqual(parsed.soundboardRefs, ["1234567890@555666777", "111222333@444555666"]);
-  assert.equal(parsed.leaveVoiceChannel, true);
-  assert.equal(parsed.screenShareIntent.action, "offer_link");
-});
-
-test("parseStructuredReplyOutput normalizes missing voice tool-call fields to safe defaults", () => {
-  const parsed = parseStructuredReplyOutput("just plain text");
-  assert.equal(parsed.parseState, "unstructured");
-  assert.deepEqual(parsed.soundboardRefs, []);
-  assert.equal(parsed.leaveVoiceChannel, false);
 });

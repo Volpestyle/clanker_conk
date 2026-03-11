@@ -5,11 +5,28 @@ import { createTestSettings } from "../testSettings.ts";
 
 test("resolveCodeAgentConfig routes worker selection through the requested role", () => {
   const base = createTestSettings({
-    codeAgent: {
-      provider: "auto",
-      allowedUserIds: ["user-1"],
-      maxParallelTasks: 2,
-      maxTasksPerHour: 5
+    permissions: {
+      devTasks: {
+        allowedUserIds: ["user-1"]
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        devTeam: {
+          codex: {
+            maxParallelTasks: 2,
+            maxTasksPerHour: 5
+          },
+          codexCli: {
+            maxParallelTasks: 2,
+            maxTasksPerHour: 5
+          },
+          claudeCode: {
+            maxParallelTasks: 2,
+            maxTasksPerHour: 5
+          }
+        }
+      }
     }
   });
   const settings = {

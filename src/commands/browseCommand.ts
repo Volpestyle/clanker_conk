@@ -1,6 +1,8 @@
-import { SlashCommandBuilder } from "discord.js";
+import { type SlashCommandBuilder, type SlashCommandSubcommandsOnlyBuilder } from "discord.js";
 
-export function addBrowseSubcommand(command: SlashCommandBuilder) {
+export function addBrowseSubcommand(
+  command: SlashCommandBuilder | SlashCommandSubcommandsOnlyBuilder
+) {
   return command.addSubcommand((subcommand) =>
     subcommand
       .setName("browse")

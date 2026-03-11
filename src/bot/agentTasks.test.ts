@@ -84,8 +84,12 @@ test("runModelRequestedBrowserBrowse reports openai computer use unavailable wit
       (ctx.llm as any).openai = null;
 
       const settings = createTestSettings({
-        browser: {
-          enabled: true
+        agentStack: {
+          runtimeConfig: {
+            browser: {
+              enabled: true
+            }
+          }
         }
       });
       const patchedSettings = {
@@ -127,9 +131,19 @@ test("runModelRequestedBrowserBrowse reports openai computer use unavailable wit
 test("runModelRequestedCodeTask blocks users outside the dev-task allowlist", async () => {
   await withTempAgentContext(async (ctx) => {
     const settings = createTestSettings({
-      codeAgent: {
-        provider: "codex-cli",
-        allowedUserIds: ["allowed-1"]
+      permissions: {
+        devTasks: {
+          allowedUserIds: ["allowed-1"]
+        }
+      },
+      agentStack: {
+        runtimeConfig: {
+          devTeam: {
+            codexCli: {
+              enabled: true
+            }
+          }
+        }
       }
     });
 
@@ -149,11 +163,21 @@ test("runModelRequestedCodeTask blocks users outside the dev-task allowlist", as
 test("createCodeAgentSession returns a code session when dev tasks are enabled", async () => {
   await withTempAgentContext(async (ctx) => {
     const settings = createTestSettings({
-      codeAgent: {
-        provider: "codex-cli",
-        allowedUserIds: ["user-1"],
-        maxParallelTasks: 2,
-        maxTasksPerHour: 5
+      permissions: {
+        devTasks: {
+          allowedUserIds: ["user-1"]
+        }
+      },
+      agentStack: {
+        runtimeConfig: {
+          devTeam: {
+            codexCli: {
+              enabled: true,
+              maxParallelTasks: 2,
+              maxTasksPerHour: 5
+            }
+          }
+        }
       }
     });
 
@@ -177,8 +201,12 @@ test("buildSubAgentSessionsRuntime delegates browser session creation for local 
     },
     async (ctx) => {
       const settings = createTestSettings({
-        browser: {
-          enabled: true
+        agentStack: {
+          runtimeConfig: {
+            browser: {
+              enabled: true
+            }
+          }
         }
       });
 
@@ -205,8 +233,12 @@ test("buildSubAgentSessionsRuntime blocks browser sessions for openai computer u
     },
     async (ctx) => {
       const settings = createTestSettings({
-        browser: {
-          enabled: true
+        agentStack: {
+          runtimeConfig: {
+            browser: {
+              enabled: true
+            }
+          }
         }
       });
       const patchedSettings = {

@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import type { ChatInputCommandInteraction } from "discord.js";
+import { MessageType, type ChatInputCommandInteraction } from "discord.js";
 import { ClankerBot } from "../bot.ts";
 import { createTestSettings } from "../testSettings.ts";
 
@@ -10,7 +10,9 @@ function createBot() {
     store: {
       getSettings() {
         return createTestSettings({
-          botName: "clanker conk"
+          identity: {
+            botName: "clanker conk"
+          }
         });
       },
       countActionsSince() {
@@ -159,4 +161,72 @@ test("handleClankSlashCommand routes /clank code to the code handler", async () 
   assert.equal(codeCalls.length, 1);
   assert.equal(codeCalls[0]?.interaction, slash.interaction);
   assert.equal(slash.replies.length, 0);
+});
+
+test("handleMessage ignores slash command invocation messages so they do not trigger normal text replies", async () => {
+  const recordedMessages: Array<Record<string, unknown>> = [];
+  const queuedReplies: Array<Record<string, unknown>> = [];
+  const bot = new ClankerBot({
+    appConfig: {},
+    store: {
+      getSettings() {
+        return createTestSettings({
+          identity: {
+            botName: "clanker conk"
+          }
+        });
+      },
+      countActionsSince() {
+        return 0;
+      },
+      logAction() {},
+      recordMessage(payload: Record<string, unknown>) {
+        recordedMessages.push(payload);
+      },
+      getRecentMessages() {
+        return [];
+      },
+      hasTriggeredResponse() {
+        return false;
+      }
+    },
+    llm: {
+      getCodexCompatibleClient() {
+        return null;
+      },
+      openai: null,
+      codexOAuth: null
+    },
+    memory: null,
+    discovery: null,
+    search: null,
+    gifs: null,
+    video: null
+  });
+  bot.client.user = {
+    id: "bot-1",
+    username: "clanker conk",
+    tag: "clanker conk#0001"
+  };
+  bot.enqueueReplyJob = (payload: Record<string, unknown>) => {
+    queuedReplies.push(payload);
+    return true;
+  };
+
+  await bot.handleMessage({
+    id: "msg-1",
+    type: MessageType.ChatInputCommand,
+    guildId: "guild-1",
+    channelId: "text-1",
+    guild: { id: "guild-1" },
+    channel: { id: "text-1", isTextBased() { return true; } },
+    author: {
+      id: "user-1",
+      username: "alice",
+      bot: false
+    }
+  });
+
+  assert.equal(recordedMessages.length, 0);
+  assert.equal(queuedReplies.length, 0);
 });

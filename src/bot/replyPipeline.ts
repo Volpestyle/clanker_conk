@@ -18,7 +18,6 @@ import { getLocalTimeZoneLabel } from "./automation.ts";
 import { buildReplyToolSet, executeReplyTool } from "../tools/replyTools.ts";
 import type { ReplyToolContext, ReplyToolRuntime } from "../tools/replyTools.ts";
 import {
-  maybeRegenerateWithMemoryLookup as maybeRegenerateWithMemoryLookupForReplyFollowup,
   resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
   runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
 } from "./replyFollowup.ts";
@@ -39,6 +38,10 @@ import {
   createReplyPromptCapture,
   finalizeReplyPerformanceSample
 } from "./replyPipelineShared.ts";
+import {
+  getResponseWindowMessageCount,
+  hasBotMessageInRecentWindow
+} from "./replyAdmission.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
 import { loadBehavioralMemoryFacts } from "./memorySlice.ts";
 import {
@@ -196,7 +199,6 @@ type ReplyMediaDirective = ReturnType<typeof pickReplyMediaDirective>;
 type ReplyMentionResolution = Awaited<ReturnType<typeof resolveDeterministicMentionsForMentions>>;
 type ReplyReactionResult = Awaited<ReturnType<ReplyPipelineRuntime["maybeApplyReplyReaction"]>>;
 type ReplyScreenShareOffer = Awaited<ReturnType<ReplyPipelineRuntime["maybeHandleScreenShareOfferIntent"]>>;
-type ReplyFollowupGenerationSettings = ReturnType<typeof resolveReplyFollowupGenerationSettingsForReplyFollowup>;
 type ReplyWebSearchState = ReturnType<ReplyPipelineRuntime["buildWebSearchContext"]> & {
   summaryText?: string | null;
 };
@@ -208,9 +210,11 @@ type ReplyPipelineContext = {
   addressSignal: ReplyAddressSignal;
   triggerMessageIds: string[];
   addressed: boolean;
-  reactionEagerness: number;
+  reactivity: number;
   isReplyChannel: boolean;
-  replyEagerness: number;
+  ambientReplyEagerness: number;
+  responseWindowEagerness: number;
+  recentReplyWindowActive: boolean;
   reactionEmojiOptions: string[];
   source: string;
   performance: ReplyPerformance;
@@ -259,7 +263,6 @@ type ReplyActionableLlmResult = {
   usedBrowserBrowseFollowup: boolean;
   usedMemoryLookupFollowup: boolean;
   usedImageLookupFollowup: boolean;
-  followupGenerationSettings: ReplyFollowupGenerationSettings;
   mediaPromptLimit: number;
   replyDirective: ReplyDirective;
   webSearch: ReplyWebSearchState;
@@ -340,13 +343,27 @@ export async function buildReplyContext(
     )
   ];
   const addressed = Boolean(addressSignal?.triggered);
-  const reactionEagerness = clamp(Number(activity.reactionLevel) || 0, 0, 100);
+  const reactivity = clamp(Number(activity.reactivity) || 0, 0, 100);
   const isReplyChannel = bot.isReplyChannel(settings, message.channelId);
-  const replyEagerness = clamp(
-    Number(activity.replyEagerness) || 0,
+  const ambientReplyEagerness = clamp(
+    Number(activity.ambientReplyEagerness) || 0,
     0,
     100
   );
+  const responseWindowEagerness = clamp(
+    Number(activity.responseWindowEagerness) || 0,
+    0,
+    100
+  );
+  const responseWindowSize = getResponseWindowMessageCount(responseWindowEagerness);
+  const recentReplyWindowActive =
+    responseWindowSize > 0 &&
+    hasBotMessageInRecentWindow({
+      botUserId: bot.client.user?.id || null,
+      recentMessages,
+      windowSize: responseWindowSize,
+      triggerMessageId: message.id
+    });
   const reactionEmojiOptions = [
     ...new Set([...bot.getReactionEmojiOptions(message.guild), ...UNICODE_REACTIONS])
   ];
@@ -534,13 +551,14 @@ export async function buildReplyContext(
     remainingReplyGifs: gifBudget.remaining,
     gifRepliesEnabled: discovery.allowReplyGifs,
     gifsConfigured,
-    replyEagerness,
-    reactionEagerness,
+    ambientReplyEagerness,
+    responseWindowEagerness,
+    recentReplyWindowActive,
+    reactivity,
     addressing: {
       directlyAddressed: addressed,
       directAddressConfidence: Number(addressSignal?.confidence) || 0,
       directAddressThreshold: Number(addressSignal?.threshold) || 0.62,
-      responseRequired: Boolean(options.forceRespond),
       mentionsOtherUsers: Boolean(
         !addressed &&
         message.mentions?.users?.size > 0 &&
@@ -575,11 +593,7 @@ export async function buildReplyContext(
     webSearch,
     browserBrowse,
     memoryLookup,
-    imageLookup,
-    allowWebSearchDirective: true,
-    allowBrowserBrowseDirective: true,
-    allowMemoryLookupDirective: true,
-    allowImageLookupDirective: true
+    imageLookup
   });
   const replyPromptCapture = createReplyPromptCapture({
     systemPrompt,
@@ -589,8 +603,9 @@ export async function buildReplyContext(
 
   return {
     shouldRun: true,
-    recentMessages, addressSignal, triggerMessageIds, addressed, reactionEagerness,
-    isReplyChannel, replyEagerness, reactionEmojiOptions, source, performance,
+    recentMessages, addressSignal, triggerMessageIds, addressed, reactivity,
+    isReplyChannel, ambientReplyEagerness, responseWindowEagerness, recentReplyWindowActive,
+    reactionEmojiOptions, source, performance,
     memorySlice, replyMediaMemoryFacts, attachmentImageInputs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, memoryLookup,
@@ -610,7 +625,7 @@ export async function executeReplyLlm(
 ): Promise<ReplyLlmResult> {
   const {
     addressSignal, triggerMessageIds, source, performance, signal,
-    replyTrace, systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture,
+    replyTrace, systemPrompt, initialUserPrompt, replyPromptCapture,
     activeVoiceSession, inVoiceChannelNow
   } = ctx;
   let { webSearch, browserBrowse, memoryLookup, modelImageInputs, imageLookup, replyPrompts } = ctx;
@@ -742,6 +757,7 @@ export async function executeReplyLlm(
   const REPLY_TOOL_LOOP_MAX_CALLS = 3;
   let replyToolLoopSteps = 0;
   let replyTotalToolCalls = 0;
+  const followupStartedAtMs = Date.now();
 
   while (
     generation.toolCalls?.length > 0 &&
@@ -938,12 +954,14 @@ export async function executeReplyLlm(
     ];
 
     throwIfAborted(signal, "Reply cancelled");
+    const toolLoopUserPrompt = toolResultImageInputsAdded
+      ? "Attached are images returned by the previous tool call. Use them if they help."
+      : "";
+    appendReplyFollowupPrompt(replyPromptCapture, toolLoopUserPrompt);
     generation = await bot.llm.generate({
       settings: followupGenerationSettings,
       systemPrompt,
-      userPrompt: toolResultImageInputsAdded
-        ? "Attached are images returned by the previous tool call. Use them if they help."
-        : "",
+      userPrompt: toolLoopUserPrompt,
       imageInputs: modelImageInputs,
       contextMessages: replyContextMessages,
       jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
@@ -959,6 +977,7 @@ export async function executeReplyLlm(
 
   const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
   let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
+  replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, replyToolLoopSteps);
 
   const automationIntentHandled = await bot.maybeHandleStructuredAutomationIntent({
     message,
@@ -973,116 +992,8 @@ export async function executeReplyLlm(
   });
   if (automationIntentHandled) return { handledByIntent: true };
 
-  const followupStartedAtMs = Date.now();
-  const followup = await maybeRegenerateWithMemoryLookupForReplyFollowup(
-    { llm: bot.llm, search: bot.search, memory: bot.memory },
-    {
-      settings,
-      followupSettings: followupGenerationSettings,
-      systemPrompt,
-      generation,
-      directive: replyDirective,
-      webSearch,
-      browserBrowse,
-      memoryLookup,
-      imageLookup,
-      guildId: message.guildId,
-      channelId: message.channelId,
-      trace: {
-        ...replyTrace,
-        source,
-        event: "reply_followup"
-      },
-      signal,
-      mediaPromptLimit,
-      imageInputs: modelImageInputs,
-      forceRegenerate: false,
-      buildUserPrompt: ({
-        webSearch: nextWebSearch,
-        browserBrowse: nextBrowserBrowse,
-        memoryLookup: nextMemoryLookup,
-        imageLookup: nextImageLookup,
-        imageInputs: nextImageInputs,
-        allowWebSearchDirective,
-        allowBrowserBrowseDirective,
-        allowMemoryLookupDirective,
-        allowImageLookupDirective
-      }) => {
-        const followupUserPrompt = buildReplyPrompt({
-          ...replyPromptBase,
-          imageInputs: nextImageInputs,
-          webSearch: nextWebSearch,
-          browserBrowse: nextBrowserBrowse,
-          memoryLookup: nextMemoryLookup,
-          imageLookup: nextImageLookup,
-          allowWebSearchDirective,
-          allowBrowserBrowseDirective,
-          allowMemoryLookupDirective,
-          allowImageLookupDirective
-        });
-        appendReplyFollowupPrompt(replyPromptCapture, followupUserPrompt);
-        return followupUserPrompt;
-      },
-      runModelRequestedWebSearch: async ({ webSearch: currentWebSearch, query }) =>
-        await runModelRequestedWebSearchForReplyFollowup(
-          { llm: bot.llm, search: bot.search, memory: bot.memory },
-          {
-            settings,
-            webSearch: currentWebSearch,
-            query,
-            trace: {
-              ...replyTrace,
-              source
-            },
-            signal
-          }
-        ),
-      runModelRequestedBrowserBrowse: async ({ browserBrowse: currentBrowserBrowse, query, signal: followupSignal }) =>
-        await bot.runModelRequestedBrowserBrowse({
-          settings,
-          browserBrowse: currentBrowserBrowse,
-          query,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          userId: message.author.id,
-          source,
-          signal: followupSignal
-        }),
-      runModelRequestedImageLookup: (payload) => bot.runModelRequestedImageLookup(payload),
-      mergeImageInputs: (payload) => bot.mergeImageInputs(payload),
-      maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
-      jsonSchema: REPLY_OUTPUT_JSON_SCHEMA
-    }
-  );
-  generation = followup.generation;
-  replyDirective = followup.directive;
-  webSearch = followup.webSearch || webSearch;
-  browserBrowse = followup.browserBrowse || browserBrowse;
-  memoryLookup = followup.memoryLookup;
-  imageLookup = followup.imageLookup;
-  modelImageInputs = followup.imageInputs;
-  usedWebSearchFollowup = followup.usedWebSearch;
-  usedBrowserBrowseFollowup = followup.usedBrowserBrowse;
-  usedMemoryLookupFollowup = followup.usedMemoryLookup;
-  usedImageLookupFollowup = followup.usedImageLookup;
-  replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, followup.followupSteps);
-
-  if (followup.regenerated) {
-    const followupAutomationHandled = await bot.maybeHandleStructuredAutomationIntent({
-      message,
-      settings,
-      replyDirective,
-      generation,
-      source,
-      triggerMessageIds,
-      addressing: addressSignal,
-      performance,
-      replyPrompts
-    });
-    if (followupAutomationHandled) return { handledByIntent: true };
-  }
   if (
-    followup.regenerated ||
+    replyToolLoopSteps > 0 ||
     usedWebSearchFollowup ||
     usedBrowserBrowseFollowup ||
     usedMemoryLookupFollowup ||
@@ -1095,7 +1006,7 @@ export async function executeReplyLlm(
   return {
     handledByIntent: false,
     generation, typingDelayMs, usedWebSearchFollowup, usedBrowserBrowseFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
-    followupGenerationSettings, mediaPromptLimit, replyDirective,
+    mediaPromptLimit, replyDirective,
     webSearch, browserBrowse, memoryLookup, imageLookup, modelImageInputs, replyPrompts
   };
 }
@@ -1364,7 +1275,7 @@ export async function sendReplyMessage(
     gifBudgetBlocked, gifConfigBlocked, imagePrompt, complexImagePrompt, videoPrompt, gifQuery
   } = actionResult;
 
-  const shouldThreadReply = addressed || options.forceRespond;
+  const shouldThreadReply = addressed;
   const canStandalonePost = isReplyChannel || !shouldThreadReply;
   const sendAsReply = bot.shouldSendAsReply({
     isReplyChannel,

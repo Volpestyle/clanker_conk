@@ -454,8 +454,9 @@ The driver applies these overrides through [`src/testSettings.ts`](../src/testSe
 
 Shared test defaults layered onto every preset:
 
-- `interaction.activity.replyEagerness = 50`
-- `voice.conversationPolicy.replyEagerness = 50`
+- `interaction.activity.ambientReplyEagerness = 50`
+- `interaction.activity.responseWindowEagerness = 50`
+- `voice.conversationPolicy.ambientReplyEagerness = 50`
 - `voice.conversationPolicy.commandOnlyMode = false`
 - `initiative.voice.enabled = false`
 - `initiative.voice.eagerness = 50`

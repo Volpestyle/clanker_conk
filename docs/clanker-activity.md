@@ -25,7 +25,8 @@ Text has three shipped paths:
 
 1. `Directly addressed reply`
 2. `Recent-window follow-up reply`
-3. `Unified initiative cycle`
+3. `Cold ambient reactive reply`
+4. `Unified initiative cycle`
 
 Voice has three shipped paths:
 
@@ -50,6 +51,7 @@ Triggers include:
 Behavior:
 
 - the message enters the reply pipeline immediately
+- direct address raises admission priority, but it does not mark the turn as response-required
 - the model still decides the exact reply or `[SKIP]`
 - global blockers still apply, including permissions, rate limits, cooldowns, and runtime failures
 
@@ -58,7 +60,10 @@ Main settings:
 - `permissions.replies.allowReplies`
 - `interaction.activity.minSecondsBetweenMessages`
 - `interaction.activity.replyCoalesceWindowSeconds`
-- `interaction.activity.replyEagerness`
+
+Direct address bypasses the ambient and response-window admission gates. Those knobs still shape prompt context, but they do not decide whether an explicitly addressed turn enters the reply pipeline.
+
+Startup catchup reuses this same direct-address path for missed addressed turns after downtime. It replays those turns into the normal decision loop rather than forcing a guaranteed reply.
 
 Relevant code:
 
@@ -74,16 +79,32 @@ Behavior:
 
 - this is still a reactive reply path, not initiative
 - `permissions.replies.allowUnsolicitedReplies` still matters
-- `interaction.activity.replyEagerness` shapes how often the model is consulted and how socially active it should feel
+- `interaction.activity.responseWindowEagerness` controls how sticky the recent-engagement window is
 - the model can still `[SKIP]`
 
 Relevant code:
 
 - `src/bot/replyAdmission.ts`
-- `src/bot/replyFollowup.ts`
+- `src/bot/replyPipeline.ts`
 - `src/prompts/promptText.ts`
 
-### 3. Unified Initiative Cycle
+### 3. Cold Ambient Reactive Reply
+
+If there is no recent thread to continue, the bot can still consider a non-addressed text reply as an ambient chime-in.
+
+Behavior:
+
+- this is separate from both direct address and recent-window follow-ups
+- `interaction.activity.ambientReplyEagerness` is the admission dial for these cold reactive turns
+- the model still decides whether to reply or `[SKIP]`
+
+Relevant code:
+
+- `src/bot/replyAdmission.ts`
+- `src/bot/replyPipeline.ts`
+- `src/prompts/promptText.ts`
+
+### 4. Unified Initiative Cycle
 
 This is the cold-start text path. It handles both conversational chime-ins and standalone proactive posts.
 
@@ -135,7 +156,10 @@ Behavior:
 Main settings:
 
 - `voice.enabled`
-- `voice.conversationPolicy.replyEagerness`
+- `voice.conversationPolicy.ambientReplyEagerness`
+- `interaction.activity.responseWindowEagerness`
+- `interaction.activity.reactivity`
+- `voice.soundboard.eagerness`
 - `voice.conversationPolicy.commandOnlyMode`
 - `voice.conversationPolicy.replyPath`
 - `voice.admission.mode`
@@ -241,13 +265,21 @@ Text channel permissions do not determine which voice channels the bot may join.
 
 ## Setting Map
 
+### Shared Activity Axes
+
+| Surface | What it controls |
+|---|---|
+| `interaction.activity.ambientReplyEagerness` | Cold ambient text replies when there is no direct address or active follow-up thread |
+| `interaction.activity.responseWindowEagerness` | How sticky recent engagement is for text and voice follow-up replies |
+| `interaction.activity.reactivity` | Shared quick reactions such as emoji responses and other lightweight acknowledgements |
+| `voice.conversationPolicy.ambientReplyEagerness` | Ambient voice replies when the bot is in VC but not directly addressed |
+
 ### Text Reply Controls
 
 | Surface | What it controls |
 |---|---|
 | `permissions.replies.allowReplies` | Global text reply master switch |
 | `permissions.replies.allowUnsolicitedReplies` | Whether non-addressed reactive follow-up replies may enter admission |
-| `interaction.activity.replyEagerness` | Reactive reply consultation rate and prompt social mode |
 | `interaction.activity.minSecondsBetweenMessages` | Global spacing between bot text messages |
 
 ### Text Initiative Controls
@@ -267,12 +299,12 @@ Text channel permissions do not determine which voice channels the bot may join.
 
 | Surface | What it controls |
 |---|---|
-| `voice.conversationPolicy.replyEagerness` | Voice reply consultation/social mode |
 | `voice.conversationPolicy.commandOnlyMode` | Restricts voice behavior toward commands and explicit wakeups |
 | `voice.conversationPolicy.replyPath` | `native`, `bridge`, or `brain` |
 | `voice.conversationPolicy.ttsMode` | Realtime or API TTS output for brain path |
 | `voice.admission.mode` | Public admission mode surface |
 | `voice.admission.musicWakeLatchSeconds` | Follow-up wake window during music playback |
+| `voice.soundboard.eagerness` | How readily the bot uses Discord soundboard beats when they fit |
 | `voice.transcription.*` | ASR enablement and language hinting |
 | `voice.sessionLimits.*` | Session duration and concurrency limits |
 | `agentStack.runtimeConfig.voice.*` | Provider/runtime-specific transport and generation config |
@@ -310,6 +342,10 @@ Relevant code:
 
 Base initiative defaults from `settingsSchema.ts`:
 
+- `interaction.activity.ambientReplyEagerness = 20`
+- `interaction.activity.responseWindowEagerness = 55`
+- `interaction.activity.reactivity = 40`
+- `voice.conversationPolicy.ambientReplyEagerness = 50`
 - `initiative.text.enabled = true`
 - `initiative.text.eagerness = 20`
 - `initiative.text.minMinutesBetweenPosts = 360`
@@ -324,6 +360,7 @@ Base voice defaults from `settingsSchema.ts`:
 - `voice.conversationPolicy.replyPath = "brain"`
 - `voice.conversationPolicy.ttsMode = "realtime"`
 - `voice.admission.mode = "generation_decides"`
+- `voice.soundboard.eagerness = 40`
 
 Preset resolution can override parts of the effective voice runtime, so the active preset still matters.
 

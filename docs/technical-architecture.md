@@ -171,14 +171,18 @@ Important tables:
 
 Entrypoint: Discord `messageCreate` handling in `src/bot.ts`.
 
+Discord app-command invocation messages (`ChatInputCommand`, `ContextMenuCommand`)
+are excluded from this path. Slash/context-menu commands route through
+`interactionCreate` and own their single interaction response directly instead of
+also entering normal text reply admission.
+
 Main stages:
 
 1. permission and channel checks
 2. reply admission
 3. continuity and memory assembly
 4. LLM/tool loop
-5. optional follow-up passes
-6. delivery and persistence
+5. delivery and persistence
 
 The user-facing activity model for these paths is documented in `docs/clanker-activity.md`.
 

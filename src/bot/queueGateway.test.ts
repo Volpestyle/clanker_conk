@@ -31,9 +31,11 @@ test("dequeueReplyBurst coalesces rolling bursts across authors within window", 
     createJob("m3", baseTs + 7_000, "u3")
   ]);
   const settings = createTestSettings({
-    activity: {
-      replyCoalesceWindowSeconds: 4,
-      replyCoalesceMaxMessages: 6
+    interaction: {
+      activity: {
+        replyCoalesceWindowSeconds: 4,
+        replyCoalesceMaxMessages: 6
+      }
     }
   });
 
@@ -56,9 +58,11 @@ test("dequeueReplyBurst respects coalesce max messages", () => {
     createJob("m4", baseTs + 3_000)
   ]);
   const settings = createTestSettings({
-    activity: {
-      replyCoalesceWindowSeconds: 4,
-      replyCoalesceMaxMessages: 2
+    interaction: {
+      activity: {
+        replyCoalesceWindowSeconds: 4,
+        replyCoalesceMaxMessages: 2
+      }
     }
   });
 

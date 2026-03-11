@@ -21,11 +21,9 @@ const MAX_MEDIA_PROMPT_FLOOR = 120;
 const MAX_MEDIA_PROMPT_CEILING = 2000;
 export const MAX_WEB_QUERY_LEN = 220;
 export const MAX_GIF_QUERY_LEN = 120;
-const MAX_SOUNDBOARD_REF_LEN = 180;
 export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 export const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
 export const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
-const MAX_OPEN_ARTICLE_REF_LEN = 260;
 const MAX_REPLY_TEXT_LEN = 3600;
 const MAX_INITIATIVE_TEXT_LEN = 3600;
 const MAX_INITIATIVE_REASON_LEN = 240;
@@ -33,8 +31,6 @@ const MAX_INITIATIVE_CHANNEL_ID_LEN = 80;
 const MAX_AUTOMATION_TITLE_LEN = 90;
 const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
 const MAX_AUTOMATION_TARGET_QUERY_LEN = 180;
-const MAX_REPLY_SOUNDBOARD_REFS = 10;
-const MAX_VOICE_ADDRESSING_TARGET_LEN = 80;
 
 export function resolveMaxMediaPromptLen(settings) {
   const raw = Number(getDiscoverySettings(settings).maxMediaPromptChars);
@@ -73,13 +69,6 @@ function emptyStructuredScreenShareIntent() {
   };
 }
 
-function emptyStructuredVoiceAddressing() {
-  return {
-    talkingTo: null,
-    directedConfidence: 0
-  };
-}
-
 export const REPLY_OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -104,18 +93,6 @@ export const REPLY_OUTPUT_SCHEMA = {
         }
       ]
     },
-    webSearchQuery: { type: ["string", "null"] },
-    browserBrowseQuery: { type: ["string", "null"] },
-    memoryLookupQuery: { type: ["string", "null"] },
-    imageLookupQuery: { type: ["string", "null"] },
-    openArticleRef: { type: ["string", "null"] },
-    soundboardRefs: {
-      type: "array",
-      items: {
-        type: "string"
-      }
-    },
-    leaveVoiceChannel: { type: "boolean" },
     automationAction: {
       type: "object",
       additionalProperties: false,
@@ -169,15 +146,6 @@ export const REPLY_OUTPUT_SCHEMA = {
       },
       required: ["action", "confidence", "reason"]
     },
-    voiceAddressing: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        talkingTo: { type: ["string", "null"] },
-        directedConfidence: { type: "number" }
-      },
-      required: ["talkingTo", "directedConfidence"]
-    },
     screenNote: { type: ["string", "null"] },
     screenMoment: { type: ["string", "null"] }
   },
@@ -186,16 +154,8 @@ export const REPLY_OUTPUT_SCHEMA = {
     "skip",
     "reactionEmoji",
     "media",
-    "webSearchQuery",
-    "browserBrowseQuery",
-    "memoryLookupQuery",
-    "imageLookupQuery",
-    "openArticleRef",
-    "soundboardRefs",
-    "leaveVoiceChannel",
     "automationAction",
     "screenShareIntent",
-    "voiceAddressing",
     "screenNote",
     "screenMoment"
   ]
@@ -652,17 +612,9 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
         gifQuery: null,
         mediaDirective: null,
         reactionEmoji: null,
-        webSearchQuery: null,
-        browserBrowseQuery: null,
-        memoryLookupQuery: null,
-        imageLookupQuery: null,
-        openArticleRef: null,
-        soundboardRefs: [],
-        leaveVoiceChannel: false,
         automationAction: emptyStructuredAutomationAction(),
 
         screenShareIntent: emptyStructuredScreenShareIntent(),
-        voiceAddressing: emptyStructuredVoiceAddressing(),
         parseState: "recovered_json" as ParseState
       };
     }
@@ -675,16 +627,8 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       gifQuery: null,
       mediaDirective: null,
       reactionEmoji: null,
-      webSearchQuery: null,
-      browserBrowseQuery: null,
-      memoryLookupQuery: null,
-      imageLookupQuery: null,
-      openArticleRef: null,
-      soundboardRefs: [],
-      leaveVoiceChannel: false,
       automationAction: emptyStructuredAutomationAction(),
       screenShareIntent: emptyStructuredScreenShareIntent(),
-      voiceAddressing: emptyStructuredVoiceAddressing(),
       parseState: "unstructured" as ParseState
     };
   }
@@ -693,14 +637,9 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const skip = parsed?.skip === true;
   const text = skip ? "[SKIP]" : baseText;
   const reactionEmoji = normalizeDirectiveText(parsed?.reactionEmoji, 64) || null;
-  const soundboardRefs = normalizeStructuredSoundboardRefs(parsed?.soundboardRefs ?? parsed?.soundboard);
-  const leaveVoiceChannel =
-    parsed?.leaveVoiceChannel === true ||
-    parsed?.leaveVoiceChannelRequested === true;
   const automationAction = normalizeStructuredAutomationAction(parsed?.automationAction);
   const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
   const screenShareIntent = normalizeStructuredScreenShareIntent(parsed?.screenShareIntent);
-  const voiceAddressing = normalizeStructuredVoiceAddressing(parsed?.voiceAddressing);
 
   return {
     text: text || "",
@@ -710,16 +649,8 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     gifQuery: mediaDirective?.type === "gif" ? mediaDirective.prompt : null,
     mediaDirective,
     reactionEmoji,
-    webSearchQuery: normalizeDirectiveText(parsed?.webSearchQuery, MAX_WEB_QUERY_LEN) || null,
-    browserBrowseQuery: normalizeDirectiveText(parsed?.browserBrowseQuery, MAX_BROWSER_BROWSE_QUERY_LEN) || null,
-    memoryLookupQuery: normalizeDirectiveText(parsed?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN) || null,
-    imageLookupQuery: normalizeDirectiveText(parsed?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN) || null,
-    openArticleRef: normalizeDirectiveText(parsed?.openArticleRef, MAX_OPEN_ARTICLE_REF_LEN) || null,
-    soundboardRefs,
-    leaveVoiceChannel,
     automationAction,
     screenShareIntent,
-    voiceAddressing,
     parseState: "json" as ParseState
   };
 }
@@ -850,48 +781,6 @@ function normalizeStructuredScreenShareIntent(rawIntent) {
     confidence,
     reason
   };
-}
-
-function normalizeStructuredVoiceAddressing(rawAddressing) {
-  if (!rawAddressing || typeof rawAddressing !== "object") {
-    return emptyStructuredVoiceAddressing();
-  }
-
-  const rawTalkingTo = normalizeDirectiveText(
-    rawAddressing.talkingTo ?? rawAddressing.target ?? rawAddressing.talkTo,
-    MAX_VOICE_ADDRESSING_TARGET_LEN
-  );
-  const talkingTo = rawTalkingTo || null;
-
-  const confidenceRaw = Number(
-    rawAddressing.directedConfidence ??
-    rawAddressing.confidence ??
-    rawAddressing.score
-  );
-  const directedConfidence = Number.isFinite(confidenceRaw) ? clamp(confidenceRaw, 0, 1) : 0;
-
-  return {
-    talkingTo,
-    directedConfidence
-  };
-}
-
-function normalizeStructuredSoundboardRefs(rawRefs) {
-  const values = Array.isArray(rawRefs) ? rawRefs : rawRefs ? [rawRefs] : [];
-  const refs = [];
-  const seen = new Set();
-
-  for (const entry of values) {
-    const normalized = normalizeDirectiveText(entry, MAX_SOUNDBOARD_REF_LEN);
-    if (!normalized) continue;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    refs.push(normalized);
-    if (refs.length >= MAX_REPLY_SOUNDBOARD_REFS) break;
-  }
-
-  return refs;
 }
 
 function normalizeStructuredAutomationAction(rawAction) {

@@ -7,7 +7,9 @@ flowchart TD
         DirectPath["Immediate reply path"]
         Unsolicited{"permissions.replies.allowUnsolicitedReplies?"}
         RecentWindow{"Bot already in recent\nmessage window?"}
-        RecentPath["Recent-window follow-up\ninteraction.activity.replyEagerness shapes reply"]
+        RecentPath["Recent-window follow-up\ninteraction.activity.responseWindowEagerness shapes stickiness"]
+        AmbientGate{"interaction.activity.ambientReplyEagerness\nadmits cold ambient reply?"}
+        AmbientPath["Cold ambient reactive reply"]
         NoImmediate["No immediate reply\nmessage stored for continuity"]
     end
 
@@ -33,7 +35,9 @@ flowchart TD
     Unsolicited -->|No| NoImmediate
     Unsolicited -->|Yes| RecentWindow
     RecentWindow -->|Yes| RecentPath
-    RecentWindow -->|No| NoImmediate
+    RecentWindow -->|No| AmbientGate
+    AmbientGate -->|Yes| AmbientPath
+    AmbientGate -->|No| NoImmediate
 
     Tick --> InitEnabled
     InitEnabled -->|No| NoInit["Skip this tick"]
@@ -45,4 +49,5 @@ flowchart TD
 
     DirectPath --> Guardrails
     RecentPath --> Guardrails
+    AmbientPath --> Guardrails
     InitDecision --> Guardrails

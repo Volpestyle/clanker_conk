@@ -47,10 +47,16 @@ test("searchAndRead falls back to secondary provider and reads pages", async () 
 
   const result = await service.searchAndRead({
     settings: createTestSettings({
-      webSearch: {
-        maxResults: 3,
-        maxPagesToRead: 1,
-        providerOrder: ["brave", "serpapi"]
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            localExternalSearch: {
+              maxResults: 3,
+              maxPagesToRead: 1,
+              providerOrder: ["brave", "serpapi"]
+            }
+          }
+        }
       }
     }),
     query: "  space cats ",
@@ -77,7 +83,17 @@ test("searchAndRead logs provider-stage errors and rethrows when all providers f
 
   await assert.rejects(
     () => service.searchAndRead({
-      settings: createTestSettings({ webSearch: { providerOrder: ["brave"] } }),
+      settings: createTestSettings({
+        agentStack: {
+          runtimeConfig: {
+            research: {
+              localExternalSearch: {
+                providerOrder: ["brave"]
+              }
+            }
+          }
+        }
+      }),
       query: "deep topic",
       trace: { guildId: "guild-1", channelId: "chan-2", userId: "user-9", source: "policy" }
     }),

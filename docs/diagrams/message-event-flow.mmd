@@ -28,21 +28,23 @@ sequenceDiagram
       Bot->>Store: logAction(reacted)
     and Reply path
       Bot->>Memory: buildPromptMemorySlice() (hybrid fact retrieval)
-      Bot->>LLM: generate() for initial reply
+      Bot->>LLM: generate() for initial reply / tool plan
       LLM->>Store: logAction(llm_call or llm_error)
-      opt model requests follow-up lookup
-        opt webSearchQuery directive
-          Bot->>Search: searchAndRead()
-          Search->>Store: logAction(search_call or search_error)
+      loop bounded reply tool loop
+        opt model emits tool call(s)
+          alt web_search
+            Bot->>Search: searchAndRead()
+            Search->>Store: logAction(search_call or search_error)
+          else memory_search
+            Bot->>Memory: searchDurableFacts()
+          else image_lookup
+            Bot->>Store: getRecentMessages() for image candidates
+          else other reply tool
+            Bot->>Bot: execute tool and collect result
+          end
+          Bot->>LLM: generate() continuation from tool results
+          LLM->>Store: logAction(llm_call or llm_error)
         end
-        opt memoryLookupQuery directive
-          Bot->>Memory: searchDurableFacts()
-        end
-        opt imageLookupQuery directive
-          Bot->>Store: getRecentMessages() for image candidates
-        end
-        Bot->>LLM: generate() follow-up reply (optional replyFollowupLlm)
-        LLM->>Store: logAction(llm_call or llm_error)
       end
       Bot->>Discord: reply() or send()
       Bot->>Store: recordMessage(outgoing)

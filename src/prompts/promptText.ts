@@ -15,12 +15,9 @@ import {
   formatConversationParticipantMemory,
   formatEmojiChoices,
   formatDiscoveryFindings,
-  formatWebSearchFindings,
   formatVideoFindings,
   formatMemoryFacts,
-  formatMemoryLookupResults,
-  formatImageLookupCandidates,
-  formatImageLookupResults
+  formatImageLookupCandidates
 } from "./promptFormatters.ts";
 
 function formatPromptTrackLabel(track) {
@@ -87,18 +84,16 @@ export function buildReplyPrompt({
   remainingReplyGifs = 0,
   gifRepliesEnabled = false,
   gifsConfigured = false,
-  replyEagerness = 35,
-  reactionEagerness = 20,
+  ambientReplyEagerness = 35,
+  responseWindowEagerness = 55,
+  recentReplyWindowActive = false,
+  reactivity = 20,
   addressing = null,
   webSearch = null,
   browserBrowse = null,
   recentConversationHistory = [],
   memoryLookup = null,
   imageLookup = null,
-  allowWebSearchDirective = false,
-  allowBrowserBrowseDirective = false,
-  allowMemoryLookupDirective = false,
-  allowImageLookupDirective = false,
   allowMemoryDirective: _allowMemoryDirective = false,
   allowAutomationDirective = false,
   automationTimeZoneLabel = "",
@@ -168,45 +163,6 @@ export function buildReplyPrompt({
     parts.push(formatBehaviorMemoryFacts(behavioralFacts, 8));
   }
 
-  if (memoryLookup?.requested) {
-    if (memoryLookup.error) {
-      parts.push(`Memory lookup failed: ${memoryLookup.error}`);
-      parts.push("Answer from currently available context and avoid inventing memory.");
-    } else if (!memoryLookup.results?.length) {
-      parts.push(`Memory lookup for "${memoryLookup.query || message?.content || ""}" found no durable matches.`);
-      parts.push("Say that no strong memory match was found if the user asked what you remember.");
-    } else {
-      const isFullMemory = memoryLookup.query === "__ALL__";
-      if (isFullMemory) {
-        parts.push("Stored memory dump (capped view of stored facts):");
-      } else {
-        parts.push(`Memory lookup results for "${memoryLookup.query || message?.content || ""}":`);
-      }
-      parts.push(formatMemoryLookupResults(memoryLookup.results));
-      if (!isFullMemory) {
-        parts.push("Reference memory naturally without source tags by default.");
-        parts.push(
-          "Only cite memory hits inline as [M1], [M2], etc. when the user explicitly asks for memory citations, sources, or proof."
-        );
-      }
-    }
-  }
-
-  if (imageLookup?.requested) {
-    parts.push("=== IMAGE LOOKUP RESULTS ===");
-    if (imageLookup.error) {
-      parts.push(`History image lookup failed: ${imageLookup.error}`);
-      parts.push("Answer from currently available context and avoid pretending you saw an older image.");
-    } else if (!imageLookup.results?.length) {
-      parts.push(`History image lookup for "${imageLookup.query || message?.content || ""}" found no matches.`);
-      parts.push("Say briefly that no matching prior image was found if the user asked about one.");
-    } else {
-      parts.push(`History image lookup results for "${imageLookup.query || message?.content || ""}":`);
-      parts.push(formatImageLookupResults(imageLookup.results));
-      parts.push("Use this visual context directly and avoid guessing details not present.");
-    }
-  }
-
   if (emojiHints?.length) {
     parts.push(`=== EMOJI OPTIONS ===`);
     parts.push(`Server emoji: ${emojiHints.join(", ")}`);
@@ -221,7 +177,6 @@ export function buildReplyPrompt({
   const directlyAddressed = Boolean(addressing?.directlyAddressed);
   const directAddressConfidence = Number(addressing?.directAddressConfidence);
   const directAddressThreshold = Number(addressing?.directAddressThreshold);
-  const responseRequired = Boolean(addressing?.responseRequired);
   if (Number.isFinite(directAddressConfidence)) {
     const boundedConfidence = Math.max(0, Math.min(1, directAddressConfidence));
     const boundedThreshold = Number.isFinite(directAddressThreshold)
@@ -237,58 +192,67 @@ export function buildReplyPrompt({
   parts.push(
     "If something you can do is currently disabled or budget-blocked, say it is currently unavailable with the reason. Do not claim a supported feature can never work."
   );
-  if (responseRequired) {
-    parts.push("A reply is required for this turn unless safety policy requires refusing.");
-    parts.push("Do not output [SKIP] except for safety refusals.");
+  const ambientEagerness = Math.max(0, Math.min(100, Number(ambientReplyEagerness) || 0));
+  const followupEagerness = Math.max(0, Math.min(100, Number(responseWindowEagerness) || 0));
+  parts.push(`Your text ambient-reply eagerness is ${ambientEagerness}/100.`);
+  parts.push(`Your response-window eagerness is ${followupEagerness}/100.`);
+
+  // Ambient conversation initiative
+  if (ambientEagerness <= 15) {
+    parts.push("You are mostly a lurker. Only speak when someone is clearly talking to you or you have something genuinely important to say.");
+  } else if (ambientEagerness <= 35) {
+    parts.push("You tend to observe more than talk. Only chime in when you genuinely have something to say or someone is clearly engaging with you.");
+  } else if (ambientEagerness <= 55) {
+    parts.push("Be selective about when you jump in. If you do not have something genuinely useful, interesting, or funny to add, output [SKIP].");
+  } else if (ambientEagerness <= 75) {
+    parts.push("You are fairly engaged. Contribute when you have something that fits the flow, but still pick your moments.");
+  } else if (ambientEagerness <= 90) {
+    parts.push("You are an active participant. Jump in when you have something — even lighter contributions are fine if they fit naturally.");
   } else {
-    const eagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
-    parts.push(`Your reply eagerness is ${eagerness}/100.`);
+    parts.push("You are very social and love riffing with people. Jump in freely when you have something, even casual reactions and banter.");
+  }
 
-    // Core eagerness personality
-    if (eagerness <= 15) {
-      parts.push("You are mostly a lurker. Only speak when someone is clearly talking to you or you have something genuinely important to say.");
-    } else if (eagerness <= 35) {
-      parts.push("You tend to observe more than talk. Only chime in when you genuinely have something to say or someone is clearly engaging with you.");
-    } else if (eagerness <= 55) {
-      parts.push("Be selective about when you jump in. If you do not have something genuinely useful, interesting, or funny to add, output [SKIP].");
-    } else if (eagerness <= 75) {
-      parts.push("You are fairly engaged. Contribute when you have something that fits the flow, but still pick your moments.");
-    } else if (eagerness <= 90) {
-      parts.push("You are an active participant. Jump in when you have something — even lighter contributions are fine if they fit naturally.");
+  if (recentReplyWindowActive) {
+    if (followupEagerness <= 15) {
+      parts.push("You replied recently, but your follow-up window is tight. Do not assume the thread still belongs to you unless the new message clearly re-engages you.");
+    } else if (followupEagerness <= 45) {
+      parts.push("You replied recently. Treat that as a light continuity signal, not an obligation to keep talking.");
+    } else if (followupEagerness <= 75) {
+      parts.push("You replied recently, so this may still be an active back-and-forth. Continue naturally when the next turn plausibly connects to you.");
     } else {
-      parts.push("You are very social and love riffing with people. Jump in freely when you have something, even casual reactions and banter.");
-    }
-
-    // Directed-at-someone-else signal (scaled by eagerness)
-    const directedAtSomeoneElse = Boolean(addressing?.mentionsOtherUsers) || Boolean(addressing?.repliesToOtherUser);
-    if (directedAtSomeoneElse) {
-      if (eagerness <= 75) {
-        parts.push("This message is directed at another user (via @mention or reply). It is not for you. Output [SKIP] unless the message also clearly invites you to participate.");
-      } else {
-        parts.push("This message is directed at another user (via @mention or reply). Strongly prefer [SKIP] — only jump in if you have something genuinely worth adding to their exchange.");
-      }
-    }
-
-    // Conversational awareness (always present, strength scales with eagerness)
-    if (eagerness <= 60) {
-      parts.push("If people are talking to each other (using names, replying back and forth, making plans together), output [SKIP]. Do not insert yourself into someone else's conversation.");
-    } else {
-      parts.push("If people are clearly having a private or directed exchange with each other, prefer [SKIP] unless you can genuinely add to the conversation.");
-    }
-
-    // Channel mode
-    if (normalizedChannelMode === "reply_channel") {
-      parts.push("This is one of your reply/lurk channels. Short riffs and acknowledgements are fine when they fit naturally.");
-      parts.push("If your reply would derail, interrupt, or just repeat what was said, output [SKIP].");
-    } else {
-      parts.push("This is not one of your reply/lurk channels. Only jump in if your message is worth the interruption.");
+      parts.push("You replied recently and your response window is sticky. Treat plausible follow-ups as part of the same thread unless the room clearly moved on.");
     }
   }
 
-  const reactionLevel = Math.max(0, Math.min(100, Number(reactionEagerness) || 0));
-  if (reactionLevel <= 25) {
+  // Directed-at-someone-else signal (scaled by ambient initiative)
+  const directedAtSomeoneElse = Boolean(addressing?.mentionsOtherUsers) || Boolean(addressing?.repliesToOtherUser);
+  if (directedAtSomeoneElse) {
+    if (ambientEagerness <= 75) {
+      parts.push("This message is directed at another user (via @mention or reply). It is not for you. Output [SKIP] unless the message also clearly invites you to participate.");
+    } else {
+      parts.push("This message is directed at another user (via @mention or reply). Strongly prefer [SKIP] — only jump in if you have something genuinely worth adding to their exchange.");
+    }
+  }
+
+  // Conversational awareness (always present, strength scales with ambient initiative)
+  if (ambientEagerness <= 60) {
+    parts.push("If people are talking to each other (using names, replying back and forth, making plans together), output [SKIP]. Do not insert yourself into someone else's conversation.");
+  } else {
+    parts.push("If people are clearly having a private or directed exchange with each other, prefer [SKIP] unless you can genuinely add to the conversation.");
+  }
+
+  // Channel mode
+  if (normalizedChannelMode === "reply_channel") {
+    parts.push("This is one of your reply/lurk channels. Short riffs and acknowledgements are fine when they fit naturally.");
+    parts.push("If your reply would derail, interrupt, or just repeat what was said, output [SKIP].");
+  } else {
+    parts.push("This is not one of your reply/lurk channels. Only jump in if your message is worth the interruption.");
+  }
+
+  const normalizedReactivity = Math.max(0, Math.min(100, Number(reactivity) || 0));
+  if (normalizedReactivity <= 25) {
     parts.push("React sparingly — only when it genuinely adds something.");
-  } else if (reactionLevel >= 75) {
+  } else if (normalizedReactivity >= 75) {
     parts.push("Feel free to react when it naturally fits the tone.");
   } else {
     parts.push("React when it feels right, not by default.");
@@ -426,147 +390,69 @@ export function buildReplyPrompt({
 
   parts.push("=== WEB SEARCH ===");
 
-  if (allowWebSearchDirective) {
-    if (webSearch?.optedOutByUser) {
-      parts.push("The user explicitly asked not to use web search.");
-      parts.push("Set webSearchQuery to null and do not claim live lookup.");
-    } else if (!webSearch?.enabled) {
-      parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Set webSearchQuery to null.");
-      parts.push("Do not claim you searched the web.");
-    } else if (!webSearch?.configured) {
-      parts.push("Live web lookup capability exists but is currently unavailable (no search provider is configured).");
-      parts.push("Set webSearchQuery to null.");
-      parts.push("Do not claim you searched the web.");
-    } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
-      parts.push("Live web lookup capability exists but is currently unavailable (hourly search budget exhausted).");
-      parts.push("Set webSearchQuery to null.");
-      parts.push("Do not claim you searched the web.");
-    } else {
-      parts.push("Live web lookup is available.");
-      parts.push("Web search is supported right now.");
-      parts.push("Do not claim you cannot search the web.");
-      parts.push(
-        "If better accuracy depends on live web info, set webSearchQuery to a concise query."
-      );
-      parts.push("Use webSearchQuery only when needed and keep it under 220 characters.");
-    }
+  if (webSearch?.optedOutByUser) {
+    parts.push("The user explicitly asked not to use web search.");
+    parts.push("Do not call web_search and do not claim live lookup.");
+  } else if (!webSearch?.enabled) {
+    parts.push("Live web search capability exists but is currently unavailable (disabled in settings).");
+    parts.push("Do not call web_search and do not claim you searched the web.");
+  } else if (!webSearch?.configured) {
+    parts.push("Live web search capability exists but is currently unavailable (no search provider is configured).");
+    parts.push("Do not call web_search and do not claim you searched the web.");
+  } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
+    parts.push("Live web search capability exists but is currently unavailable (hourly search budget exhausted).");
+    parts.push("Do not call web_search and do not claim you searched the web.");
+  } else {
+    parts.push("Live web search is available via the web_search tool.");
+    parts.push("If better accuracy depends on current web information, call web_search with a concise query.");
+    parts.push("Use web_search only when it materially helps.");
   }
 
   parts.push("=== BROWSER ===");
 
-  if (allowBrowserBrowseDirective) {
-    if (!browserBrowse?.enabled) {
-      parts.push("Interactive browser capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Set browserBrowseQuery to null.");
-      parts.push("Do not claim you can browse sites interactively right now.");
-    } else if (!browserBrowse?.configured) {
-      parts.push("Interactive browser capability exists but is currently unavailable (browser runtime is not configured).");
-      parts.push("Set browserBrowseQuery to null.");
-      parts.push("Do not claim you can browse sites interactively right now.");
-    } else if (browserBrowse?.blockedByBudget || !browserBrowse?.budget?.canBrowse) {
-      parts.push("Interactive browser capability exists but is currently unavailable (hourly browser budget exhausted).");
-      parts.push("Set browserBrowseQuery to null.");
-      parts.push("Do not claim you browsed the site.");
-    } else {
-      parts.push("Interactive browser browsing is available.");
-      parts.push("Prefer webSearchQuery for simple current facts.");
-      parts.push(
-        "Use browserBrowseQuery only when you need actual site navigation or interaction, such as checking listings, moving through a live page flow, or extracting page-specific details."
-      );
-      parts.push("If interactive browsing is needed, set browserBrowseQuery to a concise task under 500 characters.");
-    }
+  if (!browserBrowse?.enabled) {
+    parts.push("Interactive browser capability exists but is currently unavailable (disabled in settings).");
+    parts.push("Do not call browser_browse and do not claim you browsed sites interactively.");
+  } else if (!browserBrowse?.configured) {
+    parts.push("Interactive browser capability exists but is currently unavailable (browser runtime is not configured).");
+    parts.push("Do not call browser_browse and do not claim you browsed sites interactively.");
+  } else if (browserBrowse?.blockedByBudget || !browserBrowse?.budget?.canBrowse) {
+    parts.push("Interactive browser capability exists but is currently unavailable (hourly browser budget exhausted).");
+    parts.push("Do not call browser_browse and do not claim you browsed the site.");
+  } else {
+    parts.push("Interactive browser browsing is available via the browser_browse tool.");
+    parts.push("Prefer web_search for simple current facts.");
+    parts.push(
+      "Use browser_browse only when you need actual site navigation or interaction, such as checking listings, moving through a live page flow, or extracting page-specific details."
+    );
   }
 
   parts.push("=== MEMORY LOOKUP ===");
 
-  if (allowMemoryLookupDirective) {
-    if (!memoryLookup?.enabled) {
-      parts.push("Durable memory lookup capability exists but is currently unavailable for this turn.");
-      parts.push("Set memoryLookupQuery to null.");
-    } else {
-      parts.push("Durable memory lookup is available for this turn.");
-      parts.push(
-        "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, set memoryLookupQuery to a concise lookup query."
-      );
-      parts.push("If the user asks for a broad dump of stored memory or everything you remember, set memoryLookupQuery to \"__ALL__\".");
-      parts.push("`__ALL__` requests a capped stored-memory dump, not a ranked topical lookup.");
-      parts.push("Use memoryLookupQuery only when needed and keep it under 220 characters.");
-    }
-  }
-
-  if (allowImageLookupDirective) {
-    if (!imageLookup?.enabled) {
-      parts.push("History image lookup capability exists but is currently unavailable for this turn.");
-      parts.push("Set imageLookupQuery to null.");
-    } else if (!imageLookup?.candidates?.length) {
-      parts.push("History image lookup capability is available, but no recent image references were found.");
-      parts.push("Set imageLookupQuery to null.");
-    } else {
-      parts.push("History image lookup is available for this turn.");
-      parts.push("Recent image references from message history:");
-      parts.push(formatImageLookupCandidates(imageLookup.candidates));
-      parts.push(
-        "If the user refers to an earlier image/photo and current message attachments are insufficient, set imageLookupQuery to a concise lookup query or a specific image ref like IMG 3."
-      );
-      parts.push("The [IMG n] markers in recent chat are historical images, not fresh attachments on the latest user message.");
-      parts.push("Use imageLookupQuery only when needed and keep it under 220 characters.");
-      parts.push("If no historical image lookup is needed, set imageLookupQuery to null.");
-      parts.push("Do not claim you cannot review earlier shared images when history lookup is available.");
-    }
-  }
-
-  parts.push("=== WEB SEARCH RESULTS ===");
-
-  if (webSearch?.requested && !webSearch.used) {
-    if (webSearch.optedOutByUser) {
-      parts.push("The user asked not to use web search. Respond without web lookup.");
-    } else if (!webSearch.enabled) {
-      parts.push("A web lookup was requested, but live search is disabled in settings.");
-      parts.push("Acknowledge briefly and answer from known context only.");
-    } else if (!webSearch.configured) {
-      parts.push(
-        "The user asked for a web lookup, but live search is unavailable (no search provider is configured)."
-      );
-      parts.push("Acknowledge briefly and answer from known context only.");
-    } else if (webSearch.blockedByBudget) {
-      parts.push("The user asked for a web lookup, but the hourly search budget is exhausted.");
-      parts.push("Acknowledge the limit briefly and answer without claiming live lookup.");
-    } else if (webSearch.error) {
-      parts.push(`The web lookup failed: ${webSearch.error}`);
-      parts.push("Do not claim you successfully searched the web.");
-    } else if (!webSearch.results?.length) {
-      parts.push("A web lookup was attempted, but no useful results were found.");
-      parts.push("Answer carefully and avoid invented specifics.");
-    }
-  }
-
-  if (webSearch?.used && webSearch.results?.length) {
-    parts.push(`Live web findings for query: "${webSearch.query}"`);
-    parts.push(formatWebSearchFindings(webSearch));
+  if (!memoryLookup?.enabled) {
+    parts.push("Durable memory lookup capability exists but is currently unavailable for this turn.");
+  } else {
+    parts.push("Durable memory lookup is available via the memory_search tool.");
     parts.push(
-      "Decide whether to cite sources based on the user's message and the claim sensitivity."
+      "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, call memory_search with a concise query."
     );
-    parts.push(
-      "If citations would help (for example user asked for proof/sources or the claim is precise), use source IDs inline like [1] or [2]."
-    );
-    parts.push("If citations are not needed, answer naturally without citation clutter.");
+    parts.push("If the user asks for a broad dump of stored memory or everything you remember, use query \"__ALL__\".");
+    parts.push("`__ALL__` requests a capped stored-memory dump, not a ranked topical lookup.");
   }
 
-  parts.push("=== BROWSER RESULTS ===");
-
-  if (browserBrowse?.requested) {
-    if (browserBrowse.error) {
-      parts.push(`Interactive browser task failed: ${browserBrowse.error}`);
-      parts.push("Do not claim you successfully browsed the site.");
-    } else if (!browserBrowse.used || !browserBrowse.text) {
-      parts.push("An interactive browser task was attempted, but it did not return a useful result.");
-      parts.push("Answer carefully and avoid invented browsing details.");
-    } else {
-      parts.push(`Interactive browser result for "${browserBrowse.query || message?.content || ""}":`);
-      parts.push(String(browserBrowse.text || ""));
-      parts.push("Use this result directly and mention uncertainty if the browsing result was incomplete.");
-    }
+  if (!imageLookup?.enabled) {
+    parts.push("History image lookup capability exists but is currently unavailable for this turn.");
+  } else if (!imageLookup?.candidates?.length) {
+    parts.push("History image lookup capability is available, but no recent image references were found.");
+  } else {
+    parts.push("History image lookup is available via the image_lookup tool.");
+    parts.push("Recent image references from message history:");
+    parts.push(formatImageLookupCandidates(imageLookup.candidates));
+    parts.push(
+      "If the user refers to an earlier image/photo and current message attachments are insufficient, call image_lookup with a short query or a specific image ref like IMG 3."
+    );
+    parts.push("The [IMG n] markers in recent chat are historical images, not fresh attachments on the latest user message.");
+    parts.push("Do not claim you cannot review earlier shared images when history lookup is available.");
   }
 
   parts.push("=== VIDEO CONTEXT ===");
@@ -657,10 +543,8 @@ export function buildReplyPrompt({
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
-  parts.push(
-    "When no lookup is needed, set webSearchQuery, browserBrowseQuery, memoryLookupQuery, imageLookupQuery, and openArticleRef to null."
-  );
-  parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
+  parts.push("Use tool calls for web search, browser browsing, durable memory search, image lookup, voice control, and other supported capabilities.");
+  parts.push("Do not encode tool requests inside the JSON reply body.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push("Set screenShareIntent.action to one of offer_link|none.");
   parts.push("When not offering a share link, set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
@@ -881,7 +765,6 @@ export function buildAutomationPrompt({
   guidanceFacts = [],
   behavioralFacts = [],
   memoryLookup = null,
-  allowMemoryLookupDirective = false,
   allowSimpleImagePosts = false,
   allowComplexImagePosts = false,
   allowVideoPosts = false,
@@ -922,26 +805,13 @@ export function buildAutomationPrompt({
     parts.push("=== RELEVANT BEHAVIORAL MEMORY ===");
     parts.push(formatBehaviorMemoryFacts(behavioralFacts, 6));
   }
-  if (memoryLookup?.requested) {
-    if (memoryLookup.error) {
-      parts.push(`Memory lookup failed: ${memoryLookup.error}`);
-      parts.push("Continue using currently available context.");
-    } else if (!memoryLookup.results?.length) {
-      parts.push(`Memory lookup for "${memoryLookup.query || taskInstruction}" found no durable matches.`);
-    } else {
-      const isFullMemory = memoryLookup.query === "__ALL__";
-      if (isFullMemory) {
-        parts.push("Stored memory dump (capped view of stored facts):");
-      } else {
-        parts.push(`Memory lookup results for "${memoryLookup.query || taskInstruction}":`);
-      }
-      parts.push(formatMemoryLookupResults(memoryLookup.results));
-      if (!isFullMemory) {
-        parts.push("If useful, reference these facts naturally in output/media.");
-      }
-    }
-  }
   parts.push("When the task references a person (like 'me'), use durable memory facts if they are relevant.");
+  if (!memoryLookup?.enabled) {
+    parts.push("Durable memory lookup capability is unavailable for this run.");
+  } else {
+    parts.push("Durable memory lookup is available via the memory_search tool.");
+    parts.push("If current memory context is insufficient for the task, call memory_search with a concise query.");
+  }
 
   const imageSlots = Math.max(0, Math.floor(Number(remainingImages) || 0));
   const videoSlots = Math.max(0, Math.floor(Number(remainingVideos) || 0));
@@ -974,21 +844,8 @@ export function buildAutomationPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(REPLY_JSON_SCHEMA);
-  parts.push(
-    "Set webSearchQuery, browserBrowseQuery, imageLookupQuery, and openArticleRef to null when unused."
-  );
-  parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false.");
-  if (allowMemoryLookupDirective) {
-    if (!memoryLookup?.enabled) {
-      parts.push("Durable memory lookup is unavailable for this run. Set memoryLookupQuery to null.");
-    } else {
-      parts.push("Durable memory lookup is available.");
-      parts.push("If memory context is insufficient for the task, set memoryLookupQuery to a concise query.");
-      parts.push("If not needed, set memoryLookupQuery to null.");
-    }
-  } else {
-    parts.push("Set memoryLookupQuery to null.");
-  }
+  parts.push("Use tool calls for durable memory search and other supported capabilities.");
+  parts.push("Do not encode tool requests inside the JSON reply body.");
   parts.push("Set automationAction.operation=none.");
   parts.push("Set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
   parts.push("Use [SKIP] only when sending nothing is clearly best.");

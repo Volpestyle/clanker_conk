@@ -52,7 +52,6 @@ export async function runStartupCatchup(runtime, settings) {
       const queued = runtime.enqueueReplyJob({
         message,
         source: "startup_catchup",
-        forceRespond: true,
         addressSignal
       });
       if (queued) repliesSent += 1;
