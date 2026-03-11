@@ -84,7 +84,12 @@ export function normalizeExecutionPolicy(
 ): SettingsExecutionPolicy {
   const source = isRecord(policy) ? policy : {};
   const modeRaw = normalizeString(source.mode, fallbackMode, 40).toLowerCase();
-  const mode = modeRaw === "dedicated_model" ? "dedicated_model" : "inherit_orchestrator";
+  const mode =
+    modeRaw === "disabled"
+      ? "disabled"
+      : modeRaw === "dedicated_model"
+        ? "dedicated_model"
+        : "inherit_orchestrator";
   const normalized: SettingsExecutionPolicy =
     mode === "dedicated_model"
       ? {
@@ -222,11 +227,11 @@ export function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
     normalized === "deterministic_only" ||
     normalized === "generation_decides" ||
     normalized === "generation_only" ||
-    normalized === "generation"
+    normalized === "generation" ||
+    normalized === "adaptive"
   ) {
     return "generation_decides";
   }
-  if (normalized === "adaptive") return "adaptive";
   return fallback;
 }
 
@@ -234,6 +239,7 @@ export type AgentStackPresetConfig = {
   preset: string;
   presetOrchestratorFallback: SettingsModelBinding;
   presetVoiceAdmissionClassifierFallback?: SettingsModelBinding;
+  presetVoiceMusicBrainFallback?: SettingsModelBinding;
   presetVoiceGenerationFallback?: SettingsModelBinding;
   presetVoiceAdmissionMode?: string;
   presetVoiceReplyPath?: string;
@@ -259,6 +265,13 @@ export function resolveAgentStackPresetConfig(
       ? {
           presetVoiceAdmissionClassifierFallback: {
             ...definition.voiceAdmissionClassifier
+          } satisfies SettingsModelBinding
+        }
+      : {}),
+    ...(definition.voiceMusicBrain
+      ? {
+          presetVoiceMusicBrainFallback: {
+            ...definition.voiceMusicBrain
           } satisfies SettingsModelBinding
         }
       : {}),

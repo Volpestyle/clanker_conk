@@ -5,13 +5,20 @@ type E2EPipelinePreset = {
 };
 
 const SHARED_TEST_DEFAULTS: Record<string, unknown> = {
-  activity: {
-    replyEagerness: 50
+  interaction: {
+    activity: {
+      ambientReplyEagerness: 50,
+      responseWindowEagerness: 50
+    }
   },
   voice: {
-    replyEagerness: 50,
-    commandOnlyMode: false,
-    thoughtEngine: {
+    conversationPolicy: {
+      ambientReplyEagerness: 50,
+      commandOnlyMode: false
+    }
+  },
+  initiative: {
+    voice: {
       enabled: false,
       eagerness: 50
     }
@@ -24,10 +31,24 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
     description: "Per-user ASR bridge, OpenAI realtime brain",
     overrides: deepMergePreset(SHARED_TEST_DEFAULTS, {
       voice: {
-        replyPath: "bridge",
-        voiceProvider: "openai",
-        brainProvider: "openai",
-        replyDecisionLlm: { realtimeAdmissionMode: "hard_classifier" }
+        conversationPolicy: {
+          replyPath: "bridge"
+        },
+        admission: { mode: "classifier_gate" }
+      },
+      agentStack: {
+        runtimeConfig: {
+          voice: {
+            runtimeMode: "openai_realtime",
+            generation: {
+              mode: "dedicated_model",
+              model: {
+                provider: "openai",
+                model: "gpt-5"
+              }
+            }
+          }
+        }
       }
     })
   },
@@ -36,10 +57,24 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
     description: "Direct audio passthrough, no ASR",
     overrides: deepMergePreset(SHARED_TEST_DEFAULTS, {
       voice: {
-        replyPath: "native",
-        voiceProvider: "openai",
-        brainProvider: "openai",
-        replyDecisionLlm: { realtimeAdmissionMode: "generation_only" }
+        conversationPolicy: {
+          replyPath: "native"
+        },
+        admission: { mode: "generation_decides" }
+      },
+      agentStack: {
+        runtimeConfig: {
+          voice: {
+            runtimeMode: "openai_realtime",
+            generation: {
+              mode: "dedicated_model",
+              model: {
+                provider: "openai",
+                model: "gpt-5"
+              }
+            }
+          }
+        }
       }
     })
   },
@@ -48,10 +83,24 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
     description: "Gemini realtime for everything",
     overrides: deepMergePreset(SHARED_TEST_DEFAULTS, {
       voice: {
-        replyPath: "brain",
-        voiceProvider: "gemini",
-        brainProvider: "gemini",
-        replyDecisionLlm: { realtimeAdmissionMode: "generation_only" }
+        conversationPolicy: {
+          replyPath: "brain"
+        },
+        admission: { mode: "generation_decides" }
+      },
+      agentStack: {
+        runtimeConfig: {
+          voice: {
+            runtimeMode: "gemini_realtime",
+            generation: {
+              mode: "dedicated_model",
+              model: {
+                provider: "google",
+                model: "gemini-2.5-flash"
+              }
+            }
+          }
+        }
       }
     })
   },
@@ -60,10 +109,24 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
     description: "ElevenLabs voice, OpenAI brain",
     overrides: deepMergePreset(SHARED_TEST_DEFAULTS, {
       voice: {
-        replyPath: "brain",
-        voiceProvider: "elevenlabs",
-        brainProvider: "openai",
-        replyDecisionLlm: { realtimeAdmissionMode: "generation_only" }
+        conversationPolicy: {
+          replyPath: "brain"
+        },
+        admission: { mode: "generation_decides" }
+      },
+      agentStack: {
+        runtimeConfig: {
+          voice: {
+            runtimeMode: "elevenlabs_realtime",
+            generation: {
+              mode: "dedicated_model",
+              model: {
+                provider: "openai",
+                model: "gpt-5"
+              }
+            }
+          }
+        }
       }
     })
   },
@@ -72,10 +135,24 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
     description: "OpenAI voice, Anthropic text brain",
     overrides: deepMergePreset(SHARED_TEST_DEFAULTS, {
       voice: {
-        replyPath: "brain",
-        voiceProvider: "openai",
-        brainProvider: "anthropic",
-        replyDecisionLlm: { realtimeAdmissionMode: "generation_only" }
+        conversationPolicy: {
+          replyPath: "brain"
+        },
+        admission: { mode: "generation_decides" }
+      },
+      agentStack: {
+        runtimeConfig: {
+          voice: {
+            runtimeMode: "openai_realtime",
+            generation: {
+              mode: "dedicated_model",
+              model: {
+                provider: "anthropic",
+                model: "claude-haiku-4-5"
+              }
+            }
+          }
+        }
       }
     })
   }

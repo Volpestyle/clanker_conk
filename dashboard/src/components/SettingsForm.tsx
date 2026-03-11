@@ -226,6 +226,10 @@ export default function SettingsForm({
     selectedPresetModel: selectedVisionPresetModel
   } = resolvePresetSelection("visionProvider", "visionModel");
   const {
+    options: voiceMusicBrainModelOptions,
+    selectedPresetModel: selectedVoiceMusicBrainPresetModel
+  } = resolvePresetSelection("voiceMusicBrainLlmProvider", "voiceMusicBrainLlmModel");
+  const {
     options: voiceGenerationModelOptions,
     selectedPresetModel: selectedVoiceGenerationPresetModel
   } = resolvePresetSelection("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
@@ -294,6 +298,7 @@ export default function SettingsForm({
       syncModel("visionModel", selectedVisionPresetModel);
       syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
       syncModel("voiceReplyDecisionLlmModel", selectedVoiceReplyDecisionPresetModel);
+      syncModel("voiceMusicBrainLlmModel", selectedVoiceMusicBrainPresetModel);
       syncModel("voiceStreamWatchBrainContextModel", selectedStreamWatchVisionPresetModel);
       if (next.voiceGenerationLlmUseTextModel) {
         syncModel("voiceGenerationLlmProvider", next.provider);
@@ -317,6 +322,7 @@ export default function SettingsForm({
     selectedBrowserLlmPresetModel,
     selectedVoiceGenerationPresetModel,
     selectedVoiceReplyDecisionPresetModel,
+    selectedVoiceMusicBrainPresetModel,
     selectedVisionPresetModel,
     selectedStreamWatchVisionPresetModel
   ]);
@@ -392,6 +398,7 @@ export default function SettingsForm({
   const setBrowserLlmProvider = createProviderSetter("browserLlmProvider", "browserLlmModel");
   const setVoiceGenerationProvider = createProviderSetter("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
   const setVoiceReplyDecisionProvider = createProviderSetter("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
+  const setVoiceMusicBrainProvider = createProviderSetter("voiceMusicBrainLlmProvider", "voiceMusicBrainLlmModel");
   const setVisionProvider = createProviderSetter("visionProvider", "visionModel");
   const setStreamWatchVisionProvider = createProviderSetter("voiceStreamWatchBrainContextProvider", "voiceStreamWatchBrainContextModel");
 
@@ -412,6 +419,7 @@ export default function SettingsForm({
   const selectBrowserLlmPresetModel = createPresetSelector("browserLlmModel");
   const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
   const selectVoiceReplyDecisionPresetModel = createPresetSelector("voiceReplyDecisionLlmModel");
+  const selectVoiceMusicBrainPresetModel = createPresetSelector("voiceMusicBrainLlmModel");
   const selectVisionPresetModel = createPresetSelector("visionModel");
   const selectStreamWatchVisionPresetModel = createPresetSelector("voiceStreamWatchBrainContextModel");
 
@@ -602,6 +610,10 @@ export default function SettingsForm({
             selectVoiceReplyDecisionPresetModel={selectVoiceReplyDecisionPresetModel}
             voiceReplyDecisionModelOptions={voiceReplyDecisionModelOptions}
             selectedVoiceReplyDecisionPresetModel={selectedVoiceReplyDecisionPresetModel}
+            setVoiceMusicBrainProvider={setVoiceMusicBrainProvider}
+            selectVoiceMusicBrainPresetModel={selectVoiceMusicBrainPresetModel}
+            voiceMusicBrainModelOptions={voiceMusicBrainModelOptions}
+            selectedVoiceMusicBrainPresetModel={selectedVoiceMusicBrainPresetModel}
             xAiVoiceOptions={xAiVoiceOptions}
             openAiRealtimeModelOptions={openAiRealtimeModelOptions}
             openAiRealtimeVoiceOptions={openAiRealtimeVoiceOptions}

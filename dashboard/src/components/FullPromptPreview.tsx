@@ -56,8 +56,9 @@ Server emoji: {{emoji1}}, {{emoji2}}
 Direct-address confidence: {{confidence}} (threshold {{threshold}}).
 {{#if addressed}}This message directly addressed you.{{/if}}
 A reply is required for this turn unless safety policy requires refusing.
-Reply eagerness hint: {{eagerness}}/100.
-Low eagerness mode: treat spontaneous insertion as an exception, not the default.`;
+Text ambient-reply eagerness: {{ambientReplyEagerness}}/100.
+Response-window eagerness: {{responseWindowEagerness}}/100.
+Reactivity: {{reactivity}}/100.`;
 
   const hasAnyPrompts =
     textGuidance ||

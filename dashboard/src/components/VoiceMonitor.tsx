@@ -848,7 +848,7 @@ function PromptStateViewer({ session }: { session: VoiceSession }) {
   const activeCount = cards.filter((card) => hasPromptSnapshot(card.snapshot)).length;
 
   return (
-    <Section title="Live Prompt Snapshot" badge={activeCount > 0 ? activeCount : null} defaultOpen>
+    <Section title="Live Prompt Snapshot" badge={activeCount > 0 ? activeCount : null}>
       {cards.map((card) => (
         <PromptSnapshotCard
           key={card.key}

@@ -39,7 +39,7 @@ Each preset sets defaults for:
 5. **Voice runtime** — `openai_realtime`, `voice_agent`, etc.
 6. **Voice reply path** — `native`, `bridge`, or `brain`
 7. **Voice TTS mode** — `realtime` or `api` (only relevant for brain path)
-8. **Voice admission policy** — `generation_decides`, `classifier_gate`, or `adaptive`
+8. **Voice admission policy** — `generation_decides` or `classifier_gate`
 9. **Voice admission classifier** — provider + model for the reply classifier
 10. **Voice generation** — provider + model for brain-path text generation (when different from orchestrator)
 11. **Dev team** — orchestrator, role bindings, coding workers
@@ -82,7 +82,7 @@ The settings API also rejects save requests that omit this version metadata. An 
 
 A "Reset to preset defaults" button next to the preset dropdown loads a full normalized default form for the selected preset. It resolves the selected preset through canonical normalization and preserves only server-specific channel permissions and voice channel policy. Save is still required before those defaults affect the live bot.
 
-For `openai_native_realtime`, saving the reset form preserves the preset's `adaptive` voice admission mode on the bridge reply path so the OpenAI classifier binding stays attached to `openai/gpt-5-mini`.
+For `openai_native_realtime`, saving the reset form preserves the preset's `classifier_gate` voice admission mode on the bridge reply path so the OpenAI classifier binding stays attached to `openai/gpt-5-mini`.
 
 The dashboard form round-trips raw worker configs and voice session concurrency instead of collapsing them into max-only aggregates. Saving the form preserves per-worker code-agent limits unless the user actually edits a shared field.
 

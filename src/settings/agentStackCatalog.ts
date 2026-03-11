@@ -34,9 +34,10 @@ export type AgentStackPresetDefaults = {
   voiceReplyPath: "native" | "bridge" | "brain";
   voiceTtsMode: "realtime" | "api";
   voiceAdmissionPolicy: {
-    mode: "generation_decides" | "classifier_gate" | "adaptive";
+    mode: "generation_decides" | "classifier_gate";
   };
   voiceAdmissionClassifier?: ModelBinding;
+  voiceMusicBrain?: ModelBinding;
   voiceGeneration?: ModelBinding;
   sessionPolicy?: AgentSessionPolicy;
   devTeam: {
@@ -79,6 +80,10 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
     voiceAdmissionClassifier: {
       provider: "claude-oauth",
       model: "claude-sonnet-4-6"
+    },
+    voiceMusicBrain: {
+      provider: "claude-oauth",
+      model: "claude-haiku-4-5"
     },
     voiceGeneration: {
       provider: "claude-oauth",
@@ -129,6 +134,10 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
       provider: "anthropic",
       model: "claude-haiku-4-5"
     },
+    voiceMusicBrain: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    },
     voiceGeneration: {
       provider: "anthropic",
       model: "claude-haiku-4-5"
@@ -163,9 +172,13 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
     voiceReplyPath: "bridge",
     voiceTtsMode: "realtime",
     voiceAdmissionPolicy: {
-      mode: "adaptive"
+      mode: "classifier_gate"
     },
     voiceAdmissionClassifier: {
+      provider: "openai",
+      model: "gpt-5-mini"
+    },
+    voiceMusicBrain: {
       provider: "openai",
       model: "gpt-5-mini"
     },
@@ -205,6 +218,10 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
       provider: "openai",
       model: "gpt-5-mini"
     },
+    voiceMusicBrain: {
+      provider: "openai",
+      model: "gpt-5-mini"
+    },
     voiceGeneration: {
       provider: "openai",
       model: "gpt-5-mini"
@@ -240,7 +257,11 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
     },
     voiceAdmissionClassifier: {
       provider: "openai-oauth",
-      model: "gpt-5.4"
+      model: "gpt-5.1-codex-mini"
+    },
+    voiceMusicBrain: {
+      provider: "openai-oauth",
+      model: "gpt-5.1-codex-mini"
     },
     voiceGeneration: {
       provider: "openai-oauth",
@@ -277,9 +298,13 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
     voiceReplyPath: "native",
     voiceTtsMode: "realtime",
     voiceAdmissionPolicy: {
-      mode: "adaptive"
+      mode: "generation_decides"
     },
     voiceAdmissionClassifier: {
+      provider: "xai",
+      model: "grok-3-mini-latest"
+    },
+    voiceMusicBrain: {
       provider: "xai",
       model: "grok-3-mini-latest"
     },
@@ -352,6 +377,13 @@ export function getAgentStackPresetDefaults(
           }
         }
       : {}),
+    ...(definition.voiceMusicBrain
+      ? {
+          voiceMusicBrain: {
+            ...definition.voiceMusicBrain
+          }
+        }
+      : {}),
     ...(definition.voiceGeneration
       ? {
           voiceGeneration: {
@@ -384,5 +416,14 @@ export function getPresetVoiceAdmissionClassifierFallback(
   const definition = getAgentStackPresetDefinition(preset);
   return definition.voiceAdmissionClassifier
     ? { ...definition.voiceAdmissionClassifier }
+    : undefined;
+}
+
+export function getPresetVoiceMusicBrainFallback(
+  preset: unknown
+): ModelBinding | undefined {
+  const definition = getAgentStackPresetDefinition(preset);
+  return definition.voiceMusicBrain
+    ? { ...definition.voiceMusicBrain }
     : undefined;
 }

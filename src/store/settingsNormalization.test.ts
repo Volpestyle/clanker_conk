@@ -6,10 +6,10 @@ import {
   PERSONA_FLAVOR_MAX_CHARS
 } from "./settingsNormalization.ts";
 import { resolveAgentStack } from "../settings/agentStack.ts";
-import { normalizeTestSettingsInput } from "../testSettings.ts";
+import { normalizeLegacyTestSettingsInput } from "../testSettings.ts";
 
 function normalizeLegacyView(input: unknown): ReturnType<typeof normalizeSettings> {
-  return normalizeSettings(normalizeTestSettingsInput(input));
+  return normalizeSettings(normalizeLegacyTestSettingsInput(input));
 }
 
 test("normalizeSettings interprets string booleans from form-style payloads correctly", () => {
@@ -71,6 +71,11 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
       maxStepsPerTask: 0,
       stepTimeoutMs: 1000,
       sessionTimeoutMs: 999999
+    },
+    activity: {
+      ambientReplyEagerness: 999,
+      responseWindowEagerness: 999,
+      reactivity: 999
     },
     videoContext: {
       enabled: true,
@@ -265,7 +270,9 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
   assert.equal(normalized.voice.streamWatch.brainContextMinIntervalSeconds, 1);
   assert.equal(normalized.voice.streamWatch.brainContextMaxEntries, 24);
   assert.equal(normalized.voice.streamWatch.brainContextPrompt.length, 420);
-  assert.equal(normalized.voice.soundboard.eagerness, 100);
+  assert.equal(normalized.interaction.activity.ambientReplyEagerness, 100);
+  assert.equal(normalized.interaction.activity.responseWindowEagerness, 100);
+  assert.equal(normalized.interaction.activity.reactivity, 100);
   assert.deepEqual(normalized.voice.soundboard.preferredSoundIds, ["first", "second"]);
   assert.equal(normalized.music.ducking.targetGain, 0);
   assert.equal(normalized.music.ducking.fadeMs, 10_000);
@@ -656,6 +663,53 @@ test("normalizeSettings uses provider-specific memory model fallbacks", () => {
   });
 });
 
+test("normalizeSettings preserves the dedicated voice music brain runtime config", () => {
+  const normalized = normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          musicBrain: {
+            mode: "dedicated_model",
+            model: {
+              provider: "openai",
+              model: "gpt-5-mini"
+            }
+          }
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(normalized.agentStack.runtimeConfig.voice.musicBrain, {
+    mode: "dedicated_model",
+    model: {
+      provider: "openai",
+      model: "gpt-5-mini"
+    }
+  });
+});
+
+test("normalizeSettings preserves legacy eagerness keys when upgrading saved settings", () => {
+  const normalized = normalizeSettings({
+    interaction: {
+      activity: {
+        replyEagerness: 61,
+        reactionLevel: 42
+      }
+    },
+    voice: {
+      conversationPolicy: {
+        replyEagerness: 73
+      }
+    }
+  });
+
+  assert.equal(normalized.interaction.activity.ambientReplyEagerness, 61);
+  assert.equal(normalized.interaction.activity.responseWindowEagerness, 61);
+  assert.equal(normalized.interaction.activity.reactivity, 42);
+  assert.equal(normalized.voice.conversationPolicy.ambientReplyEagerness, 73);
+});
+
 test("normalizeSettings drops removed replyDecisionLlm prompts and migrates enabled false to generation_decides", () => {
   const normalized = normalizeLegacyView({
     voice: {
@@ -670,7 +724,7 @@ test("normalizeSettings drops removed replyDecisionLlm prompts and migrates enab
   });
 
   assert.equal(normalized.voice.admission.mode, "generation_decides");
-  assert.equal(normalized.voice.admission.musicWakeLatchSeconds, 15);
+  assert.equal(normalized.voice.admission.musicWakeLatchSeconds, 30);
 });
 
 test("normalizeSettings preserves long media prompt craft guidance blocks", () => {

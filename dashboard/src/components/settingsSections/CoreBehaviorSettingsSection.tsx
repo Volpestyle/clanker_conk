@@ -33,25 +33,42 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         onChange={set("personaHardLimits")}
       />
 
-      <label htmlFor="reply-eagerness">
-        Text reply eagerness: <strong>{form.replyEagerness}%</strong>
+      <label htmlFor="text-ambient-reply-eagerness">
+        Text ambient reply eagerness: <strong>{form.textAmbientReplyEagerness}%</strong>
       </label>
       <input
-        id="reply-eagerness"
+        id="text-ambient-reply-eagerness"
         type="range"
         min="0"
         max="100"
         step="1"
-        value={form.replyEagerness}
-        onChange={set("replyEagerness")}
-        style={rangeStyle(form.replyEagerness)}
+        value={form.textAmbientReplyEagerness}
+        onChange={set("textAmbientReplyEagerness")}
+        style={rangeStyle(form.textAmbientReplyEagerness)}
       />
       <p>
-        How social the bot is in text channels. At low values it mostly stays quiet unless addressed. At high values ({">"}75%) it sees more messages and decides for itself whether to chime in.
+        How willing the bot is to jump into active text conversations when nobody has directly pulled it in yet. Higher values widen unsolicited participation.
+      </p>
+
+      <label htmlFor="response-window-eagerness">
+        Response window eagerness: <strong>{form.responseWindowEagerness}%</strong>
+      </label>
+      <input
+        id="response-window-eagerness"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={form.responseWindowEagerness}
+        onChange={set("responseWindowEagerness")}
+        style={rangeStyle(form.responseWindowEagerness)}
+      />
+      <p>
+        How sticky follow-up conversations are after the bot was recently engaged. Higher values keep it in the thread longer before it goes back to lurking.
       </p>
 
       <label htmlFor="text-initiative-eagerness">
-        Text initiative eagerness: <strong>{form.textInitiativeEagerness}%</strong>
+        Standalone post initiative: <strong>{form.textInitiativeEagerness}%</strong>
       </label>
       <input
         id="text-initiative-eagerness"
@@ -64,22 +81,25 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         style={rangeStyle(form.textInitiativeEagerness)}
       />
       <p>
-        This gates how often the bot even considers a standalone post. The model still decides whether to post, where to post, or to skip.
+        This gates how often the bot even considers making a standalone post on its own. The model still decides whether to post, where to post, or to skip.
       </p>
 
-      <label htmlFor="reaction-level">
-        Reaction eagerness: <strong>{form.reactionLevel}%</strong>
+      <label htmlFor="reactivity">
+        Reactivity: <strong>{form.reactivity}%</strong>
       </label>
       <input
-        id="reaction-level"
+        id="reactivity"
         type="range"
         min="0"
         max="100"
         step="1"
-        value={form.reactionLevel}
-        onChange={set("reactionLevel")}
-        style={rangeStyle(form.reactionLevel)}
+        value={form.reactivity}
+        onChange={set("reactivity")}
+        style={rangeStyle(form.reactivity)}
       />
+      <p>
+        Shared tendency for emoji reactions, soundboard bits, and other light acknowledgements that should not be governed by the main reply knobs.
+      </p>
 
       <div className="toggles">
         <label>

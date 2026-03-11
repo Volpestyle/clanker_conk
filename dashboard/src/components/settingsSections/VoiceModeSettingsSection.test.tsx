@@ -22,7 +22,10 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
       voiceReplyDecisionMusicWakeLatchSeconds: 15,
       voiceReplyDecisionLlmProvider: "claude-oauth",
       voiceReplyDecisionLlmModel: "claude-sonnet-4-6",
-      voiceReplyEagerness: 50,
+      voiceMusicBrainMode: "dedicated_model",
+      voiceMusicBrainLlmProvider: "claude-oauth",
+      voiceMusicBrainLlmModel: "claude-haiku-4-5",
+      voiceAmbientReplyEagerness: 50,
       voiceDefaultInterruptionMode: "anyone",
       voiceGenerationLlmUseTextModel: false,
       voiceGenerationLlmProvider: "claude-oauth",
@@ -42,10 +45,11 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
       voiceAllowNsfwHumor: true,
       voiceThoughtEngineEnabled: false,
       voiceStreamWatchEnabled: false,
+      voiceSoundboardEagerness: 40,
       voiceSoundboardEnabled: false,
-      voiceSoundboardEagerness: 35,
       voiceSoundboardAllowExternalSounds: false,
       voiceSoundboardPreferredSoundIds: "",
+      reactivity: 35,
       voiceStreamWatchBrainContextProvider: "",
       voiceStreamWatchBrainContextModel: "",
       provider: "claude-oauth",
@@ -72,6 +76,10 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
     selectVoiceReplyDecisionPresetModel: noop,
     voiceReplyDecisionModelOptions: ["claude-sonnet-4-6"],
     selectedVoiceReplyDecisionPresetModel: "claude-sonnet-4-6",
+    setVoiceMusicBrainProvider: noop,
+    selectVoiceMusicBrainPresetModel: noop,
+    voiceMusicBrainModelOptions: ["claude-haiku-4-5"],
+    selectedVoiceMusicBrainPresetModel: "claude-haiku-4-5",
     xAiVoiceOptions: ["Ara"],
     openAiRealtimeModelOptions: ["gpt-realtime"],
     openAiRealtimeVoiceOptions: ["alloy"],
@@ -87,7 +95,7 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
 test("normalizeVoiceAdmissionModeForDashboard maps legacy aliases to canonical values", () => {
   assert.equal(normalizeVoiceAdmissionModeForDashboard("generation_only"), "generation_decides");
   assert.equal(normalizeVoiceAdmissionModeForDashboard("generation_decides"), "generation_decides");
-  assert.equal(normalizeVoiceAdmissionModeForDashboard("adaptive"), "adaptive");
+  assert.equal(normalizeVoiceAdmissionModeForDashboard("adaptive"), "generation_decides");
   assert.equal(normalizeVoiceAdmissionModeForDashboard("hard_classifier"), "classifier_gate");
   assert.equal(normalizeVoiceAdmissionModeForDashboard("classifier_gate"), "classifier_gate");
 });
@@ -108,6 +116,39 @@ test("voice admission select renders legacy generation_only as the off option", 
 
   assert.match(markup, /<option value="generation_decides" selected="">Off \(generation decides\)<\/option>/);
   assert.match(markup, /<option value="classifier_gate">On \(classifier gate\)<\/option>/);
+});
+
+test("voice mode settings expose the dedicated music brain controls even when the classifier UI is hidden", () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(
+      VoiceModeSettingsSection,
+      buildProps("generation_decides", {
+        voiceCommandOnlyMode: true
+      })
+    )
+  );
+
+  assert.equal(markup.includes("Reply Admission"), false);
+  assert.equal(markup.includes("Music Brain"), true);
+  assert.equal(markup.includes("Music brain mode"), true);
+  assert.equal(markup.includes("Music brain provider"), true);
+  assert.equal(markup.includes("Music brain model ID"), true);
+});
+
+test("voice mode settings hide dedicated music-brain model pickers when main-brain handoff mode is selected", () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(
+      VoiceModeSettingsSection,
+      buildProps("generation_decides", {
+        voiceMusicBrainMode: "disabled"
+      })
+    )
+  );
+
+  assert.equal(markup.includes("Music brain mode"), true);
+  assert.equal(markup.includes("Off (main brain handles music handoff)"), true);
+  assert.equal(markup.includes("Music brain provider"), false);
+  assert.equal(markup.includes("Music brain model ID"), false);
 });
 
 test("bridge path hides TTS mode controls and advertises provider-native tools", () => {
@@ -159,7 +200,7 @@ test("stream watch renders a compact mental model and hides advanced tuning behi
   assert.equal(markup.includes("Screen share pipeline"), false);
 });
 
-test("soundboard settings render a Discord soundboard tendency slider when enabled", () => {
+test("soundboard settings expose a dedicated eagerness control when enabled", () => {
   const markup = renderToStaticMarkup(
     React.createElement(
       VoiceModeSettingsSection,
@@ -171,7 +212,8 @@ test("soundboard settings render a Discord soundboard tendency slider when enabl
   );
 
   assert.equal(markup.includes("Enable Discord soundboard reactions"), true);
-  assert.equal(markup.includes("Discord soundboard tendency"), true);
+  assert.equal(markup.includes("Soundboard eagerness"), true);
   assert.equal(markup.includes("82%"), true);
+  assert.equal(markup.includes("separate from Core Behavior reactivity"), true);
   assert.equal(markup.includes("Lets the bot lean into playful soundboard bits"), true);
 });

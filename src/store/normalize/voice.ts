@@ -86,9 +86,9 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
       )
     },
     conversationPolicy: {
-      replyEagerness: normalizeInt(
-        conversationPolicy.replyEagerness,
-        DEFAULT_SETTINGS.voice.conversationPolicy.replyEagerness,
+      ambientReplyEagerness: normalizeInt(
+        conversationPolicy.ambientReplyEagerness ?? conversationPolicy.replyEagerness,
+        DEFAULT_SETTINGS.voice.conversationPolicy.ambientReplyEagerness,
         0,
         100
       ),
@@ -223,13 +223,13 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
       )
     },
     soundboard: {
-      enabled: normalizeBoolean(soundboard.enabled, DEFAULT_SETTINGS.voice.soundboard.enabled),
       eagerness: normalizeInt(
         soundboard.eagerness,
         DEFAULT_SETTINGS.voice.soundboard.eagerness,
-        0,
-        100
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.soundboard.eagerness.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.soundboard.eagerness.max
       ),
+      enabled: normalizeBoolean(soundboard.enabled, DEFAULT_SETTINGS.voice.soundboard.enabled),
       allowExternalSounds: normalizeBoolean(
         soundboard.allowExternalSounds,
         DEFAULT_SETTINGS.voice.soundboard.allowExternalSounds

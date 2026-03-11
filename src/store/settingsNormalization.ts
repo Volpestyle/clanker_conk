@@ -128,6 +128,8 @@ export function normalizeSettings(raw: unknown): Settings {
 
   const rawAgentStack = isRecord(canonicalInput.agentStack) ? canonicalInput.agentStack : {};
   const rawOverrides = isRecord(rawAgentStack.overrides) ? rawAgentStack.overrides : {};
+  const rawInteraction = isRecord(canonicalInput.interaction) ? canonicalInput.interaction : {};
+  const rawInteractionActivity = isRecord(rawInteraction.activity) ? rawInteraction.activity : {};
   const rawVoice = isRecord(canonicalInput.voice) ? canonicalInput.voice : {};
   const rawVoiceAdmission = isRecord(rawVoice.admission) ? rawVoice.admission : {};
   const rawMemoryLlm = canonicalInput.memoryLlm;
@@ -140,6 +142,19 @@ export function normalizeSettings(raw: unknown): Settings {
   const normalizedVoiceBase = normalizeVoiceSection(merged.voice);
   const rawVoiceConversationPolicy = isRecord(rawVoice.conversationPolicy) ? rawVoice.conversationPolicy : {};
   let normalizedVoice = normalizedVoiceBase;
+  const rawVoiceAdmissionMode = String(rawVoiceAdmission.mode || "").trim().toLowerCase();
+  if (rawVoiceAdmissionMode === "adaptive") {
+    normalizedVoice = {
+      ...normalizedVoice,
+      admission: {
+        ...normalizedVoice.admission,
+        mode:
+          normalizedVoice.conversationPolicy.replyPath === "bridge"
+            ? "classifier_gate"
+            : "generation_decides"
+      }
+    };
+  }
   if (rawVoiceAdmission.mode === undefined && presetConfig.presetVoiceAdmissionMode) {
     normalizedVoice = {
       ...normalizedVoice,
@@ -168,12 +183,66 @@ export function normalizeSettings(raw: unknown): Settings {
     };
   }
 
+  if (
+    rawVoiceConversationPolicy.ambientReplyEagerness === undefined &&
+    rawVoiceConversationPolicy.replyEagerness !== undefined
+  ) {
+    normalizedVoice = {
+      ...normalizedVoice,
+      conversationPolicy: {
+        ...normalizedVoice.conversationPolicy,
+        ambientReplyEagerness: Math.max(
+          0,
+          Math.min(100, Number(rawVoiceConversationPolicy.replyEagerness) || 0)
+        )
+      }
+    };
+  }
+
+  let normalizedInteraction = normalizeInteractionSection(merged.interaction, orchestratorOverride);
+  if (
+    rawInteractionActivity.ambientReplyEagerness === undefined &&
+    rawInteractionActivity.replyEagerness !== undefined
+  ) {
+    normalizedInteraction = {
+      ...normalizedInteraction,
+      activity: {
+        ...normalizedInteraction.activity,
+        ambientReplyEagerness: Math.max(0, Math.min(100, Number(rawInteractionActivity.replyEagerness) || 0))
+      }
+    };
+  }
+  if (
+    rawInteractionActivity.responseWindowEagerness === undefined &&
+    rawInteractionActivity.replyEagerness !== undefined
+  ) {
+    normalizedInteraction = {
+      ...normalizedInteraction,
+      activity: {
+        ...normalizedInteraction.activity,
+        responseWindowEagerness: Math.max(0, Math.min(100, Number(rawInteractionActivity.replyEagerness) || 0))
+      }
+    };
+  }
+  if (
+    rawInteractionActivity.reactivity === undefined &&
+    rawInteractionActivity.reactionLevel !== undefined
+  ) {
+    normalizedInteraction = {
+      ...normalizedInteraction,
+      activity: {
+        ...normalizedInteraction.activity,
+        reactivity: Math.max(0, Math.min(100, Number(rawInteractionActivity.reactionLevel) || 0))
+      }
+    };
+  }
+
   return {
     identity: normalizeIdentitySection(merged.identity),
     persona: normalizePersonaSection(merged.persona),
     prompting: normalizePromptingSection(merged.prompting),
     permissions: normalizePermissionsSection(merged.permissions),
-    interaction: normalizeInteractionSection(merged.interaction, orchestratorOverride),
+    interaction: normalizedInteraction,
     agentStack: normalizeAgentStackSection(
       merged.agentStack,
       rawAgentStack,

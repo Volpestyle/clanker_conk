@@ -246,10 +246,20 @@ test("voice reply decision llm settings normalize provider and model", async () 
   await withTempStore(async (store) => {
     const patched = store.patchSettings(createTestSettingsPatch({
       voice: {
-        replyDecisionLlm: {
-          provider: "CLAUDE-OAUTH",
-          model: " claude-opus-4-6 ",
-          realtimeAdmissionMode: "classifier_gate"
+        admission: {
+          mode: "classifier_gate"
+        }
+      },
+      agentStack: {
+        advancedOverridesEnabled: true,
+        overrides: {
+          voiceAdmissionClassifier: {
+            mode: "dedicated_model",
+            model: {
+              provider: "CLAUDE-OAUTH",
+              model: " claude-opus-4-6 "
+            }
+          }
         }
       }
     }));

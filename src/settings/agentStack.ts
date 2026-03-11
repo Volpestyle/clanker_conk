@@ -102,7 +102,13 @@ function resolveExecutionPolicy(
   const source = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as CapabilityExecutionPolicy
     : {};
-  const mode = String(source.mode || "inherit_orchestrator").trim() || "inherit_orchestrator";
+  const rawMode = String(source.mode || "inherit_orchestrator").trim().toLowerCase();
+  const mode =
+    rawMode === "disabled"
+      ? "disabled"
+      : rawMode === "dedicated_model"
+        ? "dedicated_model"
+        : "inherit_orchestrator";
   return {
     mode,
     model: mode === "dedicated_model"
@@ -551,6 +557,28 @@ export function getResolvedVoiceGenerationBinding(settings: unknown) {
     provider: String(binding?.provider || fallback.provider),
     model: String(binding?.model || fallback.model)
   };
+}
+
+export function getResolvedVoiceMusicBrainBinding(settings: unknown) {
+  const voiceRuntime = getVoiceRuntimeConfig(settings);
+  const presetDefaults = getPresetDefaults(settings);
+  const fallback = presetDefaults.voiceMusicBrain || presetDefaults.voiceAdmissionClassifier || presetDefaults.orchestrator;
+  const policy = resolveExecutionPolicy(
+    voiceRuntime.musicBrain,
+    fallback
+  );
+  const binding = policy.mode === "dedicated_model"
+    ? policy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model)
+  };
+}
+
+export function isVoiceMusicBrainEnabled(settings: unknown): boolean {
+  const voiceRuntime = getVoiceRuntimeConfig(settings);
+  return String(voiceRuntime.musicBrain?.mode || "disabled").trim().toLowerCase() !== "disabled";
 }
 
 export function getResolvedBrowserTaskConfig(settings: unknown) {

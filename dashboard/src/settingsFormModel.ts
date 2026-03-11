@@ -11,8 +11,14 @@ import {
   parseUniqueLineList,
   parseUniqueList
 } from "../../src/settings/listNormalization.ts";
-import { getResolvedMemoryBinding } from "../../src/settings/agentStack.ts";
-import { getPresetVoiceAdmissionClassifierFallback } from "../../src/settings/agentStackCatalog.ts";
+import {
+  getResolvedMemoryBinding,
+  getResolvedVoiceMusicBrainBinding
+} from "../../src/settings/agentStack.ts";
+import {
+  getPresetVoiceAdmissionClassifierFallback,
+  getPresetVoiceMusicBrainFallback
+} from "../../src/settings/agentStackCatalog.ts";
 import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../src/settings/settingsConstraints.ts";
 import {
@@ -54,6 +60,7 @@ export type ResolvedBindings = {
   voiceProvider: string;
   voiceInitiativeBinding: { provider: string; model: string; temperature?: number };
   voiceAdmissionClassifierBinding: { provider: string; model: string } | null;
+  voiceMusicBrainBinding: { provider: string; model: string };
   voiceGenerationBinding: { provider: string; model: string };
   codeAgent: {
     enabled: boolean;
@@ -173,8 +180,16 @@ function buildSettingsFormView(settings: unknown) {
   const voiceRuntime = valueOr(agentStack.runtimeConfig?.voice, d.agentStack.runtimeConfig.voice);
   const voiceGenerationBinding = resolved?.voiceGenerationBinding || orchestrator;
   const voiceClassifierBinding = resolved?.voiceAdmissionClassifierBinding;
+  const voiceMusicBrainBinding = resolved?.voiceMusicBrainBinding || orchestrator;
+  const voiceMusicBrainMode = String(voiceRuntime.musicBrain?.mode || d.agentStack.runtimeConfig.voice.musicBrain.mode || "disabled")
+    .trim()
+    .toLowerCase() === "disabled"
+      ? "disabled"
+      : "dedicated_model";
   const presetClassifierFallback = getPresetVoiceAdmissionClassifierFallback(agentStack.preset);
   const voiceClassifierFallback = voiceClassifierBinding || presetClassifierFallback || orchestrator;
+  const presetMusicBrainFallback = getPresetVoiceMusicBrainFallback(agentStack.preset);
+  const voiceMusicBrainFallback = voiceMusicBrainBinding || presetMusicBrainFallback || orchestrator;
   const voiceStreamWatch = valueOr(s.voice?.streamWatch, d.voice.streamWatch);
   const voiceSoundboard = valueOr(s.voice?.soundboard, d.voice.soundboard);
   const startup = valueOr(s.interaction?.startup, d.interaction.startup);
@@ -292,6 +307,7 @@ function buildSettingsFormView(settings: unknown) {
       model: visionBinding.model,
       maxCaptionsPerHour: vision.maxCaptionsPerHour
     },
+    voiceMusicBrainMode,
     webSearch: {
       runtime: resolvedStack?.researchRuntime || "",
       enabled: research.enabled,
@@ -320,7 +336,7 @@ function buildSettingsFormView(settings: unknown) {
       inactivityLeaveSeconds: voiceSessionLimits.inactivityLeaveSeconds,
       maxSessionsPerDay: voiceSessionLimits.maxSessionsPerDay,
       maxConcurrentSessions: voiceSessionLimits.maxConcurrentSessions,
-      replyEagerness: voiceConversation.replyEagerness,
+      ambientReplyEagerness: voiceConversation.ambientReplyEagerness,
       streaming: voiceConversation.streaming,
       commandOnlyMode: voiceConversation.commandOnlyMode,
       thoughtEngine: {
@@ -368,6 +384,7 @@ const DEFAULT_VIEW = buildSettingsFormView(DEFAULT_SETTINGS);
 export function settingsToForm(settings: unknown) {
   const defaults = DEFAULT_VIEW;
   const resolved = buildSettingsFormView(settings || DEFAULT_SETTINGS);
+  const voiceMusicBrainFallback = getResolvedVoiceMusicBrainBinding(settings || DEFAULT_SETTINGS);
   const defaultPrompt = defaults.prompt;
   const defaultActivity = defaults.activity;
   const defaultPermissions = defaults.permissions;
@@ -384,6 +401,7 @@ export function settingsToForm(settings: unknown) {
   const defaultVoiceGeminiRealtime = defaults.voice.geminiRealtime;
   const defaultVoiceThoughtEngine = defaults.voice.thoughtEngine;
   const defaultVoiceGenerationLlm = defaults.voice.generationLlm;
+  const defaultVoiceMusicBrainMode = defaults.voiceMusicBrainMode || "disabled";
   const defaultVoiceStreaming = defaults.voice.streaming;
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
   const defaultVoiceSoundboard = defaults.voice.soundboard;
@@ -413,8 +431,11 @@ export function settingsToForm(settings: unknown) {
     promptVoiceOperationalGuidance:
       formatLineList(resolved.prompt.voiceOperationalGuidance ?? defaultPrompt.voiceOperationalGuidance),
     promptMediaPromptCraftGuidance: resolved.prompt.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
-    replyEagerness: activity.replyEagerness ?? defaultActivity.replyEagerness,
-    reactionLevel: activity.reactionLevel ?? defaultActivity.reactionLevel,
+    textAmbientReplyEagerness:
+      activity.ambientReplyEagerness ?? defaultActivity.ambientReplyEagerness,
+    responseWindowEagerness:
+      activity.responseWindowEagerness ?? defaultActivity.responseWindowEagerness,
+    reactivity: activity.reactivity ?? defaultActivity.reactivity,
     minGap: activity.minSecondsBetweenMessages ?? defaultActivity.minSecondsBetweenMessages,
     allowReplies: resolved.permissions.allowReplies ?? defaultPermissions.allowReplies,
     allowUnsolicitedReplies:
@@ -540,7 +561,8 @@ export function settingsToForm(settings: unknown) {
     voiceInactivityLeaveSeconds: resolved?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: resolved?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
     voiceMaxConcurrentSessions: resolved?.voice?.maxConcurrentSessions ?? defaultVoice.maxConcurrentSessions,
-    voiceReplyEagerness: resolved?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
+    voiceAmbientReplyEagerness:
+      resolved?.voice?.ambientReplyEagerness ?? defaultVoice.ambientReplyEagerness,
     voiceStreamingEnabled:
       resolved?.voice?.streaming?.enabled ?? defaultVoiceStreaming.enabled,
     voiceStreamingEagerFirstChunkChars:
@@ -566,6 +588,12 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
       resolved?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
+    voiceMusicBrainMode:
+      resolved.voiceMusicBrainMode ?? defaultVoiceMusicBrainMode,
+    voiceMusicBrainLlmProvider:
+      voiceMusicBrainFallback.provider,
+    voiceMusicBrainLlmModel:
+      voiceMusicBrainFallback.model,
     voiceGenerationLlmUseTextModel:
       resolved?.voice?.generationLlm?.useTextModel ?? defaultVoiceGenerationLlm.useTextModel,
     voiceGenerationLlmProvider:
@@ -630,8 +658,9 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.streamWatch?.sharePageMaxWidthPx ?? defaultVoiceStreamWatch.sharePageMaxWidthPx,
     voiceStreamWatchSharePageJpegQuality:
       resolved?.voice?.streamWatch?.sharePageJpegQuality ?? defaultVoiceStreamWatch.sharePageJpegQuality,
+    voiceSoundboardEagerness:
+      resolved?.voice?.soundboard?.eagerness ?? defaultVoiceSoundboard.eagerness,
     voiceSoundboardEnabled: resolved?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
-    voiceSoundboardEagerness: resolved?.voice?.soundboard?.eagerness ?? defaultVoiceSoundboard.eagerness,
     voiceSoundboardAllowExternalSounds: resolved?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(resolved?.voice?.soundboard?.preferredSoundIds),
     voiceApiTtsModel:
@@ -727,28 +756,6 @@ export function settingsToForm(settings: unknown) {
 }
 
 export type SettingsForm = ReturnType<typeof settingsToForm>;
-
-export function applyStackPresetDefaults(form: SettingsForm, defaults: Record<string, unknown>): SettingsForm {
-  return {
-    ...form,
-    stackPreset: String(defaults.stackPreset || form.stackPreset),
-    provider: String(defaults.provider || form.provider),
-    model: String(defaults.model || form.model),
-    voiceProvider: resolveVoiceRuntimeSelectionFromMode(
-      resolveVoiceRuntimeModeFromSelection(String(defaults.voiceProvider || form.voiceProvider))
-    ),
-    voiceReplyPath: String(defaults.voiceReplyPath || form.voiceReplyPath),
-    voiceTtsMode: String(defaults.voiceTtsMode || form.voiceTtsMode),
-    voiceReplyDecisionRealtimeAdmissionMode: normalizeVoiceAdmissionModeForDashboard(
-      defaults.voiceReplyDecisionRealtimeAdmissionMode || form.voiceReplyDecisionRealtimeAdmissionMode
-    ),
-    voiceReplyDecisionLlmProvider: String(defaults.voiceReplyDecisionLlmProvider || form.voiceReplyDecisionLlmProvider),
-    voiceReplyDecisionLlmModel: String(defaults.voiceReplyDecisionLlmModel || form.voiceReplyDecisionLlmModel),
-    voiceGenerationLlmUseTextModel: Boolean(defaults.voiceGenerationLlmUseTextModel ?? form.voiceGenerationLlmUseTextModel),
-    voiceGenerationLlmProvider: String(defaults.voiceGenerationLlmProvider || form.voiceGenerationLlmProvider),
-    voiceGenerationLlmModel: String(defaults.voiceGenerationLlmModel || form.voiceGenerationLlmModel)
-  };
-}
 
 export function getCodeAgentValidationError(form: SettingsForm): string {
   if (!form.stackAdvancedOverridesEnabled || !form.codeAgentEnabled) {
@@ -852,15 +859,22 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
     }),
     validateNumericField({
       sectionId: "sec-rate",
-      label: "Reply eagerness",
-      value: form.replyEagerness,
+      label: "Text ambient reply eagerness",
+      value: form.textAmbientReplyEagerness,
       min: 0,
       max: 100
     }),
     validateNumericField({
       sectionId: "sec-rate",
-      label: "Reaction level",
-      value: form.reactionLevel,
+      label: "Response-window eagerness",
+      value: form.responseWindowEagerness,
+      min: 0,
+      max: 100
+    }),
+    validateNumericField({
+      sectionId: "sec-rate",
+      label: "Reactivity",
+      value: form.reactivity,
       min: 0,
       max: 100
     }),
@@ -1143,10 +1157,23 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
       provider: String(form.provider || "").trim(),
       model: String(form.model || "").trim()
     };
+  const presetMusicBrainFallback =
+    getPresetVoiceMusicBrainFallback(String(form.stackPreset || "claude_oauth").trim()) || {
+      provider: String(form.provider || "").trim(),
+      model: String(form.model || "").trim()
+    };
   const normalizedVoiceReplyDecisionProvider =
     String(form.voiceReplyDecisionLlmProvider || presetClassifierFallback.provider || "").trim();
   const normalizedVoiceReplyDecisionModel =
     String(form.voiceReplyDecisionLlmModel || presetClassifierFallback.model || "").trim();
+  const normalizedVoiceMusicBrainProvider =
+    String(form.voiceMusicBrainLlmProvider || presetMusicBrainFallback.provider || "").trim();
+  const normalizedVoiceMusicBrainModel =
+    String(form.voiceMusicBrainLlmModel || presetMusicBrainFallback.model || "").trim();
+  const normalizedVoiceMusicBrainMode =
+    String(form.voiceMusicBrainMode || "disabled").trim().toLowerCase() === "disabled"
+      ? "disabled"
+      : "dedicated_model";
   const voiceAdmissionClassifierOverride =
     normalizedVoiceAdmissionMode !== "generation_decides"
       ? {
@@ -1203,8 +1230,9 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     },
     interaction: {
       activity: {
-        replyEagerness: Number(form.replyEagerness),
-        reactionLevel: Number(form.reactionLevel),
+        ambientReplyEagerness: Number(form.textAmbientReplyEagerness),
+        responseWindowEagerness: Number(form.responseWindowEagerness),
+        reactivity: Number(form.reactivity),
         minSecondsBetweenMessages: Number(form.minGap)
       },
       replyGeneration: {
@@ -1318,6 +1346,19 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
             transcriptionMethod: String(form.voiceOpenAiRealtimeTranscriptionMethod || "").trim().toLowerCase(),
             inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
             usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
+          },
+          musicBrain: {
+            ...(normalizedVoiceMusicBrainMode === "disabled"
+              ? {
+                  mode: "disabled" as const
+                }
+              : {
+                  mode: "dedicated_model" as const,
+                  model: {
+                    provider: normalizedVoiceMusicBrainProvider,
+                    model: normalizedVoiceMusicBrainModel
+                  }
+                })
           },
           generation: form.voiceGenerationLlmUseTextModel
             ? { mode: "inherit_orchestrator" }
@@ -1471,7 +1512,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         maxConcurrentSessions: Number(form.voiceMaxConcurrentSessions || 1)
       },
       conversationPolicy: {
-        replyEagerness: Number(form.voiceReplyEagerness),
+        ambientReplyEagerness: Number(form.voiceAmbientReplyEagerness),
         streaming: {
           enabled: Boolean(form.voiceStreamingEnabled),
           eagerFirstChunkChars: Number(form.voiceStreamingEagerFirstChunkChars),
@@ -1506,8 +1547,8 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         sharePageJpegQuality: Number(form.voiceStreamWatchSharePageJpegQuality)
       },
       soundboard: {
-        enabled: form.voiceSoundboardEnabled,
         eagerness: Number(form.voiceSoundboardEagerness),
+        enabled: form.voiceSoundboardEnabled,
         allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
         preferredSoundIds: parseUniqueList(form.voiceSoundboardPreferredSoundIds)
       }

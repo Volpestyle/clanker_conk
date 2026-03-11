@@ -14,6 +14,7 @@ import {
   getResolvedVisionBinding,
   getResolvedVoiceInitiativeBinding,
   getResolvedVoiceAdmissionClassifierBinding,
+  getResolvedVoiceMusicBrainBinding,
   getResolvedVoiceGenerationBinding,
   getVoiceRuntimeConfig,
   resolveAgentStack
@@ -293,6 +294,7 @@ function resolveSettingsBindings(settings: unknown, appConfig: DashboardAppConfi
     voiceProvider: resolveVoiceRuntimeSelectionFromMode(getVoiceRuntimeConfig(settings).runtimeMode),
     voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(settings),
     voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(settings),
+    voiceMusicBrainBinding: getResolvedVoiceMusicBrainBinding(settings),
     voiceGenerationBinding: getResolvedVoiceGenerationBinding(settings),
     providerAuth: {
       claude_code:

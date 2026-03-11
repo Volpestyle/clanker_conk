@@ -158,7 +158,7 @@ function buildBaseSettings({
   botName = "clanker conk",
   textBinding = TEXT_BINDING,
   voiceBinding = VOICE_BINDING,
-  replyEagerness = 55,
+  ambientReplyEagerness = 55,
   voiceEagerness = 50,
   memoryEnabled = false,
   webSearchEnabled = false,
@@ -168,7 +168,7 @@ function buildBaseSettings({
   botName?: string;
   textBinding?: LiveBinding;
   voiceBinding?: LiveBinding;
-  replyEagerness?: number;
+  ambientReplyEagerness?: number;
   voiceEagerness?: number;
   memoryEnabled?: boolean;
   webSearchEnabled?: boolean;
@@ -188,8 +188,8 @@ function buildBaseSettings({
       maxOutputTokens: 220
     },
     activity: {
-      replyEagerness,
-      reactionLevel: 15
+      ambientReplyEagerness,
+      reactivity: 15
     },
     memory: {
       enabled: memoryEnabled
@@ -205,7 +205,7 @@ function buildBaseSettings({
     },
     voice: {
       enabled: true,
-      replyEagerness: voiceEagerness,
+      ambientReplyEagerness: voiceEagerness,
       generationLlm: {
         provider: voiceBinding.provider,
         model: voiceBinding.model
@@ -275,7 +275,7 @@ function buildImageLookupContext(enabled = false) {
 function buildTextPrompt({
   messageContent,
   recentMessages,
-  replyEagerness,
+  ambientReplyEagerness,
   addressing,
   channelMode = "other_channel",
   imageInputs = [],
@@ -297,7 +297,7 @@ function buildTextPrompt({
 }: {
   messageContent: string;
   recentMessages: Array<{ author_name: string; content: string; is_bot: number }>;
-  replyEagerness: number;
+  ambientReplyEagerness: number;
   addressing: {
     directlyAddressed: boolean;
     directAddressConfidence: number;
@@ -325,7 +325,7 @@ function buildTextPrompt({
   allowAdaptiveDirective?: boolean;
 }): PromptEnvelope {
   const settings = buildBaseSettings({
-    replyEagerness,
+    ambientReplyEagerness,
     webSearchEnabled,
     browserEnabled,
     memoryEnabled,
@@ -349,7 +349,7 @@ function buildTextPrompt({
       relevantFacts: [],
       emojiHints: [],
       reactionEmojiOptions: [],
-      replyEagerness,
+      ambientReplyEagerness,
       reactionEagerness: 15,
       addressing,
       webSearch,
@@ -816,7 +816,7 @@ const textScenarios: LiveScenario[] = [
             is_bot: 0
           }
         ],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: {
           directlyAddressed: true,
           directAddressConfidence: 0.99,
@@ -845,7 +845,7 @@ const textScenarios: LiveScenario[] = [
             is_bot: 0
           }
         ],
-        replyEagerness: 10,
+        ambientReplyEagerness: 10,
         addressing: {
           directlyAddressed: false,
           directAddressConfidence: 0.05,
@@ -860,7 +860,7 @@ const textScenarios: LiveScenario[] = [
     labelTemplate: "text ambient reply-channel riff @ eagerness {e}",
     levels: [10, 25, 75],
     threshold: 75,
-    buildPrompt: (replyEagerness) =>
+    buildPrompt: (ambientReplyEagerness) =>
       buildTextPrompt({
         messageContent: "man I need a new co-op game for tonight",
         recentMessages: [
@@ -870,7 +870,7 @@ const textScenarios: LiveScenario[] = [
             is_bot: 0
           }
         ],
-        replyEagerness,
+        ambientReplyEagerness,
         addressing: {
           directlyAddressed: false,
           directAddressConfidence: 0.08,
@@ -900,7 +900,7 @@ const textScenarios: LiveScenario[] = [
             is_bot: 1
           }
         ],
-        replyEagerness: 55,
+        ambientReplyEagerness: 55,
         addressing: {
           directlyAddressed: false,
           directAddressConfidence: 0.65,
@@ -924,7 +924,7 @@ const textScenarios: LiveScenario[] = [
             is_bot: 0
           }
         ],
-        replyEagerness: 20,
+        ambientReplyEagerness: 20,
         addressing: {
           directlyAddressed: false,
           directAddressConfidence: 0.02,
@@ -948,7 +948,7 @@ const textScenarios: LiveScenario[] = [
             is_bot: 1
           }
         ],
-        replyEagerness: 30,
+        ambientReplyEagerness: 30,
         addressing: {
           directlyAddressed: false,
           directAddressConfidence: 0.03,
@@ -985,7 +985,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
             is_bot: 0
           }
         ],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
         webSearchEnabled: true
       });
@@ -1003,7 +1003,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
       const prompt = buildTextPrompt({
         messageContent: "clanker conk, read https://example.com and summarize it in one sentence.",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
         webSearchEnabled: true,
         browserEnabled: true
@@ -1028,7 +1028,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
             is_bot: 0
           }
         ],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
         webSearchEnabled: true
       });
@@ -1046,7 +1046,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
       const prompt = buildTextPrompt({
         messageContent: "clanker conk, from now on call me Captain and keep your replies brutally concise.",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
         memoryEnabled: true,
         adaptiveDirectivesEnabled: true
@@ -1065,7 +1065,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
       const prompt = buildTextPrompt({
         messageContent: "clanker conk, remember that my favorite color is blue.",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
         memoryEnabled: true
       });
@@ -1083,7 +1083,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
       const prompt = buildTextPrompt({
         messageContent: "clanker conk, what do you remember about my preferences?",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
         memoryEnabled: true
       });
@@ -1101,7 +1101,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
       const prompt = buildTextPrompt({
         messageContent: "clanker conk, browse through the top posts on reddit right now and tell me what's trending.",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
         webSearchEnabled: true,
         browserEnabled: true
@@ -1122,7 +1122,7 @@ const textStructuredJsonScenarios: LiveScenario[] = [
       buildTextPrompt({
         messageContent: "clanker conk, give me one short opinion on pizza toppings.",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED
       })
   },
@@ -1139,7 +1139,7 @@ const textStructuredJsonScenarios: LiveScenario[] = [
             is_bot: 0
           }
         ],
-        replyEagerness: 10,
+        ambientReplyEagerness: 10,
         addressing: {
           directlyAddressed: false,
           directAddressConfidence: 0.04,
@@ -1157,7 +1157,7 @@ const textStructuredJsonScenarios: LiveScenario[] = [
       buildTextPrompt({
         messageContent: "clanker conk, I just shipped my first open source project!",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED
       })
   },
@@ -1168,7 +1168,7 @@ const textStructuredJsonScenarios: LiveScenario[] = [
       buildTextPrompt({
         messageContent: "clanker conk, who won the most recent Super Bowl?",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
         webSearchEnabled: true,
         allowWebSearchDirective: true
@@ -1191,7 +1191,7 @@ const textImageScenarios: LiveScenario[] = [
       buildTextPrompt({
         messageContent: "clanker conk, what color is the attached image?",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         imageInputs: [RED_SQUARE_IMAGE],
         addressing: DIRECT_ADDRESSED
       })
@@ -1203,7 +1203,7 @@ const textImageScenarios: LiveScenario[] = [
       buildTextPrompt({
         messageContent: "clanker conk, describe what you see in this image",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         imageInputs: [RED_SQUARE_IMAGE],
         addressing: DIRECT_ADDRESSED
       })
@@ -1215,7 +1215,7 @@ const textImageScenarios: LiveScenario[] = [
       buildTextPrompt({
         messageContent: "clanker conk, are these two images the same color?",
         recentMessages: [],
-        replyEagerness: 70,
+        ambientReplyEagerness: 70,
         imageInputs: [RED_SQUARE_IMAGE, BLUE_SQUARE_IMAGE],
         addressing: DIRECT_ADDRESSED
       })

@@ -140,6 +140,10 @@ export function VoiceModeSettingsSection({
   selectVoiceReplyDecisionPresetModel,
   voiceReplyDecisionModelOptions,
   selectedVoiceReplyDecisionPresetModel,
+  setVoiceMusicBrainProvider,
+  selectVoiceMusicBrainPresetModel,
+  voiceMusicBrainModelOptions,
+  selectedVoiceMusicBrainPresetModel,
   xAiVoiceOptions,
   openAiRealtimeModelOptions,
   openAiRealtimeVoiceOptions,
@@ -174,10 +178,24 @@ export function VoiceModeSettingsSection({
   const classifierAlwaysOn = isRealtimeMode && isBridgePath;
   const classifierToggleable = isRealtimeMode && isBrainPath && !form.voiceCommandOnlyMode;
   const classifierVisible = classifierAlwaysOn || classifierToggleable;
+  const inputStageVisible = isRealtimeMode && (isBridgePath || isBrainPath || isNativePath);
+  const inputStageCount = inputStageVisible ? 1 : 0;
+  const musicBrainVisible = isRealtimeMode;
+  const musicBrainDisabled = String(form.voiceMusicBrainMode || "disabled").trim().toLowerCase() === "disabled";
   const realtimeAdmissionMode = normalizeVoiceAdmissionModeForDashboard(
     form.voiceReplyDecisionRealtimeAdmissionMode
   );
   const hardClassifierMode = realtimeAdmissionMode === "classifier_gate";
+  const classifierStageNumber = inputStageVisible ? 2 : 1;
+  const musicBrainStageNumber = inputStageCount + (classifierVisible ? 1 : 0) + 1;
+  const brainStageNumber =
+    inputStageCount + (classifierVisible ? 1 : 0) + (musicBrainVisible ? 1 : 0) + 1;
+  const voiceOutputStageNumber =
+    inputStageCount +
+    (classifierVisible ? 1 : 0) +
+    (musicBrainVisible ? 1 : 0) +
+    (usesBrainGeneration ? 1 : 0) +
+    1;
   const voiceGenerationProvider = String(form.voiceGenerationLlmProvider || form.provider || "").trim();
   const soundboardEagerness = Number(form.voiceSoundboardEagerness) || 0;
   const soundboardTendencyHint =
@@ -571,9 +589,13 @@ export function VoiceModeSettingsSection({
             </StagePanel>
           )}
 
-          {/* ── Stage 2: Reply Classifier ── */}
+          {/* ── Reply admission / classifier ── */}
           {classifierVisible && (
-            <StagePanel number={2} label="Reply Classifier" pathTag={classifierAlwaysOn ? "Bridge" : "Brain"}>
+            <StagePanel
+              number={classifierStageNumber}
+              label="Reply Admission"
+              pathTag={classifierAlwaysOn ? "Bridge" : "Brain"}
+            >
               {classifierAlwaysOn ? (
                 <p>
                   Bridge mode requires a classifier to decide whether to speak each turn, since the realtime provider always generates audio when given input. This gives the bot the same ability to stay silent that brain mode has natively.
@@ -645,10 +667,68 @@ export function VoiceModeSettingsSection({
             </StagePanel>
           )}
 
+          {musicBrainVisible && (
+            <StagePanel
+              number={musicBrainStageNumber}
+              label="Music Brain"
+              pathTag={isNativePath ? "Native" : isBridgePath ? "Bridge" : "Brain"}
+            >
+              <p>
+                When enabled, this small music brain handles wake-word music handoff and music tool decisions while audio is active.
+              </p>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-music-brain-mode">Music brain mode</label>
+                  <select
+                    id="voice-music-brain-mode"
+                    value={form.voiceMusicBrainMode || "disabled"}
+                    onChange={set("voiceMusicBrainMode")}
+                  >
+                    <option value="disabled">Off (main brain handles music handoff)</option>
+                    <option value="dedicated_model">On (dedicated music brain)</option>
+                  </select>
+                </div>
+              </div>
+              {!musicBrainDisabled && (
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-music-brain-provider">Music brain provider</label>
+                    <select
+                      id="voice-music-brain-provider"
+                      value={form.voiceMusicBrainLlmProvider}
+                      onChange={setVoiceMusicBrainProvider}
+                    >
+                      <LlmProviderOptions />
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="voice-music-brain-model-preset">Music brain model ID</label>
+                    <select
+                      id="voice-music-brain-model-preset"
+                      value={selectedVoiceMusicBrainPresetModel}
+                      onChange={selectVoiceMusicBrainPresetModel}
+                    >
+                      {voiceMusicBrainModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+              <p>
+                {musicBrainDisabled
+                  ? "Wake-word music turns still get through the safety gates, but the main reply brain decides whether to pause, duck, do nothing, or ignore the turn."
+                  : "It stays separate from the reply admission gate because active music handoff still uses it even when admission is set to generation decides."}
+              </p>
+            </StagePanel>
+          )}
+
           {/* ── Reply Decision (all paths) ── */}
           <h4>Reply Decision</h4>
           <label htmlFor="voice-reply-eagerness">
-            Voice reply eagerness: <strong>{form.voiceReplyEagerness}%</strong>
+            Voice ambient reply eagerness: <strong>{form.voiceAmbientReplyEagerness}%</strong>
           </label>
           <input
             id="voice-reply-eagerness"
@@ -656,9 +736,9 @@ export function VoiceModeSettingsSection({
             min="0"
             max="100"
             step="1"
-            value={form.voiceReplyEagerness}
-            onChange={set("voiceReplyEagerness")}
-            style={rangeStyle(form.voiceReplyEagerness)}
+            value={form.voiceAmbientReplyEagerness}
+            onChange={set("voiceAmbientReplyEagerness")}
+            style={rangeStyle(form.voiceAmbientReplyEagerness)}
             disabled={Boolean(form.voiceCommandOnlyMode)}
           />
           <div className="toggles">
@@ -674,7 +754,7 @@ export function VoiceModeSettingsSection({
           <p>
             {form.voiceCommandOnlyMode
               ? "Command-only mode narrows the bot to wake-word and direct-address turns only. Music playback also forces this mode while audible."
-              : "How social the bot is in voice. Higher values mean it considers more turns and decides for itself whether to speak. Lower values keep it quiet unless addressed."}
+              : "How willing the bot is to speak in voice when a turn was not clearly directed at it. Higher values widen ambient participation; the response-window slider still separately controls follow-up stickiness."}
           </p>
 
           <div className="split">
@@ -695,9 +775,9 @@ export function VoiceModeSettingsSection({
             Who can interrupt the bot mid-speech. Speaker mode lets the person the bot is responding to cut in naturally, like a real conversation.
           </p>
 
-          {/* ── Stage 3: Brain (brain path only) ── */}
+          {/* ── Brain (brain path only) ── */}
           {usesBrainGeneration && (
-            <StagePanel number={3} label="Brain" pathTag="Brain">
+            <StagePanel number={brainStageNumber} label="Brain" pathTag="Brain">
               <p>
                 Used for voice reply generation when the reply path is set to Brain.
               </p>
@@ -742,8 +822,8 @@ export function VoiceModeSettingsSection({
             </StagePanel>
           )}
 
-          {/* ── Stage 4: Voice Output ── */}
-          <StagePanel number={usesBrainGeneration ? 4 : isBridgePath ? 3 : 2} label="Voice Output">
+          {/* ── Voice Output ── */}
+          <StagePanel number={voiceOutputStageNumber} label="Voice Output">
             <p>
               {isBridgePath
                 ? "In Bridge mode, the realtime model handles both reasoning and speech."
@@ -1375,18 +1455,21 @@ export function VoiceModeSettingsSection({
           {form.voiceSoundboardEnabled && (
             <>
               <label htmlFor="voice-soundboard-eagerness">
-                Discord soundboard tendency: <strong>{form.voiceSoundboardEagerness}%</strong>
+                Soundboard eagerness: <strong>{form.voiceSoundboardEagerness}%</strong>
               </label>
               <input
                 id="voice-soundboard-eagerness"
                 type="range"
-                min="0"
-                max="100"
+                min={SETTINGS_NUMERIC_CONSTRAINTS.voice.soundboard.eagerness.min}
+                max={SETTINGS_NUMERIC_CONSTRAINTS.voice.soundboard.eagerness.max}
                 step="1"
                 value={form.voiceSoundboardEagerness}
                 onChange={set("voiceSoundboardEagerness")}
                 style={rangeStyle(form.voiceSoundboardEagerness)}
               />
+              <p>
+                Soundboard eagerness is separate from Core Behavior reactivity, so you can keep quick reactions restrained while still letting Discord sound effects be more or less playful.
+              </p>
               <p>{soundboardTendencyHint}</p>
 
               <label htmlFor="voice-sb-preferred">

@@ -1,16 +1,11 @@
+import { type SettingsInput } from "./settings/settingsSchema.ts";
+import { normalizeLlmProvider } from "./llm/llmHelpers.ts";
 import { normalizeSettings } from "./store/settingsNormalization.ts";
 import { deepMerge } from "./utils.ts";
-import { normalizeLlmProvider } from "./llm/llmHelpers.ts";
 import { normalizeVoiceProvider } from "./voice/voiceModes.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasCanonicalRuntimeOverride(raw: Record<string, unknown>, key: "browserRuntime" | "researchRuntime" | "voiceRuntime") {
-  const agentStack = isRecord(raw.agentStack) ? raw.agentStack : {};
-  const overrides = isRecord(agentStack.overrides) ? agentStack.overrides : {};
-  return typeof overrides[key] === "string" && String(overrides[key] || "").trim().length > 0;
 }
 
 function inferLegacyPreset(raw: Record<string, unknown>) {
@@ -25,11 +20,8 @@ function inferLegacyPreset(raw: Record<string, unknown>) {
   return "claude_api";
 }
 
-export function normalizeTestSettingsInput(overrides: unknown): Record<string, unknown> {
+export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<string, unknown> {
   const raw = isRecord(overrides) ? overrides : {};
-  if (isRecord(raw.identity) || isRecord(raw.agentStack)) {
-    return raw;
-  }
 
   const prompt = isRecord(raw.prompt) ? raw.prompt : {};
   const activity = isRecord(raw.activity) ? raw.activity : {};
@@ -65,7 +57,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
             ? "elevenlabs_realtime"
             : undefined;
 
-  return {
+  const normalizedLegacy = {
     identity: {
       botName: raw.botName,
       botNameAliases: raw.botNameAliases
@@ -108,8 +100,9 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
     },
     interaction: {
       activity: {
-        replyEagerness: activity.replyEagerness,
-        reactionLevel: activity.reactionLevel,
+        ambientReplyEagerness: activity.ambientReplyEagerness ?? activity.replyEagerness,
+        responseWindowEagerness: activity.responseWindowEagerness ?? activity.replyEagerness,
+        reactivity: activity.reactivity ?? activity.reactionLevel,
         minSecondsBetweenMessages: activity.minSecondsBetweenMessages,
         replyCoalesceWindowSeconds: activity.replyCoalesceWindowSeconds,
         replyCoalesceMaxMessages: activity.replyCoalesceMaxMessages
@@ -172,9 +165,9 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
               ? ["codex"]
               : String(codeAgent.provider || "").trim().toLowerCase() === "codex-cli"
                 ? ["codex_cli"]
-              : String(codeAgent.provider || "").trim().toLowerCase() === "claude-code"
-                ? ["claude_code"]
-                : undefined
+                : String(codeAgent.provider || "").trim().toLowerCase() === "claude-code"
+                  ? ["claude_code"]
+                  : undefined
         },
         voiceAdmissionClassifier: {
           mode: "dedicated_model",
@@ -367,7 +360,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
         maxConcurrentSessions: voice.maxConcurrentSessions
       },
       conversationPolicy: {
-        replyEagerness: voice.replyEagerness,
+        ambientReplyEagerness: voice.ambientReplyEagerness ?? voice.replyEagerness,
         commandOnlyMode: voice.commandOnlyMode,
         allowNsfwHumor: voice.allowNsfwHumor,
         textOnlyMode: voice.textOnlyMode,
@@ -385,7 +378,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
         mode:
           voiceReplyDecisionLlm.enabled === false
             ? "generation_decides"
-            : voiceReplyDecisionLlm.realtimeAdmissionMode,
+            : voiceReplyDecisionLlm.realtimeAdmissionMode ?? "classifier_gate",
         intentConfidenceThreshold: voice.intentConfidenceThreshold,
         musicWakeLatchSeconds: voiceReplyDecisionLlm.musicWakeLatchSeconds
       },
@@ -413,59 +406,15 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
       enabled: automations.enabled
     }
   } as Record<string, unknown>;
+
+  return deepMerge(normalizedLegacy, raw) as Record<string, unknown>;
 }
 
-export function createTestSettings(overrides: unknown = {}) {
-  const legacyRaw = isRecord(overrides) ? overrides : {};
-  const raw = normalizeTestSettingsInput(overrides);
-  let settings = normalizeSettings(raw);
-  let patch: Record<string, unknown> = {};
-
-  if (isRecord(legacyRaw.browser) && !hasCanonicalRuntimeOverride(raw, "browserRuntime")) {
-    patch = deepMerge(patch, {
-      agentStack: {
-        overrides: {
-          browserRuntime: "local_browser_agent"
-        }
-      }
-    });
+const TEST_SETTINGS_BASELINE: SettingsInput = {
+  agentStack: {
+    preset: "claude_api"
   }
-
-  if (isRecord(legacyRaw.webSearch) && !hasCanonicalRuntimeOverride(raw, "researchRuntime")) {
-    patch = deepMerge(patch, {
-      agentStack: {
-        overrides: {
-          researchRuntime: "local_external_search"
-        }
-      }
-    });
-  }
-
-  const voice = isRecord(legacyRaw.voice) ? legacyRaw.voice : {};
-  const legacyMode = String(voice.mode || "")
-    .trim()
-    .toLowerCase();
-  if (legacyMode) {
-    patch = deepMerge(patch, {
-      agentStack: {
-        overrides: {
-          voiceRuntime: legacyMode
-        },
-        runtimeConfig: {
-          voice: {
-            runtimeMode: legacyMode
-          }
-        }
-      }
-    });
-  }
-
-  if (Object.keys(patch).length > 0) {
-    settings = normalizeSettings(deepMerge(settings, patch));
-  }
-
-  return settings;
-}
+};
 
 function buildSettingsPatch(base: unknown, next: unknown): unknown {
   if (Array.isArray(base) || Array.isArray(next)) {
@@ -485,8 +434,14 @@ function buildSettingsPatch(base: unknown, next: unknown): unknown {
   return Object.keys(patch).length > 0 ? patch : undefined;
 }
 
+export function createTestSettings(overrides: unknown = {}) {
+  return normalizeSettings(
+    deepMerge(TEST_SETTINGS_BASELINE, normalizeLegacyTestSettingsInput(overrides))
+  );
+}
+
 export function createTestSettingsPatch(overrides: unknown = {}) {
-  const base = normalizeSettings({});
+  const base = normalizeSettings(TEST_SETTINGS_BASELINE);
   const next = createTestSettings(overrides);
   return (buildSettingsPatch(base, next) || {}) as Record<string, unknown>;
 }

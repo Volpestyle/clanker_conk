@@ -120,7 +120,7 @@ function buildMockManager(sc: VoiceLiveScenario): ReplyDecisionHost {
       model: "claude-sonnet-4-6"
     },
     voice: {
-      replyEagerness: sc.eagerness ?? 50,
+      ambientReplyEagerness: sc.eagerness ?? 50,
       replyDecisionLlm: {
         provider: CLASSIFIER_PROVIDER,
         model: MODEL,

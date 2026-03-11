@@ -44,15 +44,12 @@ export function resolveVoiceRuntimeModeFromSelection(
 
 export function normalizeVoiceAdmissionModeForDashboard(
   value: unknown
-): "generation_decides" | "classifier_gate" | "adaptive" {
+): "generation_decides" | "classifier_gate" {
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
   if (normalized === "deterministic_only") {
     return "generation_decides";
-  }
-  if (normalized === "adaptive") {
-    return "adaptive";
   }
   if (normalized === "classifier_gate" || normalized === "hard_classifier") {
     return "classifier_gate";
@@ -66,13 +63,12 @@ export function resolveVoiceAdmissionModeForSettings({
 }: {
   value: unknown;
   replyPath: unknown;
-}): "generation_decides" | "classifier_gate" | "adaptive" {
+}): "generation_decides" | "classifier_gate" {
   const normalizedReplyPath = String(replyPath || "brain").trim().toLowerCase();
   if (normalizedReplyPath === "bridge") {
-    return "adaptive";
+    return "classifier_gate";
   }
-  const normalizedMode = normalizeVoiceAdmissionModeForDashboard(value);
-  return normalizedMode === "adaptive" ? "generation_decides" : normalizedMode;
+  return normalizeVoiceAdmissionModeForDashboard(value);
 }
 
 export function resolveRealtimeAdmissionModeForRuntime(

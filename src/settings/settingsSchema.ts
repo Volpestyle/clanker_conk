@@ -52,8 +52,7 @@ export const VOICE_RUNTIME_KINDS = [
 
 export const VOICE_ADMISSION_MODES = [
   "classifier_gate",
-  "generation_decides",
-  "adaptive"
+  "generation_decides"
 ] as const;
 
 export const CODING_WORKER_RUNTIME_KINDS = [
@@ -97,6 +96,9 @@ type SettingsExecutionTuning = {
 
 export type SettingsExecutionPolicy =
   | ({
+    mode: "disabled";
+  } & SettingsExecutionTuning)
+  | ({
     mode: "inherit_orchestrator";
   } & SettingsExecutionTuning)
   | ({
@@ -129,12 +131,15 @@ export const DEFAULT_SETTINGS = {
       "clinkerton",
       "clinkie",
       "clinky",
+      'clint',
+      'clinic',
       "clonk",
       "clonker",
       "clonky",
       "clunk",
       "clunka",
       "clunky",
+      "coinker",
       "crank",
       "cranker",
       "flanker",
@@ -143,6 +148,7 @@ export const DEFAULT_SETTINGS = {
       "hankie",
       "hanky",
       "klanker",
+      "klang",
       "klink",
       "klinker",
       "klinkie",
@@ -217,8 +223,9 @@ export const DEFAULT_SETTINGS = {
   },
   interaction: {
     activity: {
-      replyEagerness: 20,
-      reactionLevel: 40,
+      ambientReplyEagerness: 20,
+      responseWindowEagerness: 55,
+      reactivity: 40,
       minSecondsBetweenMessages: 5,
       replyCoalesceWindowSeconds: 6,
       replyCoalesceMaxMessages: 6
@@ -335,6 +342,9 @@ export const DEFAULT_SETTINGS = {
           ttsModel: "gpt-4o-mini-tts",
           ttsVoice: "alloy",
           ttsSpeed: 1
+        },
+        musicBrain: {
+          mode: "disabled"
         },
         generation: {
           mode: "dedicated_model",
@@ -491,7 +501,7 @@ export const DEFAULT_SETTINGS = {
       maxConcurrentSessions: 3
     },
     conversationPolicy: {
-      replyEagerness: 50,
+      ambientReplyEagerness: 50,
       commandOnlyMode: false,
       allowNsfwHumor: true,
       textOnlyMode: false,
@@ -514,7 +524,7 @@ export const DEFAULT_SETTINGS = {
         "command_only",
         "music_wake"
       ],
-      musicWakeLatchSeconds: 15
+      musicWakeLatchSeconds: 30
     },
     streamWatch: {
       enabled: true,
@@ -534,8 +544,8 @@ export const DEFAULT_SETTINGS = {
       sharePageJpegQuality: 0.6
     },
     soundboard: {
+      eagerness: 40,
       enabled: true,
-      eagerness: 35,
       allowExternalSounds: false,
       preferredSoundIds: []
     }
@@ -616,7 +626,8 @@ type SettingsAgentStack = Omit<SettingsFromDefaults["agentStack"], "overrides" |
         execution: SettingsExecutionPolicy;
       };
     };
-    voice: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"]["voice"], "generation"> & {
+    voice: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"]["voice"], "musicBrain" | "generation"> & {
+      musicBrain: SettingsExecutionPolicy;
       generation: SettingsExecutionPolicy;
     };
   };

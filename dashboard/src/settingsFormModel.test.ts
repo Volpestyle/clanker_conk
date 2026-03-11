@@ -1,7 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  applyStackPresetDefaults,
   formToSettingsPatch,
   getCodeAgentValidationError,
   getSettingsValidationError,
@@ -22,6 +21,7 @@ import {
   getResolvedVisionBinding,
   getResolvedVoiceInitiativeBinding,
   getResolvedVoiceAdmissionClassifierBinding,
+  getResolvedVoiceMusicBrainBinding,
   getResolvedVoiceGenerationBinding,
   resolveAgentStack
 } from "../../src/settings/agentStack.ts";
@@ -41,6 +41,7 @@ function withResolved(settings: unknown) {
       voiceProvider: resolveVoiceRuntimeSelectionFromMode(resolveAgentStack(s).voiceRuntime),
       voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(s),
       voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(s),
+      voiceMusicBrainBinding: getResolvedVoiceMusicBrainBinding(s),
       voiceGenerationBinding: getResolvedVoiceGenerationBinding(s)
     }
   };
@@ -48,7 +49,7 @@ function withResolved(settings: unknown) {
 
 function assertDedicatedExecutionModel(
   execution: {
-    mode?: "inherit_orchestrator" | "dedicated_model";
+    mode?: "inherit_orchestrator" | "dedicated_model" | "disabled";
     model?: {
       provider?: string;
       model?: string;
@@ -667,6 +668,9 @@ test("settingsFormModel supports the claude_oauth preset (migrated from claude_o
   assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
   assert.equal(form.voiceReplyDecisionLlmProvider, "claude-oauth");
   assert.equal(form.voiceReplyDecisionLlmModel, "claude-sonnet-4-6");
+  assert.equal(form.voiceMusicBrainMode, "disabled");
+  assert.equal(form.voiceMusicBrainLlmProvider, "claude-oauth");
+  assert.equal(form.voiceMusicBrainLlmModel, "claude-haiku-4-5");
   assert.equal(form.voiceGenerationLlmUseTextModel, false);
   assert.equal(form.voiceGenerationLlmProvider, "claude-oauth");
   assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
@@ -675,7 +679,7 @@ test("settingsFormModel supports the claude_oauth preset (migrated from claude_o
   assert.equal(patch.agentStack.preset, "claude_oauth");
 });
 
-test("settingsFormModel preserves adaptive admission defaults for openai_native_realtime", () => {
+test("settingsFormModel preserves classifier admission defaults for openai_native_realtime", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       preset: "openai_native_realtime"
@@ -684,12 +688,51 @@ test("settingsFormModel preserves adaptive admission defaults for openai_native_
 
   assert.equal(form.stackPreset, "openai_native_realtime");
   assert.equal(form.voiceReplyPath, "bridge");
-  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "adaptive");
+  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "classifier_gate");
   assert.equal(form.voiceReplyDecisionLlmProvider, "openai");
   assert.equal(form.voiceReplyDecisionLlmModel, "gpt-5-mini");
+  assert.equal(form.voiceMusicBrainMode, "disabled");
+  assert.equal(form.voiceMusicBrainLlmProvider, "openai");
+  assert.equal(form.voiceMusicBrainLlmModel, "gpt-5-mini");
 
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.admission.mode, "adaptive");
+  assert.equal(patch.voice.admission.mode, "classifier_gate");
+});
+
+test("settingsFormModel persists dedicated music brain selections", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      preset: "claude_oauth"
+    }
+  })));
+
+  form.voiceMusicBrainMode = "dedicated_model";
+  form.voiceMusicBrainLlmProvider = "anthropic";
+  form.voiceMusicBrainLlmModel = "claude-haiku-4-5";
+
+  const patch = formToSettingsPatch(form);
+  assert.deepEqual(patch.agentStack.runtimeConfig.voice.musicBrain, {
+    mode: "dedicated_model",
+    model: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    }
+  });
+});
+
+test("settingsFormModel persists disabled music brain mode", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      preset: "claude_oauth"
+    }
+  })));
+
+  form.voiceMusicBrainMode = "disabled";
+
+  const patch = formToSettingsPatch(form);
+  assert.deepEqual(patch.agentStack.runtimeConfig.voice.musicBrain, {
+    mode: "disabled"
+  });
 });
 
 test("settingsFormModel persists voice classifier overrides even when advanced overrides are off", () => {
@@ -735,7 +778,7 @@ test("settingsFormModel persists classifier selections even when they match the 
     },
     voice: {
       admission: {
-        mode: "adaptive"
+        mode: "classifier_gate"
       },
       conversationPolicy: {
         replyPath: "bridge"
@@ -748,7 +791,7 @@ test("settingsFormModel persists classifier selections even when they match the 
   form.voiceReplyDecisionLlmModel = "claude-sonnet-4-6";
 
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.admission.mode, "adaptive");
+  assert.equal(patch.voice.admission.mode, "classifier_gate");
   assert.deepEqual(patch.agentStack.overrides.voiceAdmissionClassifier, {
     mode: "dedicated_model",
     model: {
@@ -791,53 +834,27 @@ test("settingsFormModel forces bridge replies onto realtime output", () => {
   assert.equal(patch.voice.conversationPolicy.ttsMode, "realtime");
 });
 
-test("settingsFormModel preserves adaptive voice admission and canonicalizes legacy aliases", () => {
-  const form = settingsToForm(withResolved(normalizeSettings({
+test("settingsFormModel migrates legacy adaptive admission into canonical modes by reply path", () => {
+  const brainForm = settingsToForm(withResolved(normalizeSettings({
     voice: {
       admission: {
         mode: "adaptive"
       }
     }
   })));
+  assert.equal(brainForm.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
 
-  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "adaptive");
-
-  const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.admission.mode, "generation_decides");
-});
-
-test("applyStackPresetDefaults merges server-returned defaults into form", () => {
-  const base = settingsToForm(withResolved(normalizeSettings({
-    agentStack: { preset: "openai_native_realtime" }
+  const bridgeForm = settingsToForm(withResolved(normalizeSettings({
+    voice: {
+      admission: {
+        mode: "adaptive"
+      },
+      conversationPolicy: {
+        replyPath: "bridge"
+      }
+    }
   })));
-
-  const patched = applyStackPresetDefaults(base, {
-    stackPreset: "claude_oauth",
-    provider: "claude-oauth",
-    model: "claude-opus-4-6",
-    voiceProvider: "openai",
-    voiceReplyPath: "brain",
-    voiceTtsMode: "realtime",
-    voiceReplyDecisionRealtimeAdmissionMode: "generation_decides",
-    voiceReplyDecisionLlmProvider: "claude-oauth",
-    voiceReplyDecisionLlmModel: "claude-sonnet-4-6",
-    voiceGenerationLlmUseTextModel: false,
-    voiceGenerationLlmProvider: "claude-oauth",
-    voiceGenerationLlmModel: "claude-sonnet-4-6"
-  });
-
-  assert.equal(patched.stackPreset, "claude_oauth");
-  assert.equal(patched.provider, "claude-oauth");
-  assert.equal(patched.model, "claude-opus-4-6");
-  assert.equal(patched.voiceProvider, "openai");
-  assert.equal(patched.voiceReplyPath, "brain");
-  assert.equal(patched.voiceTtsMode, "realtime");
-  assert.equal(patched.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
-  assert.equal(patched.voiceReplyDecisionLlmProvider, "claude-oauth");
-  assert.equal(patched.voiceReplyDecisionLlmModel, "claude-sonnet-4-6");
-  assert.equal(patched.voiceGenerationLlmUseTextModel, false);
-  assert.equal(patched.voiceGenerationLlmProvider, "claude-oauth");
-  assert.equal(patched.voiceGenerationLlmModel, "claude-sonnet-4-6");
+  assert.equal(bridgeForm.voiceReplyDecisionRealtimeAdmissionMode, "classifier_gate");
 });
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {

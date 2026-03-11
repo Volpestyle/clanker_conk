@@ -63,6 +63,7 @@ export function normalizeAgentStackSection(
   const rawDevTeamOverride = isRecord(rawOverrides.devTeam) ? rawOverrides.devTeam : null;
   const rawRuntimeConfig = isRecord(rawAgentStack.runtimeConfig) ? rawAgentStack.runtimeConfig : {};
   const rawVoiceRuntime = isRecord(rawRuntimeConfig.voice) ? rawRuntimeConfig.voice : {};
+  const rawVoiceMusicBrain = rawVoiceRuntime.musicBrain;
   const rawVoiceGeneration = rawVoiceRuntime.generation;
   const rawVoiceAdmissionOverride = rawOverrides.voiceAdmissionClassifier;
 
@@ -372,6 +373,12 @@ export function normalizeAgentStackSection(
             4
           )
         },
+        musicBrain:
+          rawVoiceMusicBrain === undefined && presetConfig.presetVoiceMusicBrainFallback
+            ? {
+                mode: "disabled"
+              }
+            : normalizeExecutionPolicy(voice.musicBrain, "anthropic", "claude-haiku-4-5"),
         generation:
           rawVoiceGeneration === undefined && presetConfig.presetVoiceGenerationFallback
             ? {

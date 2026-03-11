@@ -47,7 +47,7 @@ export const SETTINGS_NUMERIC_CONSTRAINTS = {
       maxConcurrentSessions: { min: 1, max: 3 }
     },
     conversationPolicy: {
-      replyEagerness: { min: 0, max: 100 },
+      ambientReplyEagerness: { min: 0, max: 100 },
       streaming: {
         eagerFirstChunkChars: { min: 8, max: 220 },
         maxBufferChars: { min: 80, max: 800 }
@@ -55,6 +55,9 @@ export const SETTINGS_NUMERIC_CONSTRAINTS = {
     },
     admission: {
       musicWakeLatchSeconds: { min: 0, max: 120 }
+    },
+    soundboard: {
+      eagerness: { min: 0, max: 100 }
     }
   }
 } as const;
