@@ -169,6 +169,17 @@ export function buildInitiativeRuntime(bot: ClankerBot): InitiativeRuntime {
     client: bot.client,
     discovery: bot.discovery,
     search: bot.search,
+    getPendingInitiativeThoughts: () => bot.pendingInitiativeThoughts,
+    getPendingInitiativeThought: (guildId) => bot.pendingInitiativeThoughts.get(String(guildId || "").trim()) || null,
+    setPendingInitiativeThought: (guildId, thought) => {
+      const normalizedGuildId = String(guildId || "").trim();
+      if (!normalizedGuildId) return;
+      if (!thought) {
+        bot.pendingInitiativeThoughts.delete(normalizedGuildId);
+        return;
+      }
+      bot.pendingInitiativeThoughts.set(normalizedGuildId, thought);
+    },
     canSendMessage: (maxPerHour) => bot.canSendMessage(maxPerHour),
     canTalkNow: (settings) => bot.canTalkNow(settings),
     hydrateRecentMessages: (channel, limit) => bot.hydrateRecentMessages(channel, limit),

@@ -269,6 +269,7 @@ export class ClankerBot {
   startupTasksRan;
   startupTimeout;
   initiativeCycleRunning;
+  pendingInitiativeThoughts;
   automationCycleRunning;
   reconnectInFlight;
   isStopping;
@@ -310,6 +311,7 @@ export class ClankerBot {
     this.startupTasksRan = false;
     this.startupTimeout = null;
     this.initiativeCycleRunning = false;
+    this.pendingInitiativeThoughts = new Map();
     this.automationCycleRunning = false;
     this.reconnectInFlight = false;
     this.isStopping = false;
@@ -818,6 +820,7 @@ export class ClankerBot {
     this.replyQueues.clear();
     this.replyQueueWorkers.clear();
     this.replyQueuedMessageIds.clear();
+    this.pendingInitiativeThoughts.clear();
     await this.voiceSessionManager.dispose("shutdown");
     if (this.memory?.drainIngestQueue) {
       try {

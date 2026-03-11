@@ -35,3 +35,28 @@ test("buildInitiativePrompt matches the unified initiative tool and task contrac
   assert.equal(prompt.includes("Use exact channelId values from the CHANNELS section."), true);
   assert.equal(prompt.includes("\"mediaDirective\":\"none\"|\"image\"|\"video\"|\"gif\""), true);
 });
+
+test("buildInitiativePrompt carries held media continuity for pending thoughts", () => {
+  const prompt = buildInitiativePrompt({
+    botName: "clanker",
+    pendingThought: {
+      currentText: "i should drop the cursed cat render later",
+      status: "reconsider",
+      revision: 2,
+      ageMs: 45_000,
+      channelName: "general",
+      lastDecisionReason: "timing felt off",
+      mediaDirective: "image",
+      mediaPrompt: "a cursed office cat lit like a fake perfume ad"
+    },
+    channelSummaries: [
+      {
+        channelId: "general-1",
+        channelName: "general"
+      }
+    ]
+  });
+
+  assert.equal(prompt.includes("Held media idea: image."), true);
+  assert.equal(prompt.includes("Held media prompt: a cursed office cat lit like a fake perfume ad"), true);
+});

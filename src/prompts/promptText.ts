@@ -200,7 +200,7 @@ export function buildReplyPrompt({
   );
   const ambientEagerness = Math.max(0, Math.min(100, Number(ambientReplyEagerness) || 0));
   const followupEagerness = Math.max(0, Math.min(100, Number(responseWindowEagerness) || 0));
-  parts.push(`Shared text attention mode right now: ${normalizedTextAttentionMode}.`);
+  parts.push(`Current text continuity state: ${normalizedTextAttentionMode}.`);
   if (normalizedTextAttentionMode === "ACTIVE") {
     if (normalizedTextAttentionReason === "direct_address") {
       parts.push("You were directly pulled into this thread, so treat it as an active conversation unless the best answer is still [SKIP].");
@@ -210,6 +210,7 @@ export function buildReplyPrompt({
   } else {
     parts.push("This is an ambient text moment. You can still chime in, but only if you genuinely fit the room.");
   }
+  parts.push("Use continuity as context, not as blanket permission. Activity elsewhere, including VC, does not by itself make this text thread yours.");
   parts.push(`Your text ambient-reply eagerness is ${ambientEagerness}/100.`);
   parts.push(`Your response-window eagerness is ${followupEagerness}/100.`);
 
@@ -289,6 +290,7 @@ export function buildReplyPrompt({
     parts.push("You have voice channel capability. Use join_voice_channel / leave_voice_channel tools to manage your VC presence.");
     if (inVoiceChannel) {
       parts.push("You are currently in a voice channel.");
+      parts.push("That VC activity is continuity context, not blanket permission to jump into unrelated text conversations.");
     } else {
       parts.push("You are not currently in a voice channel. To play music or interact in VC, call join_voice_channel first.");
     }
@@ -662,6 +664,7 @@ export function buildInitiativePrompt({
   persona = "",
   initiativeEagerness = 20,
   channelSummaries = [],
+  pendingThought = null,
   discoveryCandidates = [],
   sourcePerformance = [],
   communityInterestFacts = [],
@@ -689,6 +692,30 @@ export function buildInitiativePrompt({
   parts.push("Some recent lines may be marked [vc], meaning they are transcripts from voice chat linked to that text channel. Use them as room context, but the action you choose here is still a text post in the linked text channel.");
   parts.push(`Persona: ${String(persona || "").trim() || "playful slang, open, honest, exploratory"}`);
   parts.push(`Social mode: ${describeInitiativeEagerness(initiativeEagerness)} (ambient text eagerness ${Math.max(0, Math.min(100, Number(initiativeEagerness) || 0))}/100)`);
+
+  if (pendingThought && typeof pendingThought === "object" && String(pendingThought.currentText || "").trim()) {
+    parts.push("=== YOUR CURRENT THOUGHT ===");
+    parts.push(`Your current thought: "${String(pendingThought.currentText || "").trim()}"`);
+    parts.push(`Thought status: ${pendingThought.status === "reconsider" ? "reconsider" : "queued"}.`);
+    parts.push(`Thought revision: ${Math.max(1, Number(pendingThought.revision || 1))}.`);
+    parts.push(`Thought age ms: ${Math.max(0, Math.round(Number(pendingThought.ageMs || 0)))}.`);
+    if (String(pendingThought.channelName || "").trim()) {
+      parts.push(`Original target channel: #${String(pendingThought.channelName || "").trim()}.`);
+    }
+    if (String(pendingThought.lastDecisionReason || "").trim()) {
+      parts.push(`Why you kept it: ${String(pendingThought.lastDecisionReason || "").trim()}`);
+    }
+    const heldMediaDirective = String(pendingThought.mediaDirective || "").trim().toLowerCase();
+    if (heldMediaDirective === "image" || heldMediaDirective === "video" || heldMediaDirective === "gif") {
+      parts.push(`Held media idea: ${heldMediaDirective}.`);
+      if (String(pendingThought.mediaPrompt || "").trim()) {
+        parts.push(`Held media prompt: ${String(pendingThought.mediaPrompt || "").trim()}`);
+      }
+    }
+    if (pendingThought.status === "reconsider") {
+      parts.push("Something changed since you formed that thought. Refresh it instead of repeating yourself.");
+    }
+  }
 
   parts.push("=== CHANNELS ===");
   parts.push(formatInitiativeChannelSummaries(channelSummaries));
@@ -756,7 +783,11 @@ export function buildInitiativePrompt({
   }
 
   parts.push("=== TASK ===");
-  parts.push("Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, [SKIP] and stay ambient.");
+  parts.push(
+    pendingThought && typeof pendingThought === "object" && String(pendingThought.currentText || "").trim()
+      ? "Look around again and answer the question: what are you thinking right now? You can post the thought now, keep holding a refined version for later, or drop it."
+      : "Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, stay ambient."
+  );
   parts.push("That can mean reacting to a live conversation, sharing something from your feed, or following your own curiosity.");
   parts.push("If you notice a source consistently is not producing anything useful, or the community's interests point toward sources you do not have yet, you can adjust your feed.");
   parts.push("Choose the channel that best fits what you want to say. Do not pick a channel at random.");
@@ -764,8 +795,10 @@ export function buildInitiativePrompt({
   parts.push("Use exact channelId values from the CHANNELS section.");
   parts.push("Keep the text natural, non-spammy, and like a real community member.");
   parts.push("If you mention a feed item or web result, include the link only if it feels natural. Never force a link.");
-  parts.push("Return strict JSON only with shape: {\"skip\":boolean,\"channelId\":string|null,\"text\":string,\"mediaDirective\":\"none\"|\"image\"|\"video\"|\"gif\",\"mediaPrompt\":string|null,\"reason\":string}.");
-  parts.push("If skip=true, set channelId to null, text to an empty string, mediaDirective to \"none\", and mediaPrompt to null.");
+  parts.push("Return strict JSON only with shape: {\"action\":\"post_now\"|\"hold\"|\"drop\",\"channelId\":string|null,\"text\":string,\"mediaDirective\":\"none\"|\"image\"|\"video\"|\"gif\",\"mediaPrompt\":string|null,\"reason\":string}.");
+  parts.push("If action is \"post_now\", channelId and text must contain the post you want to send now.");
+  parts.push("If action is \"hold\", channelId and text must contain the thought you want to keep holding for later. It can be refined or replaced.");
+  parts.push("If action is \"drop\", set channelId to null, text to an empty string, mediaDirective to \"none\", and mediaPrompt to null.");
   parts.push("If mediaDirective is \"none\", set mediaPrompt to null.");
 
   return parts.join("\n\n");

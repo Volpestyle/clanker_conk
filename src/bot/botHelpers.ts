@@ -167,7 +167,10 @@ export const INITIATIVE_OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    skip: { type: "boolean" },
+    action: {
+      type: "string",
+      enum: ["post_now", "hold", "drop"]
+    },
     channelId: { type: ["string", "null"] },
     text: { type: "string" },
     mediaDirective: {
@@ -177,7 +180,7 @@ export const INITIATIVE_OUTPUT_SCHEMA = {
     mediaPrompt: { type: ["string", "null"] },
     reason: { type: "string" }
   },
-  required: ["skip", "channelId", "text", "mediaDirective", "mediaPrompt", "reason"]
+  required: ["action", "channelId", "text", "mediaDirective", "mediaPrompt", "reason"]
 };
 
 export const INITIATIVE_OUTPUT_JSON_SCHEMA = JSON.stringify(INITIATIVE_OUTPUT_SCHEMA);
@@ -660,17 +663,29 @@ export function parseStructuredInitiativeOutput(rawText, maxLen = DEFAULT_MAX_ME
   const parsed = extractJsonObjectFromText(fallbackText);
   if (!parsed) {
     return {
+      action: "drop",
       skip: true,
       channelId: null,
       text: "",
       mediaDirective: "none",
       mediaPrompt: null,
       reason: "",
+      contractViolation: false,
+      contractViolationReason: null,
       parseState: "unstructured" as ParseState
     };
   }
 
-  const skip = parsed?.skip === true;
+  const rawAction = String(
+    parsed?.action ??
+      (parsed?.skip === true ? "drop" : "post_now")
+  )
+    .trim()
+    .toLowerCase();
+  const action = rawAction === "post_now" || rawAction === "hold" || rawAction === "drop"
+    ? rawAction
+    : "drop";
+  const skip = action === "drop";
   const channelId = skip
     ? null
     : normalizeDirectiveText(parsed?.channelId, MAX_INITIATIVE_CHANNEL_ID_LEN) || null;
@@ -678,21 +693,35 @@ export function parseStructuredInitiativeOutput(rawText, maxLen = DEFAULT_MAX_ME
     ? ""
     : normalizeDirectiveText(parsed?.text, MAX_INITIATIVE_TEXT_LEN) || "";
   const rawMediaDirective = String(parsed?.mediaDirective || "none").trim().toLowerCase();
-  const mediaDirective = INITIATIVE_MEDIA_TYPES.has(rawMediaDirective)
-    ? rawMediaDirective
-    : "none";
+  const mediaDirective: "none" | "image" | "video" | "gif" =
+    rawMediaDirective === "image" || rawMediaDirective === "video" || rawMediaDirective === "gif"
+      ? rawMediaDirective
+      : "none";
   const mediaPrompt = mediaDirective === "none"
     ? null
     : normalizeDirectiveText(parsed?.mediaPrompt, maxLen) || null;
   const reason = normalizeDirectiveText(parsed?.reason, MAX_INITIATIVE_REASON_LEN) || "";
+  const contractViolation =
+    action !== "drop" &&
+    (!channelId || !text);
+  const contractViolationReason = !contractViolation
+    ? null
+    : !channelId && !text
+      ? "missing_channel_id_and_text"
+      : !channelId
+        ? "missing_channel_id"
+        : "missing_text";
 
   return {
-    skip: skip || !channelId || !text,
+    action,
+    skip,
     channelId: skip ? null : channelId,
     text,
     mediaDirective,
     mediaPrompt,
     reason,
+    contractViolation,
+    contractViolationReason,
     parseState: "json" as ParseState
   };
 }

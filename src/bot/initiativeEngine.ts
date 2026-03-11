@@ -136,6 +136,30 @@ type DiscoveryCandidate = {
   publishedAt?: string | null;
 };
 
+export type InitiativePendingThoughtStatus = "queued" | "reconsider";
+export type InitiativePendingThoughtAction = "post_now" | "hold" | "drop";
+
+export type InitiativePendingThought = {
+  id: string;
+  guildId: string;
+  channelId: string;
+  channelName: string;
+  trigger: string;
+  draftText: string;
+  currentText: string;
+  createdAt: number;
+  updatedAt: number;
+  basisAt: number;
+  notBeforeAt: number;
+  expiresAt: number;
+  revision: number;
+  status: InitiativePendingThoughtStatus;
+  lastDecisionReason: string | null;
+  lastDecisionAction: InitiativePendingThoughtAction | null;
+  mediaDirective: "none" | "image" | "video" | "gif";
+  mediaPrompt: string | null;
+};
+
 export type InitiativeRuntime = BotContext & {
   readonly client: InitiativeClientLike;
   readonly discovery: {
@@ -161,6 +185,9 @@ export type InitiativeRuntime = BotContext & {
   } | null;
   readonly search: ReplyToolRuntime["search"];
   initiativeCycleRunning: boolean;
+  getPendingInitiativeThoughts: () => Map<string, InitiativePendingThought>;
+  getPendingInitiativeThought: (guildId: string) => InitiativePendingThought | null;
+  setPendingInitiativeThought: (guildId: string, thought: InitiativePendingThought | null) => void;
   canSendMessage: (maxPerHour: number) => boolean;
   canTalkNow: (settings: Record<string, unknown>) => boolean;
   hydrateRecentMessages: (channel: InitiativeChannelLike, limit: number) => Promise<unknown[]>;
@@ -275,8 +302,195 @@ type InitiativeSourceStat = {
   lastUsedAt: string | null;
 };
 
+const INITIATIVE_PENDING_THOUGHT_REVISIT_MS = 30_000;
+const INITIATIVE_PENDING_THOUGHT_MIN_EXPIRY_MS = 30 * 60_000;
+const INITIATIVE_PENDING_THOUGHT_HARD_MAX_AGE_MS = 2 * 60 * 60_000;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizePendingInitiativeThought(
+  thought: InitiativePendingThought | null | undefined
+): InitiativePendingThought | null {
+  if (!thought || typeof thought !== "object") return null;
+  const currentText = sanitizeBotText(String(thought.currentText || "").trim(), 1800);
+  if (!currentText) return null;
+  const guildId = String(thought.guildId || "").trim();
+  const channelId = String(thought.channelId || "").trim();
+  if (!guildId || !channelId) return null;
+  const rawMediaDirective = String(thought.mediaDirective || "none").trim().toLowerCase();
+  const mediaDirective =
+    rawMediaDirective === "image" || rawMediaDirective === "video" || rawMediaDirective === "gif"
+      ? rawMediaDirective
+      : "none";
+  const mediaPrompt = mediaDirective === "none"
+    ? null
+    : sanitizeBotText(String(thought.mediaPrompt || "").trim(), 900) || null;
+  return {
+    ...thought,
+    guildId,
+    channelId,
+    channelName: String(thought.channelName || channelId).trim() || channelId,
+    trigger: String(thought.trigger || "timer").trim() || "timer",
+    draftText: sanitizeBotText(String(thought.draftText || currentText).trim(), 1800) || currentText,
+    currentText,
+    revision: Math.max(1, Number(thought.revision || 1)),
+    status: thought.status === "reconsider" ? "reconsider" : "queued",
+    lastDecisionReason: String(thought.lastDecisionReason || "").trim() || null,
+    lastDecisionAction:
+      thought.lastDecisionAction === "post_now" || thought.lastDecisionAction === "hold" || thought.lastDecisionAction === "drop"
+        ? thought.lastDecisionAction
+        : null,
+    mediaDirective,
+    mediaPrompt
+  };
+}
+
+function clearPendingInitiativeThought(
+  runtime: InitiativeRuntime,
+  guildId: string,
+  {
+    reason = "cleared",
+    trigger = "timer",
+    now = Date.now()
+  }: {
+    reason?: string;
+    trigger?: string;
+    now?: number;
+  } = {}
+) {
+  const pendingThought = normalizePendingInitiativeThought(runtime.getPendingInitiativeThought(guildId));
+  runtime.setPendingInitiativeThought(guildId, null);
+  if (!pendingThought) return null;
+  runtime.store.logAction({
+    kind: "initiative_skip",
+    guildId,
+    channelId: pendingThought.channelId,
+    userId: runtime.client.user?.id || null,
+    content: `pending_thought_${reason}`,
+    metadata: {
+      thoughtId: pendingThought.id,
+      thoughtText: pendingThought.currentText,
+      thoughtRevision: pendingThought.revision,
+      trigger,
+      ageMs: Math.max(0, Math.round(now - Number(pendingThought.createdAt || now)))
+    }
+  });
+  return pendingThought;
+}
+
+function resolvePendingInitiativeThoughtExpiryAt(
+  existingThought: InitiativePendingThought | null,
+  minGapMs: number,
+  now = Date.now()
+) {
+  const createdAt = Number(existingThought?.createdAt || now);
+  const rollingExpiryAt = now + Math.max(INITIATIVE_PENDING_THOUGHT_MIN_EXPIRY_MS, minGapMs * 2);
+  const boundedExpiryAt = Math.min(createdAt + INITIATIVE_PENDING_THOUGHT_HARD_MAX_AGE_MS, rollingExpiryAt);
+  const previousExpiryAt = Number(existingThought?.expiresAt || 0);
+  return previousExpiryAt > 0 ? Math.min(previousExpiryAt, boundedExpiryAt) : boundedExpiryAt;
+}
+
+function pendingInitiativeThoughtIsExpired(
+  thought: InitiativePendingThought | null | undefined,
+  now = Date.now()
+) {
+  if (!thought) return false;
+  const expiresAt = Number(thought.expiresAt || 0);
+  const createdAt = Number(thought.createdAt || 0);
+  const hardExpiresAt = createdAt > 0 ? createdAt + INITIATIVE_PENDING_THOUGHT_HARD_MAX_AGE_MS : 0;
+  return (
+    (expiresAt > 0 && now >= expiresAt) ||
+    (hardExpiresAt > 0 && now >= hardExpiresAt)
+  );
+}
+
+function savePendingInitiativeThought(
+  runtime: InitiativeRuntime,
+  {
+    guildId,
+    channelId,
+    channelName,
+    trigger,
+    draftText,
+    thoughtText,
+    mediaDirective,
+    mediaPrompt,
+    reason,
+    minGapMs,
+    existingThought = null,
+    now = Date.now()
+  }: {
+    guildId: string;
+    channelId: string;
+    channelName: string;
+    trigger: string;
+    draftText: string;
+    thoughtText: string;
+    mediaDirective: "none" | "image" | "video" | "gif";
+    mediaPrompt: string | null;
+    reason: string;
+    minGapMs: number;
+    existingThought?: InitiativePendingThought | null;
+    now?: number;
+  }
+) {
+  const currentText = sanitizeBotText(String(thoughtText || "").trim(), 1800);
+  if (!currentText) {
+    return clearPendingInitiativeThought(runtime, guildId, {
+      reason: "empty_hold_thought",
+      trigger,
+      now
+    });
+  }
+  const expiresAt = resolvePendingInitiativeThoughtExpiryAt(existingThought, minGapMs, now);
+  if (expiresAt <= now) {
+    return clearPendingInitiativeThought(runtime, guildId, {
+      reason: "expired",
+      trigger,
+      now
+    });
+  }
+  const nextThought: InitiativePendingThought = {
+    id: existingThought?.id || `${guildId}:initiative:${now.toString(36)}`,
+    guildId,
+    channelId,
+    channelName,
+    trigger: String(trigger || existingThought?.trigger || "timer").trim() || "timer",
+    draftText: sanitizeBotText(String(draftText || currentText).trim(), 1800) || currentText,
+    currentText,
+    createdAt: existingThought?.createdAt || now,
+    updatedAt: now,
+    basisAt: now,
+    notBeforeAt: now + INITIATIVE_PENDING_THOUGHT_REVISIT_MS,
+    expiresAt,
+    revision: existingThought ? Math.max(1, Number(existingThought.revision || 1)) + 1 : 1,
+    status: "queued",
+    lastDecisionReason: String(reason || "").trim() || null,
+    lastDecisionAction: "hold",
+    mediaDirective,
+    mediaPrompt
+  };
+  runtime.setPendingInitiativeThought(guildId, nextThought);
+  runtime.store.logAction({
+    kind: "initiative_skip",
+    guildId,
+    channelId,
+    userId: runtime.client.user?.id || null,
+    content: existingThought ? "pending_thought_updated" : "pending_thought_created",
+    metadata: {
+      thoughtId: nextThought.id,
+      thoughtText: nextThought.currentText,
+      thoughtRevision: nextThought.revision,
+      trigger,
+      notBeforeAt: new Date(nextThought.notBeforeAt).toISOString(),
+      expiresAt: new Date(nextThought.expiresAt).toISOString(),
+      mediaDirective: nextThought.mediaDirective,
+      reason: nextThought.lastDecisionReason
+    }
+  });
+  return nextThought;
 }
 
 function buildInitiativeGenerationSettings(settings: Record<string, unknown>) {
@@ -409,6 +623,79 @@ function pickGuildChannelSet(channels: InitiativeChannelSummary[]) {
   }
 
   return bestGuildId ? byGuild.get(bestGuildId) || [] : [];
+}
+
+function collectPendingInitiativeThoughtCandidates(
+  runtime: InitiativeRuntime,
+  eligibleChannels: InitiativeChannelSummary[],
+  now = Date.now()
+) {
+  const blockedGuildIds = new Set<string>();
+  const pendingThoughts = [...runtime.getPendingInitiativeThoughts().values()]
+    .map((thought) => normalizePendingInitiativeThought(thought))
+    .filter((thought): thought is InitiativePendingThought => Boolean(thought))
+    .sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0));
+  const dueCandidates: Array<{
+    pendingThought: InitiativePendingThought;
+    guildChannels: InitiativeChannelSummary[];
+  }> = [];
+
+  for (const pendingThought of pendingThoughts) {
+    if (pendingInitiativeThoughtIsExpired(pendingThought, now)) {
+      clearPendingInitiativeThought(runtime, pendingThought.guildId, {
+        reason: "expired",
+        trigger: pendingThought.trigger,
+        now
+      });
+      continue;
+    }
+
+    const guildChannels = eligibleChannels.filter((channel) => channel.guildId === pendingThought.guildId);
+    if (!guildChannels.length) {
+      clearPendingInitiativeThought(runtime, pendingThought.guildId, {
+        reason: "guild_no_longer_eligible",
+        trigger: pendingThought.trigger,
+        now
+      });
+      continue;
+    }
+    blockedGuildIds.add(pendingThought.guildId);
+
+    const hasNewGuildActivity = guildChannels.some((channel) =>
+      channel.recentMessages.some((message) => {
+        const createdAtMs = Date.parse(String(message?.created_at || ""));
+        return Number.isFinite(createdAtMs) && createdAtMs > Number(pendingThought.basisAt || 0);
+      })
+    );
+
+    if (hasNewGuildActivity && pendingThought.status !== "reconsider") {
+      const refreshedThought = {
+        ...pendingThought,
+        status: "reconsider" as const,
+        updatedAt: now
+      };
+      runtime.setPendingInitiativeThought(pendingThought.guildId, refreshedThought);
+      if (Number(refreshedThought.notBeforeAt || 0) <= now) {
+        dueCandidates.push({
+          pendingThought: refreshedThought,
+          guildChannels
+        });
+      }
+      continue;
+    }
+
+    if (Number(pendingThought.notBeforeAt || 0) <= now) {
+      dueCandidates.push({
+        pendingThought,
+        guildChannels
+      });
+    }
+  }
+
+  return {
+    dueCandidates,
+    blockedGuildIds
+  };
 }
 
 function buildInterestFacts({
@@ -829,18 +1116,35 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     const posts24h = countRecentActions(runtime.store, "initiative_post", since24h);
     if (posts24h >= initiative.maxPostsPerDay) return;
 
+    const now = Date.now();
     const minGapMs = Math.max(1, Number(initiative.minMinutesBetweenPosts || 0) * 60_000);
-    const lastPostTimes = getLastActionTimes(runtime.store, [...INITIATIVE_MIN_GAP_ACTION_KINDS]);
-    const lastPostTs = lastPostTimes.length ? Math.max(...lastPostTimes) : 0;
-    if (lastPostTs && Date.now() - lastPostTs < minGapMs) return;
-
-    const eagerness = Math.max(0, Math.min(100, Number(initiative.eagerness) || 0));
-    const roll = Math.random() * 100;
-    if (roll >= eagerness) return;
-
     const eligibleChannels = await buildEligibleChannels(runtime, settings);
-    const guildChannels = pickGuildChannelSet(eligibleChannels);
+    const {
+      dueCandidates: duePendingCandidates,
+      blockedGuildIds: pendingThoughtGuildIds
+    } = collectPendingInitiativeThoughtCandidates(runtime, eligibleChannels, now);
+    const freshEligibleChannels = eligibleChannels.filter((channel) => !pendingThoughtGuildIds.has(channel.guildId));
+    const freshGuildChannels = pickGuildChannelSet(freshEligibleChannels);
+    let freshPassAllowed = false;
+
+    if (freshGuildChannels.length) {
+      const lastPostTimes = getLastActionTimes(runtime.store, [...INITIATIVE_MIN_GAP_ACTION_KINDS]);
+      const lastPostTs = lastPostTimes.length ? Math.max(...lastPostTimes) : 0;
+      if (!lastPostTs || now - lastPostTs >= minGapMs) {
+        const eagerness = Math.max(0, Math.min(100, Number(initiative.eagerness) || 0));
+        const roll = Math.random() * 100;
+        freshPassAllowed = roll < eagerness;
+      }
+    }
+
+    const selectedPendingCandidate = !freshPassAllowed && duePendingCandidates.length > 0
+      ? duePendingCandidates[0]
+      : null;
+    const pendingThought = selectedPendingCandidate?.pendingThought || null;
+    const guildChannels = selectedPendingCandidate?.guildChannels || freshGuildChannels;
     if (!guildChannels.length) return;
+    const isPendingThoughtPass = Boolean(pendingThought);
+    if (!isPendingThoughtPass && !freshPassAllowed) return;
 
     const guildId = guildChannels[0].guildId;
     const recentGuildMessages = runtime.store.getRecentMessagesAcrossGuild(guildId, 180) as StoredMessageRow[];
@@ -954,8 +1258,20 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     const userPrompt = buildInitiativePrompt({
       botName,
       persona,
-      initiativeEagerness: eagerness,
+      initiativeEagerness: Math.max(0, Math.min(100, Number(initiative.eagerness) || 0)),
       channelSummaries: guildChannels,
+      pendingThought: pendingThought
+        ? {
+          currentText: pendingThought.currentText,
+          status: pendingThought.status,
+          revision: pendingThought.revision,
+          ageMs: Math.max(0, Date.now() - Number(pendingThought.createdAt || Date.now())),
+          channelName: pendingThought.channelName,
+          lastDecisionReason: pendingThought.lastDecisionReason,
+          mediaDirective: pendingThought.mediaDirective,
+          mediaPrompt: pendingThought.mediaPrompt
+        }
+        : null,
       discoveryCandidates: discoveryResult.candidates,
       sourcePerformance,
       communityInterestFacts,
@@ -994,7 +1310,7 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       channelId: guildChannels[0].channelId,
       userId: runtime.client.user?.id || null,
       source: "initiative_cycle",
-      event: "initiative_post",
+      event: isPendingThoughtPass ? "initiative_pending_thought" : "initiative_post",
       reason: null,
       messageId: null
     };
@@ -1074,18 +1390,44 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       generation.text,
       discoverySettings.maxMediaPromptChars
     );
-    if (decision.parseState === "unstructured" || decision.skip) {
+    if (decision.parseState === "unstructured" || decision.contractViolation) {
       runtime.store.logAction({
         kind: "initiative_skip",
         guildId,
-        channelId: decision.channelId,
+        channelId: pendingThought?.channelId || guildChannels[0]?.channelId || null,
         userId: runtime.client.user?.id || null,
-        content: decision.reason || "skip",
+        content: decision.contractViolationReason || decision.reason || "skip",
         metadata: {
           parseState: decision.parseState,
-          reason: decision.reason || null
+          reason: decision.reason || null,
+          contractViolation: decision.contractViolation,
+          contractViolationReason: decision.contractViolationReason,
+          pendingThoughtId: pendingThought?.id || null
         }
       });
+      return;
+    }
+
+    if (decision.action === "drop" || decision.skip) {
+      if (pendingThought) {
+        clearPendingInitiativeThought(runtime, guildId, {
+          reason: decision.reason || "model_drop",
+          trigger: pendingThought.trigger,
+          now: Date.now()
+        });
+      } else {
+        runtime.store.logAction({
+          kind: "initiative_skip",
+          guildId,
+          channelId: null,
+          userId: runtime.client.user?.id || null,
+          content: decision.reason || "skip",
+          metadata: {
+            parseState: decision.parseState,
+            reason: decision.reason || null
+          }
+        });
+      }
       return;
     }
 
@@ -1103,6 +1445,28 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
 
     const normalizedText = sanitizeBotText(normalizeSkipSentinel(decision.text || ""), 1800);
     if (!normalizedText || normalizedText === "[SKIP]") return;
+
+    if (decision.action === "hold") {
+      const heldMediaDirective: "none" | "image" | "video" | "gif" =
+        decision.mediaDirective === "image" || decision.mediaDirective === "video" || decision.mediaDirective === "gif"
+          ? decision.mediaDirective
+          : "none";
+      savePendingInitiativeThought(runtime, {
+        guildId,
+        channelId: selectedChannel.channelId,
+        channelName: selectedChannel.channelName,
+        trigger: pendingThought?.trigger || "timer",
+        draftText: pendingThought?.draftText || pendingThought?.currentText || normalizedText,
+        thoughtText: normalizedText,
+        mediaDirective: heldMediaDirective,
+        mediaPrompt: decision.mediaPrompt,
+        reason: decision.reason || "hold",
+        minGapMs,
+        existingThought: pendingThought,
+        now: Date.now()
+      });
+      return;
+    }
 
     const mediaMemoryFacts = runtime.buildMediaMemoryFacts({
       userFacts: [],
@@ -1159,6 +1523,7 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     }
 
     runtime.markSpoke();
+    runtime.setPendingInitiativeThought(guildId, null);
     runtime.store.recordMessage({
       messageId: sent.id,
       createdAt: sent.createdTimestamp,
@@ -1193,6 +1558,8 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       content: normalizedText,
       metadata: {
         reason: decision.reason || null,
+        pendingThoughtId: pendingThought?.id || null,
+        pendingThoughtRevision: pendingThought?.revision || null,
         mediaDirective: decision.mediaDirective,
         sourceLabels: [...new Set(
           matchedDiscoveryItems

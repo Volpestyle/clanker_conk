@@ -82,7 +82,7 @@ test("buildInitiativePrompt includes the ambient text spec structure and wording
   assert.equal(prompt.includes("You can request media (image, video, GIF) if the moment calls for it."), true);
   assert.equal(prompt.includes("- discovery_source_add: subscribe to a new subreddit, RSS feed, YouTube channel, or X handle"), true);
   assert.equal(
-    prompt.includes("Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, [SKIP] and stay ambient."),
+    prompt.includes("Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, stay ambient."),
     true
   );
   assert.equal(
