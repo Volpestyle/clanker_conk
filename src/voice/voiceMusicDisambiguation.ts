@@ -539,6 +539,9 @@ export async function maybeHandlePendingMusicDisambiguationTurn(
   if (requestedByUserId && normalizedUserId !== requestedByUserId) {
     return false;
   }
+  if (!host.isVoiceCommandSessionActiveForUser(session, normalizedUserId, { domain: "music" })) {
+    return false;
+  }
   const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!text) return false;
   if (isCancelIntent(text)) {

@@ -25,8 +25,9 @@ The discovery service is now feed infrastructure, not a separate delivery engine
 - The model decides whether to post, what to say, which eligible channel fits, and whether links or media feel natural.
 - Infrastructure decides when to consult the model and what context to provide.
 - Discovery candidates are optional context, not assignments.
-- `initiative.text.eagerness` is a probability gate before the LLM call, not a content rule.
-- The model can always `[SKIP]`.
+- `initiative.text.eagerness` is a probability gate before fresh ambient-thought synthesis, not a content rule.
+- `initiative.text.eagerness` only shapes `AMBIENT` text behavior. Direct-addressed and live `ACTIVE` text turns should use immediate reply admission instead of waiting for the initiative tick.
+- The model can post now, hold a thought for later, or drop it.
 - Shared attention may be informed by voice context, but initiative delivery is still a text action.
 
 ## Runtime Flow
@@ -35,9 +36,10 @@ The runtime flow in `src/bot/initiativeEngine.ts` is:
 
 1. `60s` initiative tick
 2. Deterministic gates
-3. Context assembly
-4. Bounded tool loop
-5. Post delivery or `[SKIP]`
+3. Pending-thought revisit or fresh-thought admission
+4. Context assembly
+5. Bounded tool loop
+6. Post now, hold, or drop
 
 ### 1. Tick
 
@@ -52,8 +54,10 @@ Before the model is consulted for an ambient text thought, the runtime checks:
 - `initiative.text.enabled`
 - eligible channel pool is non-empty
 - daily cap has not been reached
-- minimum gap since the last initiative consideration has passed
-- the eagerness probability roll passed
+- for fresh thoughts: minimum gap since the last initiative consideration has passed
+- for fresh thoughts: the eagerness probability roll passed
+
+Queued ambient thoughts are revisited before the normal fresh-thought cooldown and probability gates so a held thought can be refined, redirected, or dropped instead of starving behind new-random-post spacing.
 
 Canonical settings:
 
@@ -65,9 +69,32 @@ Canonical settings:
 The canonical persisted action history for this cycle is the initiative action log:
 
 - `initiative_post` counts as a surfaced ambient text thought
-- `initiative_skip` starts the same minimum-gap cooldown after the bot looked around and decided to stay quiet
+- `initiative_skip` records ambient quiet decisions and pending-thought lifecycle events
 
-### 3. Context Assembly
+### 3. Pending Thought Queue
+
+The shipped runtime keeps at most one pending ambient text thought per guild in memory.
+
+That pending thought stores:
+
+- the current draft text
+- the originally targeted channel
+- revision count and timestamps
+- the last hold/drop reason
+- the media directive, if any
+- a bounded expiry that is anchored to the original creation time so a thought cannot be held forever
+
+When a pending thought exists, the next eligible tick asks the model what it is thinking right now, with the current queued thought included for continuity. The model can:
+
+- post it now
+- keep holding a refined or replaced version
+- drop it
+
+If the held thought includes an image, video, or GIF plan, that media intent is included again on reconsideration so the next pass can refine the whole thought rather than dropping the media continuity.
+
+A pending thought only blocks fresh ambient synthesis for its own guild. Other guilds remain eligible for fresh ambient consideration on normal cooldown and eagerness terms.
+
+### 4. Context Assembly
 
 When the gates pass, the runtime builds a prompt from:
 
@@ -83,7 +110,7 @@ Stored channel history can include linked voice-transcript rows alongside normal
 
 Discovery context is fetched from `src/services/discovery.ts` and exposed as optional feed material. The model may ignore all of it.
 
-### 4. Bounded Tool Loop
+### 5. Bounded Tool Loop
 
 The initiative call uses the same broad tool philosophy as the reply pipeline, but with tighter budgets.
 
@@ -98,12 +125,13 @@ Tool availability:
 - `memory_search` is available when memory is enabled
 - discovery source-management tools are available only when `initiative.discovery.allowSelfCuration` is true
 
-### 5. Delivery
+### 6. Delivery
 
 The final output can:
 
-- `[SKIP]`
-- post text to a selected eligible channel
+- drop the thought and stay ambient
+- hold a refined thought for later
+- post text to a selected eligible channel now
 - optionally request media generation (`image`, `video`, or `gif`)
 - optionally include discovery links when they feel natural
 
@@ -152,6 +180,7 @@ The shipped ambient-text prompt in `src/prompts/promptText.ts` is structured lik
 
 ```text
 === AMBIENT TEXT MODE ===
+=== YOUR CURRENT THOUGHT ===
 === CHANNELS ===
 === YOUR FEED ===
 === FEED SOURCES ===
@@ -167,15 +196,20 @@ Behavior guidance comes from memory-backed `guidance` and `behavioral` facts.
 
 The prompt explicitly frames this cycle as an ambient text action. Voice-derived transcript lines may still appear in channel summaries when they were persisted into the linked text channel, but they are context only, not a separate voice-delivery path.
 
+When a pending thought exists, the prompt includes `Your current thought: ...` continuity, carries forward any held media intent, and asks the model what it is thinking right now rather than forcing a binary post/skip decision.
+
 ## Relationship To Shared Attention
 
 In the shared attention model:
 
 - direct mentions and active exchanges promote Clanker into `ACTIVE`
+- when text is `ACTIVE`, new turns belong to the immediate text reply path rather than this ambient cycle
 - this ambient text cycle is the current text transport for `AMBIENT`
 - the voice thought engine is the corresponding voice transport for `AMBIENT`
 
 The transports stay different, but the behavioral intent is the same: Clanker is present, occasionally thinks of something worth surfacing, and may still choose silence.
+
+Both transports now ship a lightweight pending-thought queue so an ambient thought can survive long enough to be refined, redirected, or dropped instead of living for only one tick. In voice, room changes such as new speech, joins/leaves, or voice effects can invalidate a queued thought and make the next pass a reconsideration instead of a blind repeat.
 
 ## Settings Reference
 

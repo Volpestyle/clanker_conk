@@ -45,6 +45,29 @@ export type VoiceAddressingState = {
     }>;
 };
 
+export type VoicePendingAmbientThoughtStatus = "queued" | "reconsider";
+
+export interface VoicePendingAmbientThought {
+    id: string;
+    status: VoicePendingAmbientThoughtStatus;
+    trigger: string;
+    draftText: string;
+    currentText: string;
+    createdAt: number;
+    updatedAt: number;
+    basisAt: number;
+    notBeforeAt: number;
+    expiresAt: number;
+    revision: number;
+    lastDecisionReason: string | null;
+    lastDecisionAction: "hold" | "speak_now" | "drop" | null;
+    memoryFactCount: number;
+    usedMemory: boolean;
+    invalidatedAt: number | null;
+    invalidatedByUserId: string | null;
+    invalidationReason?: string | null;
+}
+
 export type VoiceConversationContext = {
     attentionMode: "ACTIVE" | "AMBIENT";
     currentSpeakerActive: boolean;
@@ -767,6 +790,7 @@ export interface VoiceInterruptOverlapBurstState {
     id: number;
     openedAt: number;
     lastTranscriptAt: number;
+    assistantUtteranceText: string;
     quietTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     maxTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     evaluating: boolean;
@@ -1031,6 +1055,7 @@ export interface VoiceSession {
     nextThoughtAt: number;
     lastThoughtAttemptAt: number;
     lastThoughtSpokenAt: number;
+    pendingAmbientThought?: VoicePendingAmbientThought | null;
     userCaptures: Map<string, CaptureState>;
     streamWatch: VoiceSessionStreamWatchState;
     music: VoiceSessionMusicState;

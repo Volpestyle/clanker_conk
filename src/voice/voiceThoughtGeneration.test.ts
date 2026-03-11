@@ -148,7 +148,7 @@ test("evaluateVoiceThoughtDecision returns an allowed decision when the classifi
     async generate() {
       return {
         text: JSON.stringify({
-          allow: true,
+          action: "speak_now",
           finalThought: "[[SOUNDBOARD:airhorn]] keep it moving",
           usedMemory: true,
           reason: "Natural Memory Callback"
@@ -167,13 +167,13 @@ test("evaluateVoiceThoughtDecision returns an allowed decision when the classifi
   });
 
   assert.deepEqual(decision, {
-    allow: true,
+    action: "speak_now",
     reason: "natural_memory_callback",
     finalThought: "keep it moving",
     usedMemory: true,
     memoryFactCount: 1,
     llmResponse:
-      "{\"allow\":true,\"finalThought\":\"[[SOUNDBOARD:airhorn]] keep it moving\",\"usedMemory\":true,\"reason\":\"Natural Memory Callback\"}",
+      "{\"action\":\"speak_now\",\"finalThought\":\"[[SOUNDBOARD:airhorn]] keep it moving\",\"usedMemory\":true,\"reason\":\"Natural Memory Callback\"}",
     llmProvider: "openai",
     llmModel: "gpt-5-mini"
   });
@@ -184,7 +184,7 @@ test("evaluateVoiceThoughtDecision returns a rejected decision when the classifi
     async generate() {
       return {
         text: JSON.stringify({
-          allow: false,
+          action: "drop",
           finalThought: "ignored",
           usedMemory: true,
           reason: "stale callback"
@@ -200,7 +200,7 @@ test("evaluateVoiceThoughtDecision returns a rejected decision when the classifi
     memoryFacts: [{ fact: "Alice loves synthwave" }]
   });
 
-  assert.equal(decision.allow, false);
+  assert.equal(decision.action, "drop");
   assert.equal(decision.reason, "stale_callback");
   assert.equal(decision.finalThought, "");
   assert.equal(decision.usedMemory, false);
@@ -225,7 +225,7 @@ test("evaluateVoiceThoughtDecision reports contract violations when the classifi
   });
 
   assert.deepEqual(decision, {
-    allow: false,
+    action: "drop",
     reason: "llm_contract_violation",
     finalThought: "",
     usedMemory: false,
@@ -234,4 +234,49 @@ test("evaluateVoiceThoughtDecision reports contract violations when the classifi
     llmProvider: "openai",
     llmModel: "gpt-5-mini"
   });
+});
+
+test("generateVoiceThoughtCandidate includes current thought continuity when revisiting a queued thought", async () => {
+  const settings = createTestSettings({});
+  const { host, llmCalls } = createThoughtHost({
+    async generate() {
+      return {
+        text: "still thinking about pigeons",
+        provider: "openai",
+        model: "gpt-5-mini"
+      };
+    }
+  });
+
+  const candidate = await generateVoiceThoughtCandidate(host, {
+    session: createThoughtSession(),
+    settings,
+    trigger: "timer",
+    pendingThought: {
+      id: "thought-1",
+      status: "reconsider",
+      trigger: "timer",
+      draftText: "what if pigeons had rent",
+      currentText: "what if pigeons had rent",
+      createdAt: Date.now() - 20_000,
+      updatedAt: Date.now() - 20_000,
+      basisAt: Date.now() - 20_000,
+      notBeforeAt: 0,
+      expiresAt: Date.now() + 20_000,
+      revision: 2,
+      lastDecisionReason: "felt half-baked",
+      lastDecisionAction: "hold",
+      memoryFactCount: 0,
+      usedMemory: false,
+      invalidatedAt: Date.now() - 2_000,
+      invalidatedByUserId: "user-1",
+      invalidationReason: "member_join"
+    }
+  });
+
+  assert.equal(candidate, "still thinking about pigeons");
+  assert.equal(String(llmCalls[0]?.userPrompt || "").includes("Your current thought: \"what if pigeons had rent\""), true);
+  assert.equal(String(llmCalls[0]?.userPrompt || "").includes("Why you kept it: felt half-baked."), true);
+  assert.equal(String(llmCalls[0]?.userPrompt || "").includes("What changed since then: someone joined the room."), true);
+  assert.equal(String(llmCalls[0]?.userPrompt || "").includes("Question: what are you thinking right now?"), true);
 });

@@ -590,7 +590,30 @@ export function buildVoiceRuntimeSnapshot(
           busy: Boolean(session.thoughtLoopBusy),
           nextAttemptAt: toIsoOrNull(session.nextThoughtAt),
           lastAttemptAt: toIsoOrNull(session.lastThoughtAttemptAt),
-          lastSpokenAt: toIsoOrNull(session.lastThoughtSpokenAt)
+          lastSpokenAt: toIsoOrNull(session.lastThoughtSpokenAt),
+          pendingThought: session.pendingAmbientThought
+            ? {
+              id: String(session.pendingAmbientThought.id || ""),
+              status: session.pendingAmbientThought.status || "queued",
+              text: String(session.pendingAmbientThought.currentText || ""),
+              draftText: String(session.pendingAmbientThought.draftText || ""),
+              trigger: String(session.pendingAmbientThought.trigger || ""),
+              createdAt: toIsoOrNull(session.pendingAmbientThought.createdAt),
+              updatedAt: toIsoOrNull(session.pendingAmbientThought.updatedAt),
+              basisAt: toIsoOrNull(session.pendingAmbientThought.basisAt),
+              notBeforeAt: toIsoOrNull(session.pendingAmbientThought.notBeforeAt),
+              expiresAt: toIsoOrNull(session.pendingAmbientThought.expiresAt),
+              ageMs: Math.max(0, Math.round(now - Number(session.pendingAmbientThought.createdAt || now))),
+              revision: Math.max(1, Number(session.pendingAmbientThought.revision || 1)),
+              lastDecisionReason: session.pendingAmbientThought.lastDecisionReason || null,
+              lastDecisionAction: session.pendingAmbientThought.lastDecisionAction || null,
+              memoryFactCount: Math.max(0, Number(session.pendingAmbientThought.memoryFactCount || 0)),
+              usedMemory: Boolean(session.pendingAmbientThought.usedMemory),
+              invalidatedAt: toIsoOrNull(session.pendingAmbientThought.invalidatedAt),
+              invalidatedByUserId: session.pendingAmbientThought.invalidatedByUserId || null,
+              invalidationReason: session.pendingAmbientThought.invalidationReason || null
+            }
+            : null
         },
         addressing: addressingState,
         modelContext: {

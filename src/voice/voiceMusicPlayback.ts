@@ -2487,6 +2487,37 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     return false;
   }
 
+  if (!musicBrainEnabled && (disambiguationResolutionTurn || controlCommandCandidate)) {
+    clearPendingMusicReplyHandoff(manager, session);
+    logMusicAction(manager, {
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_music_stop_check",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_turn"),
+        captureReason: String(captureReason || "stream_end"),
+        transcript: normalizedTranscript,
+        currentPhase,
+        musicWakeLatched,
+        musicWakeCurrentLatched: currentWakeLatched,
+        musicWakeFollowupEligibleAtCapture: Boolean(musicWakeFollowupEligibleAtCapture),
+        musicWakeLatchedByUserId: latchedUserId,
+        interruptedReplyOwnerFollowup,
+        pausedWakeWordOwnerFollowup,
+        directAddressedToBot,
+        nameCueDetected,
+        disambiguationResolutionTurn,
+        gateDecisionReason,
+        musicBrainEnabled: false,
+        decisionReason: "main_brain_decides"
+      }
+    });
+    return false;
+  }
+
   if (!shouldConsultMusicBrain) {
     clearPendingMusicReplyHandoff(manager, session);
     logMusicAction(manager, {

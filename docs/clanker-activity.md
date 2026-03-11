@@ -1,12 +1,12 @@
 # Clanker Activity Model
 
-> **Scope:** Current shipped mapping from the shared attention model into text and voice behavior.
+> **Scope:** Current shipped mapping from the shared attention contract into text and voice behavior.
 > Shared attention model: [`presence-and-attention.md`](presence-and-attention.md)
 > Unified text initiative cycle: [`initiative-unified-spec.md`](initiative-unified-spec.md)
 > Voice pipeline and stage settings: [`voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
 > Architecture overview: [`technical-architecture.md`](technical-architecture.md)
 
-This document is the source of truth for how the current runtime surfaces one shared conversational attention model through text and voice. It documents the shipped spokes and guardrails, not a giant transport-level finite-state machine.
+This document is the source of truth for how the current runtime surfaces one shared conversational continuity contract through text and voice. It documents the shipped spokes and guardrails, not a giant transport-level finite-state machine.
 
 ### Autonomy Principle
 
@@ -24,10 +24,12 @@ Settings shape context, budgets, and transport. They do not script the bot's cre
 
 The canonical behavioral picture is:
 
-- one shared attention hub with `ACTIVE` and `AMBIENT`
+- one shared continuity contract with `ACTIVE` and `AMBIENT`
 - a text spoke that decides how attention surfaces in channels
 - a voice spoke that decides how attention surfaces in VC
 - orthogonal overlays such as music playback, wake latch, and assistant output lock
+
+What matters operationally is continuity, not a literal central module. Text and voice may read different local signals as long as they preserve the same product contract.
 
 What is currently shipped under that model:
 
@@ -46,6 +48,13 @@ Voice has four shipped surfaces:
 4. `Tool-assisted reply inside the active turn`
 
 Discovery feed items are optional context inside the ambient text surface. Music playback is an overlay on top of attention, not a third attention mode.
+
+At the product level, the desired text split is simple:
+
+- if text attention is `ACTIVE`, new turns should go straight to immediate reply evaluation
+- if text attention is `AMBIENT`, the ambient text thought cycle should own whether Clanker surfaces a follow-up or initiative post
+
+Current shipped text behavior is slightly messier than that ideal because there is still a separate cold ambient reactive reply lane alongside the ambient thought cycle.
 
 ## Text Activity Paths
 
@@ -90,9 +99,10 @@ Behavior:
 
 - this is still a reactive reply path, not ambient cold-start posting
 - `permissions.replies.allowUnsolicitedReplies` still matters
-- `interaction.activity.responseWindowEagerness` controls how sticky the recent-engagement window is
+- `interaction.activity.responseWindowEagerness` controls how wide the recent-message follow-up window is for this text-side active-thread check
 - a conflicting newer human message collapses the turn back to `AMBIENT`
 - the model can still `[SKIP]`
+- this is message-window continuity, not a voice-style real-time timer
 
 Relevant code:
 
@@ -110,6 +120,7 @@ Behavior:
 - `interaction.activity.ambientReplyEagerness` is the admission dial for these cold reactive turns
 - reply-channel membership adds a deterministic admission bonus, but the model still decides whether to speak or `[SKIP]`
 - the model still decides whether to reply or `[SKIP]`
+- this is the main place where current shipped text behavior still goes beyond the cleaner `ACTIVE` immediate-reply vs `AMBIENT` thought-loop split
 
 Relevant code:
 
@@ -125,6 +136,7 @@ Behavior:
 
 - runs on an in-process 60 second tick
 - applies deterministic gates first: enabled, cooldown, daily cap, and eagerness probability
+- `initiative.text.eagerness` belongs to this ambient surface only; it does not gate immediate `ACTIVE` text replies
 - builds context for eligible channels, passive discovery feed items, source performance, and memory
 - gives the model a bounded tool loop
 - the model decides whether to post, which channel fits, whether to use tools, whether to include links, and whether to request media
@@ -186,7 +198,7 @@ Relevant code:
 
 ### 2. Voice Admission Gate
 
-Voice admission is not a separate mind. It is the voice spoke's cost/floor gate on top of shared attention.
+Voice admission is not a separate mind. It is the voice spoke's cost/floor gate informed by the current continuity state.
 
 Voice admission currently has two layers:
 
@@ -202,7 +214,7 @@ Current public surface:
 Runtime behavior:
 
 - `bridge` reply path always behaves as classifier-first, because the text-to-realtime bridge has no native `[SKIP]`
-- `brain` reply path defaults to `generation_decides`
+- `brain` reply path defaults to `generation_decides`, but can optionally use `classifier_gate` as a cost gate before the main brain
 - `native` reply path does not use the text classifier path
 - `voice.conversationPolicy.commandOnlyMode` stays an overlay on top of shared attention: explicit wakeups, direct-address turns, and owned command follow-ups can still enter, but command-only does not create a third attention mode
 - internal runtime labels like `hard_classifier` and `generation_only` are implementation details, not canonical settings names
@@ -269,6 +281,8 @@ Reactive replies and ambient text delivery both respect the text permission surf
 
 `replyChannelIds` is the unified initiative pool. If it is empty, the initiative cycle has no eligible text channels.
 
+Being active in VC can inform text prompt context, but it does not by itself promote unrelated text turns into `ACTIVE`.
+
 ### Voice Scope
 
 Voice session eligibility is controlled separately. Shared attention can span text and voice in the same social context, but transport access is still modality-specific:
@@ -279,6 +293,7 @@ Voice session eligibility is controlled separately. Shared attention can span te
 - `voice.sessionLimits.*`
 
 Text channel permissions do not determine which voice channels the bot may join.
+Likewise, being active in text can inform VC continuity without automatically granting voice floor ownership.
 
 ## Setting Map
 
@@ -286,8 +301,8 @@ Text channel permissions do not determine which voice channels the bot may join.
 
 | Surface | What it controls |
 |---|---|
-| `interaction.activity.ambientReplyEagerness` | Cold ambient text replies when there is no direct address or active follow-up thread |
-| `interaction.activity.responseWindowEagerness` | How sticky shared recent engagement is for text and voice follow-up replies |
+| `interaction.activity.ambientReplyEagerness` | Current shipped cold ambient text-reply admission when there is no direct address or active follow-up thread |
+| `interaction.activity.responseWindowEagerness` | How wide text recent-message follow-up admission is; in voice today it mainly biases follow-up prompting/classification rather than directly changing the runtime recency timer |
 | `interaction.activity.reactivity` | Shared quick reactions such as emoji responses and other lightweight acknowledgements |
 | `voice.conversationPolicy.ambientReplyEagerness` | Ambient voice replies when the bot is in VC but not directly addressed |
 
@@ -304,7 +319,7 @@ Text channel permissions do not determine which voice channels the bot may join.
 | Surface | What it controls |
 |---|---|
 | `initiative.text.enabled` | Master switch for ambient text delivery |
-| `initiative.text.eagerness` | Probability gate before the ambient text LLM call |
+| `initiative.text.eagerness` | Probability gate before the ambient text LLM call; does not govern immediate `ACTIVE` text turns |
 | `initiative.text.minMinutesBetweenPosts` | Minimum gap between ambient text considerations |
 | `initiative.text.maxPostsPerDay` | Daily ambient text budget |
 | `initiative.text.lookbackMessages` | Per-channel context window size |

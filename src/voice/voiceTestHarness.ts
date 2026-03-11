@@ -90,7 +90,7 @@ export function createVoiceTestSettings(overrides: VoiceTestSettingsOverrides = 
         replyPath: "brain"
       },
       admission: {
-        mode: "classifier_gate"
+        mode: "generation_decides"
       }
     }
   };

@@ -9,6 +9,7 @@ import type { DeferredActionQueue } from "./deferredActionQueue.ts";
 import type { TurnProcessor } from "./turnProcessor.ts";
 import type {
   MusicPlaybackPhase,
+  VoicePendingAmbientThought,
   VoiceSession
 } from "./voiceSessionTypes.ts";
 import { musicPhaseIsActive } from "./voiceSessionTypes.ts";
@@ -30,7 +31,7 @@ interface ThoughtTopicalityBias {
 }
 
 interface VoiceThoughtDecision {
-  allow: boolean;
+  action: "speak_now" | "hold" | "drop";
   reason: string;
   finalThought?: string | null;
   memoryFactCount?: number;
@@ -85,6 +86,7 @@ export interface ThoughtEngineHost {
     settings: ThoughtSettings;
     config: ThoughtConfigLike;
     trigger?: string;
+    pendingThought?: VoicePendingAmbientThought | null;
   }) => Promise<string>;
   loadVoiceThoughtMemoryFacts: (args: {
     session: VoiceSession;
@@ -97,6 +99,7 @@ export interface ThoughtEngineHost {
     thoughtCandidate: string;
     memoryFacts: unknown[];
     topicalityBias: ThoughtTopicalityBias;
+    pendingThought?: VoicePendingAmbientThought | null;
   }) => Promise<VoiceThoughtDecision>;
   deliverVoiceThoughtCandidate: (args: {
     session: VoiceSession;
@@ -121,6 +124,205 @@ export class ThoughtEngine {
       session.thoughtLoopTimer = null;
     }
     session.nextThoughtAt = 0;
+  }
+
+  private getPendingAmbientThought(session: VoiceSession | null | undefined) {
+    const pendingThought = session?.pendingAmbientThought;
+    if (!pendingThought || typeof pendingThought !== "object") return null;
+    const currentText = normalizeVoiceText(pendingThought.currentText || "", VOICE_THOUGHT_MAX_CHARS);
+    if (!currentText) return null;
+    return {
+      ...pendingThought,
+      draftText: normalizeVoiceText(pendingThought.draftText || currentText, VOICE_THOUGHT_MAX_CHARS) || currentText,
+      currentText,
+      invalidationReason: String(pendingThought.invalidationReason || "").trim() || null
+    } satisfies VoicePendingAmbientThought;
+  }
+
+  private clearPendingAmbientThought(
+    session: VoiceSession,
+    {
+      reason = "cleared",
+      now = Date.now(),
+      trigger = "timer"
+    }: {
+      reason?: string;
+      now?: number;
+      trigger?: string;
+    } = {}
+  ) {
+    const pendingThought = this.getPendingAmbientThought(session);
+    session.pendingAmbientThought = null;
+    if (!pendingThought) return null;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.botUserId,
+      content: "voice_pending_thought_cleared",
+      metadata: {
+        sessionId: session.id,
+        trigger,
+        reason,
+        thoughtId: pendingThought.id,
+        thoughtText: pendingThought.currentText,
+        thoughtRevision: pendingThought.revision,
+        ageMs: Math.max(0, Math.round(now - Number(pendingThought.createdAt || now)))
+      }
+    });
+    return pendingThought;
+  }
+
+  private resolvePendingThoughtRevisitDelayMs(config: ThoughtConfigLike) {
+    const minIntervalMs = Math.max(1_000, Math.round(Number(config.minSecondsBetweenThoughts || 0) * 1_000));
+    return Math.max(1_500, Math.min(minIntervalMs, 10_000));
+  }
+
+  private resolvePendingThoughtExpiryMs(config: ThoughtConfigLike) {
+    const minIntervalMs = Math.max(1_000, Math.round(Number(config.minSecondsBetweenThoughts || 0) * 1_000));
+    return Math.max(60_000, minIntervalMs * 4);
+  }
+
+  private resolvePendingThoughtExpiryAt(
+    existingThought: VoicePendingAmbientThought | null,
+    config: ThoughtConfigLike,
+    now = Date.now()
+  ) {
+    const createdAt = Number(existingThought?.createdAt || now);
+    const boundedExpiryAt = createdAt + this.resolvePendingThoughtExpiryMs(config);
+    const previousExpiryAt = Number(existingThought?.expiresAt || 0);
+    return previousExpiryAt > 0 ? Math.min(previousExpiryAt, boundedExpiryAt) : boundedExpiryAt;
+  }
+
+  private pendingThoughtIsExpired(
+    pendingThought: VoicePendingAmbientThought | null | undefined,
+    config: ThoughtConfigLike,
+    now = Date.now()
+  ) {
+    if (!pendingThought) return false;
+    const expiresAt = this.resolvePendingThoughtExpiryAt(pendingThought, config, now);
+    return expiresAt > 0 && now >= expiresAt;
+  }
+
+  private upsertPendingAmbientThought({
+    session,
+    config,
+    now = Date.now(),
+    trigger = "timer",
+    thoughtDraft = "",
+    thoughtText = "",
+    decision
+  }: {
+    session: VoiceSession;
+    config: ThoughtConfigLike;
+    now?: number;
+    trigger?: string;
+    thoughtDraft: string;
+    thoughtText: string;
+    decision: VoiceThoughtDecision;
+  }) {
+    const existingThought = this.getPendingAmbientThought(session);
+    const normalizedDraft = normalizeVoiceText(thoughtDraft, VOICE_THOUGHT_MAX_CHARS);
+    const normalizedThought = normalizeVoiceText(thoughtText, VOICE_THOUGHT_MAX_CHARS);
+    if (!normalizedThought) {
+      return this.clearPendingAmbientThought(session, {
+        reason: "empty_hold_thought",
+        now,
+        trigger
+      });
+    }
+    const expiresAt = this.resolvePendingThoughtExpiryAt(existingThought, config, now);
+    if (expiresAt <= now) {
+      return this.clearPendingAmbientThought(session, {
+        reason: "expired",
+        now,
+        trigger
+      });
+    }
+    const nextThought: VoicePendingAmbientThought = {
+      id: existingThought?.id || `${session.id}:thought:${now.toString(36)}`,
+      status: "queued",
+      trigger: String(trigger || existingThought?.trigger || "timer"),
+      draftText: normalizedDraft || existingThought?.draftText || normalizedThought,
+      currentText: normalizedThought,
+      createdAt: existingThought?.createdAt || now,
+      updatedAt: now,
+      basisAt: now,
+      notBeforeAt: now + this.resolvePendingThoughtRevisitDelayMs(config),
+      expiresAt,
+      revision: existingThought ? Math.max(1, Number(existingThought.revision || 1)) + 1 : 1,
+      lastDecisionReason: String(decision.reason || "").trim() || null,
+      lastDecisionAction: "hold",
+      memoryFactCount: Math.max(0, Number(decision.memoryFactCount || 0)),
+      usedMemory: Boolean(decision.usedMemory),
+      invalidatedAt: null,
+      invalidatedByUserId: null,
+      invalidationReason: null
+    };
+    session.pendingAmbientThought = nextThought;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.botUserId,
+      content: existingThought ? "voice_pending_thought_updated" : "voice_pending_thought_created",
+      metadata: {
+        sessionId: session.id,
+        trigger,
+        thoughtId: nextThought.id,
+        thoughtText: nextThought.currentText,
+        draftText: nextThought.draftText,
+        thoughtRevision: nextThought.revision,
+        notBeforeAt: new Date(nextThought.notBeforeAt).toISOString(),
+        expiresAt: new Date(nextThought.expiresAt).toISOString(),
+        reason: nextThought.lastDecisionReason,
+        usedMemory: nextThought.usedMemory,
+        memoryFactCount: nextThought.memoryFactCount
+      }
+    });
+    return nextThought;
+  }
+
+  private resolveNextLoopDelayMs({
+    session,
+    config,
+    now = Date.now()
+  }: {
+    session: VoiceSession;
+    config: ThoughtConfigLike;
+    now?: number;
+  }) {
+    const pendingThought = this.getPendingAmbientThought(session);
+    if (pendingThought) {
+      return Math.max(200, Number(pendingThought.notBeforeAt || now) - now);
+    }
+    return Math.max(200, Math.round(Number(config.minSecondsBetweenThoughts || 0) * 1_000));
+  }
+
+  markPendingAmbientThoughtStale(
+    session: VoiceSession | null | undefined,
+    {
+      userId = null,
+      reason = "room_activity",
+      now = Date.now()
+    }: {
+      userId?: string | null;
+      reason?: string;
+      now?: number;
+    } = {}
+  ) {
+    const pendingThought = this.getPendingAmbientThought(session);
+    if (!session || !pendingThought) return false;
+    session.pendingAmbientThought = {
+      ...pendingThought,
+      status: "reconsider",
+      updatedAt: now,
+      basisAt: now,
+      invalidatedAt: now,
+      invalidatedByUserId: String(userId || "").trim() || null,
+      invalidationReason: String(reason || "").trim() || pendingThought.invalidationReason || null
+    };
+    return true;
   }
 
   scheduleVoiceThoughtLoop({
@@ -247,13 +449,24 @@ export class ThoughtEngine {
       };
     }
 
-    const sinceLastAttemptMs = Math.max(0, now - Number(session.lastThoughtAttemptAt || 0));
-    if (sinceLastAttemptMs < minIntervalMs) {
+    const pendingThought = this.getPendingAmbientThought(session);
+    const pendingThoughtNotBeforeMs = Math.max(0, Number(pendingThought?.notBeforeAt || 0) - now);
+    if (pendingThought && pendingThoughtNotBeforeMs > 0) {
       return {
         allow: false,
-        reason: "thought_attempt_cooldown",
-        retryAfterMs: Math.max(300, minIntervalMs - sinceLastAttemptMs)
+        reason: "pending_thought_backoff",
+        retryAfterMs: Math.max(300, pendingThoughtNotBeforeMs)
       };
+    }
+    if (!pendingThought) {
+      const sinceLastAttemptMs = Math.max(0, now - Number(session.lastThoughtAttemptAt || 0));
+      if (sinceLastAttemptMs < minIntervalMs) {
+        return {
+          allow: false,
+          reason: "thought_attempt_cooldown",
+          retryAfterMs: Math.max(300, minIntervalMs - sinceLastAttemptMs)
+        };
+      }
     }
 
     const conversationContext = this.host.buildVoiceConversationContext({
@@ -360,6 +573,16 @@ export class ThoughtEngine {
       return false;
     }
 
+    const loopStartedAt = Date.now();
+    const pendingThoughtBeforeGate = this.getPendingAmbientThought(session);
+    if (this.pendingThoughtIsExpired(pendingThoughtBeforeGate, thoughtConfig, loopStartedAt)) {
+      this.clearPendingAmbientThought(session, {
+        reason: "expired",
+        now: loopStartedAt,
+        trigger
+      });
+    }
+
     const gate = this.evaluateVoiceThoughtLoopGate({
       session,
       settings: resolvedSettings,
@@ -374,10 +597,12 @@ export class ThoughtEngine {
       return false;
     }
 
+    const pendingThought = this.getPendingAmbientThought(session);
+    const isPendingThoughtPass = Boolean(pendingThought);
     const thoughtChance = clamp(Number(thoughtConfig?.eagerness) || 0, 0, 100) / 100;
     const now = Date.now();
     session.lastThoughtAttemptAt = now;
-    if (thoughtChance <= 0) {
+    if (!isPendingThoughtPass && thoughtChance <= 0) {
       this.scheduleVoiceThoughtLoop({
         session,
         settings: resolvedSettings,
@@ -387,7 +612,7 @@ export class ThoughtEngine {
     }
 
     const roll = Math.random();
-    if (roll > thoughtChance) {
+    if (!isPendingThoughtPass && roll > thoughtChance) {
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -416,9 +641,21 @@ export class ThoughtEngine {
         session,
         settings: resolvedSettings,
         config: thoughtConfig,
-        trigger
+        trigger,
+        pendingThought
       });
-      if (!thoughtDraft) {
+      const normalizedThoughtDraft = normalizeVoiceText(
+        thoughtDraft || pendingThought?.currentText || "",
+        VOICE_THOUGHT_MAX_CHARS
+      );
+      if (!normalizedThoughtDraft) {
+        if (pendingThought) {
+          this.clearPendingAmbientThought(session, {
+            reason: "pending_thought_evaporated",
+            now,
+            trigger
+          });
+        }
         this.store.logAction({
           kind: "voice_runtime",
           guildId: session.guildId,
@@ -428,7 +665,9 @@ export class ThoughtEngine {
           metadata: {
             sessionId: session.id,
             mode: session.mode,
-            trigger: String(trigger || "timer")
+            trigger: String(trigger || "timer"),
+            hadPendingThought: isPendingThoughtPass,
+            pendingThoughtId: pendingThought?.id || null
           }
         });
         return false;
@@ -437,7 +676,7 @@ export class ThoughtEngine {
       const thoughtMemoryFacts = await this.host.loadVoiceThoughtMemoryFacts({
         session,
         settings: resolvedSettings,
-        thoughtCandidate: thoughtDraft
+        thoughtCandidate: normalizedThoughtDraft
       });
       const thoughtTopicalityBias = this.host.resolveVoiceThoughtTopicalityBias({
         silenceMs: Math.max(0, Date.now() - Number(session.lastActivityAt || 0)),
@@ -447,9 +686,10 @@ export class ThoughtEngine {
       const decision = await this.host.evaluateVoiceThoughtDecision({
         session,
         settings: resolvedSettings,
-        thoughtCandidate: thoughtDraft,
+        thoughtCandidate: normalizedThoughtDraft,
         memoryFacts: thoughtMemoryFacts,
-        topicalityBias: thoughtTopicalityBias
+        topicalityBias: thoughtTopicalityBias,
+        pendingThought
       });
       this.store.logAction({
         kind: "voice_runtime",
@@ -461,9 +701,13 @@ export class ThoughtEngine {
           sessionId: session.id,
           mode: session.mode,
           trigger: String(trigger || "timer"),
-          allow: Boolean(decision.allow),
+          action: decision.action,
+          allow: decision.action === "speak_now",
           reason: decision.reason,
-          thoughtDraft,
+          hadPendingThought: isPendingThoughtPass,
+          pendingThoughtId: pendingThought?.id || null,
+          pendingThoughtRevision: pendingThought?.revision || null,
+          thoughtDraft: normalizedThoughtDraft,
           finalThought: decision.finalThought || null,
           memoryFactCount: Number(decision.memoryFactCount || 0),
           usedMemory: Boolean(decision.usedMemory),
@@ -477,12 +721,38 @@ export class ThoughtEngine {
           error: decision.error || null
         }
       });
-      if (!decision.allow) return false;
       const finalThought = normalizeVoiceText(
-        decision.finalThought || thoughtDraft,
+        decision.finalThought || normalizedThoughtDraft,
         VOICE_THOUGHT_MAX_CHARS
       );
-      if (!finalThought) return false;
+      if (decision.action === "drop") {
+        this.clearPendingAmbientThought(session, {
+          reason: decision.reason || "llm_drop",
+          now,
+          trigger
+        });
+        return false;
+      }
+      if (!finalThought) {
+        this.clearPendingAmbientThought(session, {
+          reason: "empty_final_thought",
+          now,
+          trigger
+        });
+        return false;
+      }
+      if (decision.action === "hold") {
+        this.upsertPendingAmbientThought({
+          session,
+          config: thoughtConfig,
+          now,
+          trigger,
+          thoughtDraft: normalizedThoughtDraft,
+          thoughtText: finalThought,
+          decision
+        });
+        return false;
+      }
 
       const spoken = await this.host.deliverVoiceThoughtCandidate({
         session,
@@ -491,7 +761,27 @@ export class ThoughtEngine {
         trigger
       });
       if (spoken) {
-        session.lastThoughtSpokenAt = Date.now();
+        const deliveredAt = Date.now();
+        session.lastThoughtSpokenAt = deliveredAt;
+        this.clearPendingAmbientThought(session, {
+          reason: "spoken",
+          now: deliveredAt,
+          trigger
+        });
+      } else {
+        this.upsertPendingAmbientThought({
+          session,
+          config: thoughtConfig,
+          now: Date.now(),
+          trigger,
+          thoughtDraft: normalizedThoughtDraft,
+          thoughtText: finalThought,
+          decision: {
+            ...decision,
+            action: "hold",
+            reason: "delivery_failed"
+          }
+        });
       }
       return spoken;
     } catch (error) {
@@ -513,7 +803,11 @@ export class ThoughtEngine {
       this.scheduleVoiceThoughtLoop({
         session,
         settings: resolvedSettings,
-        delayMs: thoughtConfig.minSecondsBetweenThoughts * 1000
+        delayMs: this.resolveNextLoopDelayMs({
+          session,
+          config: thoughtConfig,
+          now: Date.now()
+        })
       });
     }
   }

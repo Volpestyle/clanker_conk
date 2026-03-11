@@ -35,7 +35,10 @@ import {
   VOICE_THOUGHT_MAX_CHARS,
   VOICE_THOUGHT_MEMORY_SEARCH_LIMIT
 } from "./voiceSessionManager.constants.ts";
-import type { VoiceSession } from "./voiceSessionTypes.ts";
+import type {
+  VoicePendingAmbientThought,
+  VoiceSession
+} from "./voiceSessionTypes.ts";
 
 type ThoughtSettings = Record<string, unknown> | null;
 
@@ -60,7 +63,7 @@ export interface VoiceThoughtTopicalityBias {
 }
 
 export interface VoiceThoughtDecision {
-  allow: boolean;
+  action: "speak_now" | "hold" | "drop";
   reason: string;
   finalThought: string;
   memoryFactCount: number;
@@ -170,6 +173,25 @@ function collectSessionGuidanceFacts(session: VoiceSession) {
   });
 }
 
+function describePendingThoughtInvalidationReason(reason: string | null | undefined) {
+  const normalizedReason = String(reason || "").trim().toLowerCase();
+  if (!normalizedReason) return null;
+  switch (normalizedReason) {
+    case "new_user_turn":
+      return "someone new spoke";
+    case "member_join":
+      return "someone joined the room";
+    case "member_leave":
+      return "someone left the room";
+    case "voice_effect":
+      return "someone fired off a voice effect";
+    case "room_activity":
+      return "the room shifted";
+    default:
+      return normalizedReason.replace(/_/g, " ");
+  }
+}
+
 export function resolveVoiceThoughtEngineConfig(settings: ThoughtSettings = null): VoiceThoughtEngineConfig {
   const thoughtEngine = getVoiceInitiativeSettings(settings);
   const binding = getResolvedVoiceInitiativeBinding(settings);
@@ -206,12 +228,14 @@ export async function generateVoiceThoughtCandidate(
     session,
     settings,
     config,
-    trigger = "timer"
+    trigger = "timer",
+    pendingThought = null
   }: {
     session: VoiceSession;
     settings: ThoughtSettings;
     config?: VoiceThoughtEngineConfig | null;
     trigger?: string;
+    pendingThought?: VoicePendingAmbientThought | null;
   }
 ) {
   if (!session || session.ending) return "";
@@ -228,13 +252,28 @@ export async function generateVoiceThoughtCandidate(
     minSecondsBetweenThoughts: thoughtConfig.minSecondsBetweenThoughts
   });
   const guidanceFacts = collectSessionGuidanceFacts(session);
+  const normalizedPendingThought = pendingThought && typeof pendingThought === "object"
+    ? {
+      currentText: normalizeVoiceText(pendingThought.currentText || "", VOICE_THOUGHT_MAX_CHARS),
+      status: pendingThought.status === "reconsider" ? "reconsider" : "queued",
+      revision: Math.max(1, Number(pendingThought.revision || 1)),
+      ageMs: Math.max(0, Math.round(Date.now() - Number(pendingThought.createdAt || Date.now()))),
+      lastDecisionReason: String(pendingThought.lastDecisionReason || "").trim() || null,
+      invalidationReason: String(pendingThought.invalidationReason || "").trim() || null,
+      invalidatedAt: Number(pendingThought.invalidatedAt || 0) || null
+    }
+    : null;
   const systemPrompt = [
     buildSystemPrompt(settings),
     "You are speaking in live Discord voice chat.",
     ...buildVoiceToneGuardrails(),
     "=== AUTONOMOUS THOUGHT MODE ===",
-    "Nobody is speaking to you right now. You are deciding whether to say something on your own initiative.",
-    "Draft exactly one short natural spoken line that might fit right now — or output exactly [SKIP] if silence is better.",
+    normalizedPendingThought
+      ? "Nobody is speaking to you right now. You are checking back in with an ambient thought you have been holding."
+      : "Nobody is speaking to you right now. You are deciding whether to say something on your own initiative.",
+    normalizedPendingThought
+      ? "Answer the question: what are you thinking right now? Return exactly one short natural spoken line that captures your current thought, or exactly [SKIP] if the thought has faded."
+      : "Draft exactly one short natural spoken line that might fit right now — or output exactly [SKIP] if silence is better.",
     "As silence grows, rely less on old-topic callbacks and more on fresh standalone lines.",
     "When topic tether is low, avoid stale references that require shared context (vague that/they/it callbacks).",
     "No markdown, no quotes, no meta commentary."
@@ -250,6 +289,26 @@ export async function generateVoiceThoughtCandidate(
     `Topic drift guidance: ${topicalityBias.promptHint}`,
     "Goal: seed a light initiative line that can keep conversation moving without forcing it."
   ];
+  if (normalizedPendingThought?.currentText) {
+    userPromptParts.push(`Your current thought: "${normalizedPendingThought.currentText}"`);
+    userPromptParts.push(`Current thought status: ${normalizedPendingThought.status}.`);
+    userPromptParts.push(`Current thought revision: ${normalizedPendingThought.revision}.`);
+    userPromptParts.push(`Current thought age ms: ${normalizedPendingThought.ageMs}.`);
+    if (normalizedPendingThought.lastDecisionReason) {
+      userPromptParts.push(`Why you kept it: ${normalizedPendingThought.lastDecisionReason}.`);
+    }
+    if (normalizedPendingThought.invalidatedAt) {
+      const invalidationReason = describePendingThoughtInvalidationReason(
+        normalizedPendingThought.invalidationReason
+      );
+      userPromptParts.push(
+        invalidationReason
+          ? `What changed since then: ${invalidationReason}. Refresh it instead of clinging to stale context.`
+          : "Something happened in the room after you formed that thought. Refresh it instead of clinging to stale context."
+      );
+    }
+    userPromptParts.push("Question: what are you thinking right now?");
+  }
   if (recentHistory) {
     userPromptParts.push(`Recent voice turns:\n${recentHistory}`);
   }
@@ -362,19 +421,21 @@ export async function evaluateVoiceThoughtDecision(
     settings,
     thoughtCandidate,
     memoryFacts = [],
-    topicalityBias = null
+    topicalityBias = null,
+    pendingThought = null
   }: {
     session: VoiceSession;
     settings: ThoughtSettings;
     thoughtCandidate: string;
     memoryFacts?: ThoughtMemoryRow[];
     topicalityBias?: VoiceThoughtTopicalityBias | null;
+    pendingThought?: VoicePendingAmbientThought | null;
   }
 ): Promise<VoiceThoughtDecision> {
   const normalizedThought = normalizeVoiceText(thoughtCandidate, VOICE_THOUGHT_MAX_CHARS);
   if (!normalizedThought) {
     return {
-      allow: false,
+      action: "drop",
       reason: "empty_thought_candidate",
       finalThought: "",
       usedMemory: false,
@@ -384,7 +445,7 @@ export async function evaluateVoiceThoughtDecision(
 
   if (!host.llm?.generate) {
     return {
-      allow: false,
+      action: "drop",
       reason: "llm_generate_unavailable",
       finalThought: "",
       usedMemory: false,
@@ -412,22 +473,35 @@ export async function evaluateVoiceThoughtDecision(
   const ambientMemory = formatRealtimeMemoryFacts(ambientMemoryFacts, VOICE_THOUGHT_MEMORY_SEARCH_LIMIT);
   const guidanceFacts = collectSessionGuidanceFacts(session);
   const behaviorGuidance = formatRealtimeMemoryFacts(guidanceFacts, 8);
+  const normalizedPendingThought = pendingThought && typeof pendingThought === "object"
+    ? {
+      currentText: normalizeVoiceText(pendingThought.currentText || "", VOICE_THOUGHT_MAX_CHARS),
+      status: pendingThought.status === "reconsider" ? "reconsider" : "queued",
+      revision: Math.max(1, Number(pendingThought.revision || 1)),
+      ageMs: Math.max(0, Math.round(Date.now() - Number(pendingThought.createdAt || Date.now()))),
+      lastDecisionReason: String(pendingThought.lastDecisionReason || "").trim() || null,
+      invalidationReason: String(pendingThought.invalidationReason || "").trim() || null,
+      invalidatedAt: Number(pendingThought.invalidatedAt || 0) || null
+    }
+    : null;
 
   const systemPrompt = [
     buildSystemPrompt(settings),
     "You are speaking in live Discord voice chat.",
     ...buildVoiceToneGuardrails(),
-    "=== THOUGHT REFINEMENT MODE ===",
-    "You drafted an autonomous thought to say during a lull. Now decide: should you actually say it?",
-    "Return strict JSON with keys: allow (boolean), finalThought (string), usedMemory (boolean), reason (string).",
-    "If allow is true, finalThought must contain one short spoken line. You may refine the draft — reword it, sharpen it, make it more you.",
-    "If allow is false, finalThought must be an empty string.",
+    "=== THOUGHT QUEUE MODE ===",
+    "You are deciding what to do with an ambient thought during a lull in live voice chat.",
+    "Return strict JSON with keys: action (\"speak_now\"|\"hold\"|\"drop\"), finalThought (string), usedMemory (boolean), reason (string).",
+    "If action is \"speak_now\", finalThought must contain one short spoken line you would actually say now.",
+    "If action is \"hold\", finalThought must contain one short line that captures the thought you want to keep holding for later. It can be refined, replaced, or tightened.",
+    "If action is \"drop\", finalThought must be an empty string.",
+    "Prefer hold over speak_now when the thought has potential but the timing is not quite right yet.",
+    "Prefer drop over clinging to a stale, awkward, or dead thought.",
     "You may weave in a memory fact only when it feels natural and additive.",
-    "Prefer allow=false over saying something forced or awkward.",
     "No markdown, no extra keys."
   ].join("\n");
   const userPromptParts = [
-    `Draft thought: "${normalizedThought}"`,
+    `Thought candidate right now: "${normalizedThought}"`,
     `Thought eagerness: ${thoughtEagerness}/100.`,
     `Current human participant count: ${participants.length || 0}.`,
     `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
@@ -436,8 +510,27 @@ export async function evaluateVoiceThoughtDecision(
     `Topic drift phase: ${resolvedTopicalityBias.phase}.`,
     `Topic drift guidance: ${resolvedTopicalityBias.promptHint}`,
     `Final thought hard max chars: ${VOICE_THOUGHT_MAX_CHARS}.`,
-    "Decision rule: allow only when saying the final line now would feel natural and additive."
+    "Decision rule: choose speak_now only when saying the final line now would feel natural and additive. Choose hold when the thought is still alive but better saved for later."
   ];
+  if (normalizedPendingThought?.currentText) {
+    userPromptParts.push(`Your current thought before this pass: "${normalizedPendingThought.currentText}"`);
+    userPromptParts.push(`Current thought status: ${normalizedPendingThought.status}.`);
+    userPromptParts.push(`Current thought revision: ${normalizedPendingThought.revision}.`);
+    userPromptParts.push(`Current thought age ms: ${normalizedPendingThought.ageMs}.`);
+    if (normalizedPendingThought.lastDecisionReason) {
+      userPromptParts.push(`Why you kept it: ${normalizedPendingThought.lastDecisionReason}.`);
+    }
+    if (normalizedPendingThought.invalidatedAt) {
+      const invalidationReason = describePendingThoughtInvalidationReason(
+        normalizedPendingThought.invalidationReason
+      );
+      userPromptParts.push(
+        invalidationReason
+          ? `What changed since then: ${invalidationReason}. Re-check whether it still fits.`
+          : "New room activity happened after you formed that thought. Re-check whether it still fits."
+      );
+    }
+  }
   if (participants.length) {
     userPromptParts.push(`Participant names: ${participants.slice(0, 12).join(", ")}.`);
   }
@@ -466,9 +559,12 @@ export async function evaluateVoiceThoughtDecision(
       jsonSchema: JSON.stringify({
         type: "object",
         additionalProperties: false,
-        required: ["allow", "finalThought", "usedMemory", "reason"],
+        required: ["action", "finalThought", "usedMemory", "reason"],
         properties: {
-          allow: { type: "boolean" },
+          action: {
+            type: "string",
+            enum: ["speak_now", "hold", "drop"]
+          },
           finalThought: {
             type: "string",
             maxLength: VOICE_THOUGHT_MAX_CHARS
@@ -491,7 +587,7 @@ export async function evaluateVoiceThoughtDecision(
     const parsed = parseVoiceThoughtDecisionContract(raw);
     if (!parsed.confident) {
       return {
-        allow: false,
+        action: "drop",
         reason: "llm_contract_violation",
         finalThought: "",
         usedMemory: false,
@@ -505,9 +601,9 @@ export async function evaluateVoiceThoughtDecision(
       extractSoundboardDirective(parsed.finalThought || "").text,
       VOICE_THOUGHT_MAX_CHARS
     );
-    if (parsed.allow && (!sanitizedThought || sanitizedThought === "[SKIP]")) {
+    if (parsed.action !== "drop" && (!sanitizedThought || sanitizedThought === "[SKIP]")) {
       return {
-        allow: false,
+        action: "drop",
         reason: "llm_contract_violation",
         finalThought: "",
         usedMemory: false,
@@ -522,11 +618,19 @@ export async function evaluateVoiceThoughtDecision(
       .toLowerCase()
       .replace(/[^\w.-]+/g, "_")
       .slice(0, 80);
+    const parsedAction: "speak_now" | "hold" | "drop" =
+      parsed.action === "speak_now" || parsed.action === "hold" ? parsed.action : "drop";
     return {
-      allow: parsed.allow,
-      reason: parsedReason || (parsed.allow ? "llm_allow" : "llm_deny"),
-      finalThought: parsed.allow ? sanitizedThought || "" : "",
-      usedMemory: parsed.allow ? Boolean(parsed.usedMemory) : false,
+      action: parsedAction,
+      reason: parsedReason || (
+        parsedAction === "speak_now"
+          ? "llm_speak_now"
+          : parsedAction === "hold"
+            ? "llm_hold"
+            : "llm_drop"
+      ),
+      finalThought: parsedAction === "drop" ? "" : sanitizedThought || "",
+      usedMemory: parsedAction === "drop" ? false : Boolean(parsed.usedMemory),
       memoryFactCount: ambientMemoryFacts.length,
       llmResponse: raw,
       llmProvider: generation?.provider || llmProvider,
@@ -534,7 +638,7 @@ export async function evaluateVoiceThoughtDecision(
     };
   } catch (error) {
     return {
-      allow: false,
+      action: "drop",
       reason: "llm_error",
       finalThought: "",
       usedMemory: false,

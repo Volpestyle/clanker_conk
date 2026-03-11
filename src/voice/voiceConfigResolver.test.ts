@@ -379,7 +379,7 @@ describe("shouldUseRealtimeTranscriptBridge", () => {
     assert.equal(result, true);
   });
 
-  test("keeps the transcript bridge enabled even if legacy bridge settings request API TTS", () => {
+  test("keeps the transcript bridge enabled for bridge replies even when TTS mode is api", () => {
     const settings = createVoiceSettings({
       replyPath: "bridge",
       ttsMode: "api"

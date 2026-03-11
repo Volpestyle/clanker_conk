@@ -11,6 +11,7 @@ import {
   resolveVoiceReplyDecisionMaxOutputTokens
 } from "./voiceDecisionRuntime.ts";
 import {
+  VOICE_INTERRUPT_CLASSIFIER_TIMEOUT_MS,
   STT_REPLY_MAX_CHARS,
   STT_TRANSCRIPT_MAX_CHARS
 } from "./voiceSessionManager.constants.ts";
@@ -55,6 +56,7 @@ type InterruptClassifierHost = {
         userId?: string | null;
         source?: string | null;
       };
+      signal?: AbortSignal;
     }) => Promise<InterruptClassifierGenerateResult>;
   } | null;
 };
@@ -99,7 +101,7 @@ function isLikelyLowSignalOverlapText(text: string) {
     .trim();
   if (!normalized) return true;
   if (isLikelyLaughterToken(normalized)) return true;
-  if (/^(?:mm+|mhm+|mhmm+|uh+|uh huh|uhhuh|uh-huh|yeah+|yep+|ya+|ok(?:ay)?|right+|true+|damn+|bro+|crazy+|wild+|woah+|wow+|yo+)(?:\s+(?:mm+|mhm+|yeah+|ok(?:ay)?|right+|true+|damn+|bro+|crazy+|wild+|woah+|wow+|yo+))*$/u.test(normalized)) {
+  if (/^(?:mm+|mhm+|mhmm+|uh+|uh huh|uhhuh|uh-huh|yeah+|yep+|ya+|ok(?:ay)?|right+|true+|damn+|bro+|woah+|wow+)(?:\s+(?:mm+|mhm+|yeah+|ok(?:ay)?|right+|true+|damn+|bro+|woah+|wow+))*$/u.test(normalized)) {
     return true;
   }
   return countTokens(normalized) <= 2 && normalized.length <= 12;
@@ -253,6 +255,13 @@ export async function classifyVoiceInterruptBurst(
   }
 
   const startedAt = Date.now();
+  const abortController = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout =
+    abortController
+      ? setTimeout(() => {
+        abortController.abort(new Error("voice_interrupt_classifier_timeout"));
+      }, VOICE_INTERRUPT_CLASSIFIER_TIMEOUT_MS)
+      : null;
   try {
     const result = await host.llm.generate({
       settings: applyOrchestratorOverrideSettings(settings, {
@@ -270,7 +279,8 @@ export async function classifyVoiceInterruptBurst(
         channelId: session.textChannelId,
         userId: traceUserId,
         source: "voice_interrupt_classifier"
-      }
+      },
+      signal: abortController?.signal
     });
     const rawOutput = String(result?.text || "");
     const decision = parseInterruptDecision(rawOutput);
@@ -293,24 +303,34 @@ export async function classifyVoiceInterruptBurst(
     };
   } catch (error) {
     const message = String(error?.message || error || "unknown_error");
+    const timedOut =
+      Boolean(abortController?.signal.aborted) &&
+      message.includes("voice_interrupt_classifier_timeout");
     host.store?.logAction?.({
       kind: "voice_error",
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: traceUserId,
-      content: `voice_interrupt_classifier_failed: ${message}`,
+      content: timedOut
+        ? "voice_interrupt_classifier_timed_out"
+        : `voice_interrupt_classifier_failed: ${message}`,
       metadata: {
         sessionId: session.id,
-        burstEntryCount: normalizedEntries.length
+        burstEntryCount: normalizedEntries.length,
+        timeoutMs: timedOut ? VOICE_INTERRUPT_CLASSIFIER_TIMEOUT_MS : undefined
       }
     });
     return {
       decision: hasClearlySemanticBurst(normalizedEntries) ? "interrupt" : "ignore",
-      source: "runtime_error_fallback",
+      source: timedOut ? "timeout_fallback" : "runtime_error_fallback",
       latencyMs: Date.now() - startedAt,
       promptLog,
       error: message
     };
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 

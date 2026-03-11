@@ -98,14 +98,14 @@ function formatApproxBytes(bytes: number | null | undefined): string {
 
 function resolveWakeIndicator(session: VoiceSession): {
   active: boolean;
-  stateLabel: "Awake" | "Listening";
+  stateLabel: "Active" | "Ambient";
 } {
   const wake = session.conversation?.wake || null;
   if (wake && typeof wake === "object") {
     const active = Boolean(wake.active);
     return {
       active,
-      stateLabel: active ? "Awake" : "Listening"
+      stateLabel: active ? "Active" : "Ambient"
     };
   }
 
@@ -120,7 +120,7 @@ function resolveWakeIndicator(session: VoiceSession): {
     (msSinceDirectAddress != null && msSinceDirectAddress <= WAKE_WINDOW_FALLBACK_MS);
   return {
     active,
-    stateLabel: active ? "Awake" : "Listening"
+    stateLabel: active ? "Active" : "Ambient"
   };
 }
 
@@ -1305,9 +1305,9 @@ function SessionCard({ session }: { session: VoiceSession }) {
 
       {/* Turn state indicators */}
       <div className="vm-turn-state">
-        <span
-          className={`vm-ts-pill ${
-            wakeIndicator.active ? "vm-ts-wake-awake" : "vm-ts-wake-listening"
+          <span
+            className={`vm-ts-pill ${
+            wakeIndicator.active ? "vm-ts-wake-active" : "vm-ts-wake-ambient"
           }`}
         >
           Wake: {wakeIndicator.stateLabel}

@@ -302,14 +302,15 @@ That shared path performs the admission decision, addressing normalization, clas
 | 7 | Command-only + not addressed outside the latch window | deny |
 | 8 | Music playing + wake latch inactive | deny |
 | 9 | Native realtime path | allow (`"native_realtime"`) |
-| 10 | Text/full-brain path with `generation_decides` | allow |
-| 11 | Text/full-brain path with `classifier_gate` | classifier YES/NO |
+| 10 | Brain path after deterministic gates, generation-owned mode | allow (`"generation_decides"`) |
+| 11 | Brain classifier mode after deterministic gates | classifier YES/NO |
+| 12 | Bridge path after deterministic gates | classifier YES/NO |
 
 Direct address feeds classifier/generation context and arms the music wake latch when music is active. Fresh wake-word turns pause active music immediately; while music is still `paused_wake_word`, ordinary follow-ups stay owned by that wake-word speaker. Once wake-word-paused music resumes after assistant playback drains, the renewed latch lets brief follow-ups continue without another wake word. For ordinary replies spoken over already-playing music, the passive latch refreshes after assistant speech actually settles so the follow-up window is not consumed while buffered reply audio is still draining. Post-resume latch-open follow-ups snapshot that eligibility when the capture promotes, so a turn that started inside the window is still admitted even if finalization lands just after expiry. Those wake-word and latch-open conversational turns now go straight to the main reply brain. If the dedicated music brain is enabled, it only sits in front of compact playback-control/disambiguation turns: exact single-word controls like `pause` or `skip` use an immediate fast path, and fuzzier control phrasing can still be consumed by the mini model with music tools. If the dedicated music brain is disabled, even those control/disambiguation turns go straight to the main reply brain, which can ignore them with `[SKIP]`, answer normally, or use `music_reply_handoff` for temporary pause/duck floor control. In the shared attention model, this stage is the voice spoke's floor gate, not a separate conversational mind. Canonical music semantics live in [`music.md`](music.md). Eagerness `0` still flows through the admission prompt and classifier/generation outcome rather than acting as a standalone deny.
 
 The live voice prompt now relies on deterministic direct-address and interruption context, not the older best-effort `"current speaker likely talking to"` hints derived from transcript history. Room-addressing guesses remain infrastructure metadata until reply-side addressing is produced explicitly.
 
-For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO LLM call when the canonical admission mode is `classifier_gate`. The classifier token budget is provider-aware: OpenAI Responses bindings use at least `16` output tokens, and the GPT-5 family uses `64`, because smaller caps are rejected by the API.
+For turns that survive deterministic gates, `runVoiceReplyClassifier()` runs whenever the effective admission mode resolves to classifier-first. `bridge` always resolves that way because it has no native `[SKIP]`. `brain` can opt into the same classifier-first cost gate with `classifier_gate`, while `generation_decides` keeps brain turns generation-owned. `native` stays generation-owned and does not use this text classifier path. The classifier token budget is provider-aware: OpenAI Responses bindings use at least `16` output tokens, and the GPT-5 family uses `64`, because smaller caps are rejected by the API.
 
 ## 14. Reply Dispatch (Three Mutually Exclusive Paths)
 

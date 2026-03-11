@@ -49,6 +49,26 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       nextThoughtAt: now + 12_000,
       lastThoughtAttemptAt: now - 6_000,
       lastThoughtSpokenAt: now - 12_000,
+      pendingAmbientThought: {
+        id: "thought-1",
+        status: "reconsider",
+        trigger: "timer",
+        draftText: "what if pigeons had rent",
+        currentText: "what if pigeons had rent",
+        createdAt: now - 15_000,
+        updatedAt: now - 2_000,
+        basisAt: now - 2_000,
+        notBeforeAt: now + 5_000,
+        expiresAt: now + 45_000,
+        revision: 2,
+        lastDecisionReason: "felt half-baked",
+        lastDecisionAction: "hold",
+        memoryFactCount: 1,
+        usedMemory: false,
+        invalidatedAt: now - 2_000,
+        invalidatedByUserId: "user-1",
+        invalidationReason: "new_user_turn"
+      },
       recentVoiceTurns: [
         { role: "user", speakerName: "Alice", text: "hey bot", at: now - 2_000 }
       ],
@@ -505,6 +525,27 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
     assert.equal(realtime?.conversation.wake.windowMs, 35_000);
     assert.equal(realtime?.pendingDeferredTurns, 2);
     assert.equal(realtime?.recentTurns[0]?.addressing?.directedConfidence, 1);
+    assert.deepEqual(realtime?.conversation.thoughtEngine.pendingThought, {
+      id: "thought-1",
+      status: "reconsider",
+      text: "what if pigeons had rent",
+      draftText: "what if pigeons had rent",
+      trigger: "timer",
+      createdAt: "2026-03-06T17:59:45.000Z",
+      updatedAt: "2026-03-06T17:59:58.000Z",
+      basisAt: "2026-03-06T17:59:58.000Z",
+      notBeforeAt: "2026-03-06T18:00:05.000Z",
+      expiresAt: "2026-03-06T18:00:45.000Z",
+      ageMs: 15_000,
+      revision: 2,
+      lastDecisionReason: "felt half-baked",
+      lastDecisionAction: "hold",
+      memoryFactCount: 1,
+      usedMemory: false,
+      invalidatedAt: "2026-03-06T17:59:58.000Z",
+      invalidatedByUserId: "user-1",
+      invalidationReason: "new_user_turn"
+    });
     assert.deepEqual(realtime?.durableContext, [
       {
         text: "Alice likes concise answers",

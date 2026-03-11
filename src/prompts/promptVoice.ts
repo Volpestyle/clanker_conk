@@ -507,6 +507,16 @@ export function buildVoiceTurnPrompt({
       }
     }
 
+    const normalizedAttentionMode = String(normalizedConversationContext.attentionMode || "").trim().toUpperCase();
+    if (normalizedConversationContext.currentSpeakerActive) {
+      recencyLines.push("This speaker is part of your current live thread.");
+    } else if (normalizedAttentionMode === "ACTIVE") {
+      recencyLines.push("You are generally engaged in the room, but this speaker is not clearly part of your current thread.");
+    } else {
+      recencyLines.push("You do not currently have an active thread with this speaker.");
+    }
+    recencyLines.push("Use room continuity as context, not as a reason to force yourself into the turn.");
+
     if (
       normalizedConversationContext.activeCommandSpeaker &&
       !normalizedConversationContext.currentSpeakerActive

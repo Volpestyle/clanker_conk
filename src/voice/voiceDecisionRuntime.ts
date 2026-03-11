@@ -242,7 +242,7 @@ export function parseVoiceThoughtDecisionContract(rawText) {
   const normalized = String(rawText || "").trim();
   if (!normalized) {
     return {
-      allow: false,
+      action: "drop",
       confident: false,
       finalThought: "",
       usedMemory: false,
@@ -262,13 +262,24 @@ export function parseVoiceThoughtDecisionContract(rawText) {
   try {
     const parsedJson = JSON.parse(unwrapped);
     if (parsedJson && typeof parsedJson === "object" && !Array.isArray(parsedJson)) {
-      const allowValue = parseAllowValue(
-        parsedJson.allow ??
-          parsedJson.decision ??
-          parsedJson.answer ??
-          parsedJson.value
-      );
-      if (allowValue !== null) {
+      const rawAction = String(parsedJson.action || "")
+        .trim()
+        .toLowerCase();
+      const action: "speak_now" | "hold" | "drop" | null =
+        rawAction === "speak_now" || rawAction === "hold" || rawAction === "drop"
+          ? rawAction
+          : (() => {
+            const allowValue = parseAllowValue(
+              parsedJson.allow ??
+                parsedJson.decision ??
+                parsedJson.answer ??
+                parsedJson.value
+            );
+            if (allowValue === true) return "speak_now";
+            if (allowValue === false) return "drop";
+            return null;
+          })();
+      if (action) {
         const finalThoughtValue =
           typeof parsedJson.finalThought === "string"
             ? parsedJson.finalThought
@@ -285,7 +296,7 @@ export function parseVoiceThoughtDecisionContract(rawText) {
             ? usedMemoryValue
             : /^(true|yes|1)$/i.test(String(usedMemoryValue || "").trim());
         return {
-          allow: allowValue,
+          action,
           confident: true,
           finalThought: String(finalThoughtValue || "").trim(),
           usedMemory,
@@ -300,7 +311,7 @@ export function parseVoiceThoughtDecisionContract(rawText) {
   const tokenMatch = unwrapped.match(/^\s*(YES|NO)\b/i);
   if (!tokenMatch) {
     return {
-      allow: false,
+      action: "drop",
       confident: false,
       finalThought: "",
       usedMemory: false,
@@ -308,7 +319,8 @@ export function parseVoiceThoughtDecisionContract(rawText) {
     };
   }
 
-  const allow = String(tokenMatch[1] || "").toUpperCase() === "YES";
+  const action: "speak_now" | "drop" =
+    String(tokenMatch[1] || "").toUpperCase() === "YES" ? "speak_now" : "drop";
   let remainder = unwrapped.slice(tokenMatch[0].length).trim();
   remainder = remainder.replace(/^[:-]\s*/, "");
   let usedMemory = false;
@@ -326,9 +338,9 @@ export function parseVoiceThoughtDecisionContract(rawText) {
   }
 
   return {
-    allow,
+    action,
     confident: true,
-    finalThought: allow ? remainder : "",
+    finalThought: action === "speak_now" ? remainder : "",
     usedMemory,
     reason
   };

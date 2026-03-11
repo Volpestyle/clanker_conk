@@ -327,12 +327,12 @@
   color: #fb923c;
 }
 
-.vm-ts-wake-awake {
+.vm-ts-wake-active {
   background: rgba(74, 222, 128, 0.12);
   color: #4ade80;
 }
 
-.vm-ts-wake-listening {
+.vm-ts-wake-ambient {
   background: rgba(148, 163, 184, 0.16);
   color: #94a3b8;
 }

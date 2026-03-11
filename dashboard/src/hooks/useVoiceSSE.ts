@@ -73,8 +73,8 @@ export type GenerationContextSnapshot = {
   isEagerTurn: boolean;
   contextMessages: { role: string; content: string }[];
   conversationContext: {
-    engagementState?: string;
-    engaged?: boolean;
+    attentionMode?: "ACTIVE" | "AMBIENT" | string;
+    currentSpeakerActive?: boolean;
     streamWatchBrainContext?: string[];
     addressing?: { talkingTo?: string | null; confidence?: number } | null;
     [key: string]: unknown;
@@ -215,10 +215,9 @@ export type VoiceSession = {
     lastDirectAddressAt: string | null;
     lastDirectAddressUserId: string | null;
     wake: {
-      state: "awake" | "listening" | string;
+      attentionMode: "ACTIVE" | "AMBIENT" | string;
       active: boolean;
-      engagementState: string;
-      engagedWithCurrentSpeaker: boolean;
+      currentSpeakerActive: boolean;
       recentAssistantReply: boolean;
       recentDirectAddress: boolean;
       msSinceAssistantReply: number | null;

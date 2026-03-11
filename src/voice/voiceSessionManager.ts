@@ -179,6 +179,7 @@ import {
   STT_REPLY_MAX_CHARS,
   STT_TRANSCRIPT_MAX_CHARS,
   VOICE_INTERRUPT_BURST_MAX_MS,
+  VOICE_INTERRUPT_BURST_FINAL_QUIET_GAP_MS,
   VOICE_INTERRUPT_BURST_QUIET_GAP_MS,
   VOICE_INTERRUPT_DECISION_TTL_MS,
   VOICE_CHANNEL_EFFECT_EVENT_FRESH_MS,
@@ -2782,13 +2783,15 @@ export class VoiceSessionManager {
     session,
     settings,
     config,
-    trigger = "timer"
+    trigger = "timer",
+    pendingThought = null
   }) {
     return generateVoiceThoughtCandidateModule(this, {
       session,
       settings,
       config,
-      trigger
+      trigger,
+      pendingThought
     });
   }
 
@@ -2809,14 +2812,16 @@ export class VoiceSessionManager {
     settings,
     thoughtCandidate,
     memoryFacts = [],
-    topicalityBias = null
+    topicalityBias = null,
+    pendingThought = null
   }) {
     return evaluateVoiceThoughtDecisionModule(this, {
       session,
       settings,
       thoughtCandidate,
       memoryFacts,
-      topicalityBias
+      topicalityBias,
+      pendingThought
     });
   }
 
@@ -4204,7 +4209,9 @@ export class VoiceSessionManager {
     const result = await classifyVoiceInterruptBurst(this, {
       session,
       settings,
-      interruptedUtteranceText: this.resolveCurrentInterruptibleUtteranceText(session),
+      interruptedUtteranceText:
+        normalizeVoiceText(burst.assistantUtteranceText || "", STT_REPLY_MAX_CHARS) ||
+        this.resolveCurrentInterruptibleUtteranceText(session),
       entries: burst.entries,
       traceUserId
     });
@@ -4344,6 +4351,7 @@ export class VoiceSessionManager {
         id: nextBurstId,
         openedAt: Date.now(),
         lastTranscriptAt: Date.now(),
+        assistantUtteranceText: this.resolveCurrentInterruptibleUtteranceText(session),
         quietTimer: null,
         maxTimer: null,
         evaluating: false,
@@ -4374,6 +4382,9 @@ export class VoiceSessionManager {
       burst.utteranceIds.push(normalizedUtteranceId);
     }
     burst.lastTranscriptAt = Date.now();
+    if (!burst.assistantUtteranceText) {
+      burst.assistantUtteranceText = this.resolveCurrentInterruptibleUtteranceText(session);
+    }
 
     decisions.set(normalizedUtteranceId, {
       transcript: normalizedTranscript,
@@ -4386,9 +4397,12 @@ export class VoiceSessionManager {
     if (burst.quietTimer) {
       clearTimeout(burst.quietTimer);
     }
+    const quietDelayMs = isFinal
+      ? VOICE_INTERRUPT_BURST_FINAL_QUIET_GAP_MS
+      : VOICE_INTERRUPT_BURST_QUIET_GAP_MS;
     burst.quietTimer = setTimeout(() => {
       void this.resolveInterruptOverlapBurst(session, "quiet_gap");
-    }, VOICE_INTERRUPT_BURST_QUIET_GAP_MS);
+    }, quietDelayMs);
     if (!burst.maxTimer) {
       burst.maxTimer = setTimeout(() => {
         void this.resolveInterruptOverlapBurst(session, "max_window");
@@ -5388,6 +5402,13 @@ export class VoiceSessionManager {
       modelTurnEntry
     ].slice(-VOICE_DECIDER_HISTORY_MAX_TURNS);
     this.appendTranscriptTimelineEntry(session, transcriptTurnEntry);
+    if (normalizedRole === "user") {
+      this.thoughtEngine.markPendingAmbientThoughtStale(session, {
+        userId: normalizedUserId,
+        reason: "new_user_turn",
+        now: nextAt
+      });
+    }
     if (normalizedRole === "assistant") {
       this.persistAssistantVoiceTimelineTurn(session, normalizedTranscriptText, nextAt);
     }
@@ -6059,6 +6080,14 @@ export class VoiceSessionManager {
     });
     if (!eventRow) return;
 
+    if (String(eventRow.userId || "").trim() && String(eventRow.userId || "").trim() !== String(this.client.user?.id || "").trim()) {
+      this.thoughtEngine.markPendingAmbientThoughtStale(session, {
+        userId: eventRow.userId,
+        reason: "voice_effect",
+        now: eventRow.at
+      });
+    }
+
     this.store.logAction({
       kind: "voice_runtime",
       guildId,
@@ -6449,6 +6478,11 @@ export class VoiceSessionManager {
           displayName: stateMember?.displayName || stateMember?.user?.globalName || stateMember?.user?.username || ""
         });
         if (recordedEvent) {
+          this.thoughtEngine.markPendingAmbientThoughtStale(session, {
+            userId: recordedEvent.userId,
+            reason: recordedEvent.eventType === "join" ? "member_join" : "member_leave",
+            now: recordedEvent.at
+          });
           this.store.logAction({
             kind: "voice_runtime",
             guildId,

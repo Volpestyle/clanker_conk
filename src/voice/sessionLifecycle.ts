@@ -409,6 +409,7 @@ export class SessionLifecycle {
     if (!session) return;
     this.host.clearVoiceThoughtLoopTimer(session);
     session.thoughtLoopBusy = false;
+    session.pendingAmbientThought = null;
     session.pendingResponse = null;
     session.fileAsrTurnDrainActive = false;
     session.pendingFileAsrTurnsQueue = [];

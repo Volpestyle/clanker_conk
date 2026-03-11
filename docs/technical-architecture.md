@@ -43,7 +43,7 @@ At a high level:
 1. settings are loaded and normalized
 2. Discord events and schedulers enter `src/bot.ts`
 3. shared conversational attention is shaped by direct address, recent engagement, and ambient cadence
-4. text replies, ambient text delivery, automations, and voice sessions route into their domain handlers
+4. active text turns route into immediate reply admission, ambient text falls through to the initiative cycle, and voice sessions route into their domain handlers
 5. the LLM/tool layer is consulted only after deterministic guardrails pass
 6. actions and messages are persisted back into SQLite and memory logs
 
@@ -137,6 +137,7 @@ Normalization responsibilities:
 - clamp numeric ranges
 - sanitize lists and strings
 - normalize incoming settings into canonical nested fields
+- rewrite persisted legacy preset/admission aliases into canonical JSON during store bootstrap
 - apply preset defaults when canonical fields are absent
 
 Dashboard save semantics:
@@ -237,7 +238,7 @@ The runtime splits responsibility like this:
 
 The model decides:
 
-- whether to post
+- whether to post now, hold a thought for later, or drop it
 - which eligible channel fits
 - whether to use tools
 - whether to include links

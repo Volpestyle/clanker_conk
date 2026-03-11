@@ -759,6 +759,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         nextThoughtAt: 0,
         lastThoughtAttemptAt: 0,
         lastThoughtSpokenAt: 0,
+        pendingAmbientThought: null,
         userCaptures: new Map(),
         streamWatch: {
           active: false,

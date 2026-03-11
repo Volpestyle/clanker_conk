@@ -689,17 +689,6 @@ test("shouldBargeIn blocks all interruptions when reply targets ALL", () => {
   assert.equal(result.allowed, false);
 });
 
-test("normalizeReplyInterruptionPolicy rejects legacy all scope without speaker id", () => {
-  const { manager } = createManager();
-
-  const result = manager.normalizeReplyInterruptionPolicy({
-    assertive: true,
-    scope: "all"
-  });
-
-  assert.equal(result, null);
-});
-
 test("resolveReplyInterruptionPolicy applies speaker fallback for normal replies when configured", () => {
   const { manager } = createManager();
   const session = createSession({
@@ -4558,7 +4547,7 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
   };
   manager.generateVoiceThoughtCandidate = async () => "did you know octopuses have three hearts";
   manager.evaluateVoiceThoughtDecision = async () => ({
-    allow: true,
+    action: "speak_now",
     reason: "llm_yes"
   });
   let delivered = 0;
@@ -4580,6 +4569,86 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
     assert.equal(session.lastThoughtSpokenAt > 0, true);
     assert.equal(scheduledDelays.length, 1);
     assert.equal(scheduledDelays[0], 20_000);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("maybeRunVoiceThoughtLoop can hold and revisit a pending ambient thought", async () => {
+  const { manager } = createManager();
+  const now = Date.now();
+  const settings = createTestSettings({
+    botName: "clanker conk",
+    initiative: {
+      voice: {
+        enabled: true,
+        eagerness: 100,
+        minSilenceSeconds: 20,
+        minSecondsBetweenThoughts: 20
+      }
+    }
+  });
+  const session = createSession({
+    mode: "openai_realtime",
+    lastActivityAt: now - 25_000,
+    settingsSnapshot: settings
+  });
+
+  const scheduledDelays = [];
+  manager.thoughtEngine.scheduleVoiceThoughtLoop = ({ delayMs }) => {
+    scheduledDelays.push(delayMs);
+  };
+  manager.generateVoiceThoughtCandidate = async ({ pendingThought }) =>
+    pendingThought ? "actually the octopus fact is better now" : "did you know octopuses have three hearts";
+
+  let decisionPass = 0;
+  manager.evaluateVoiceThoughtDecision = async () => {
+    decisionPass += 1;
+    if (decisionPass === 1) {
+      return {
+        action: "hold",
+        reason: "almost_there",
+        finalThought: "did you know octopuses have three hearts"
+      };
+    }
+    return {
+      action: "speak_now",
+      reason: "ready_now",
+      finalThought: "actually the octopus fact is better now"
+    };
+  };
+
+  let delivered = 0;
+  manager.deliverVoiceThoughtCandidate = async () => {
+    delivered += 1;
+    return true;
+  };
+
+  const originalRandom = Math.random;
+  Math.random = () => 0.01;
+  try {
+    const firstRun = await manager.thoughtEngine.maybeRunVoiceThoughtLoop({
+      session,
+      settings,
+      trigger: "test"
+    });
+    assert.equal(firstRun, false);
+    assert.equal(session.pendingAmbientThought?.currentText, "did you know octopuses have three hearts");
+    assert.equal(session.pendingAmbientThought?.revision, 1);
+    assert.equal(Number(scheduledDelays[0]) >= 9_900 && Number(scheduledDelays[0]) <= 10_000, true);
+
+    session.lastActivityAt = Date.now() - 25_000;
+    if (session.pendingAmbientThought) {
+      session.pendingAmbientThought.notBeforeAt = 0;
+    }
+    const secondRun = await manager.thoughtEngine.maybeRunVoiceThoughtLoop({
+      session,
+      settings,
+      trigger: "test"
+    });
+    assert.equal(secondRun, true);
+    assert.equal(delivered, 1);
+    assert.equal(session.pendingAmbientThought ?? null, null);
   } finally {
     Math.random = originalRandom;
   }
@@ -4972,6 +5041,13 @@ test("maybeHandleMusicTextSelectionRequest routes numeric disambiguation picks",
   manager.sessions.set(
     "guild-1",
     createSession({
+      voiceCommandState: {
+        userId: "user-1",
+        domain: "music",
+        intent: "music_disambiguation",
+        startedAt: Date.now(),
+        expiresAt: Date.now() + 10_000
+      },
       music: {
         pendingQuery: "all caps",
         pendingPlatform: "auto",
@@ -5237,6 +5313,7 @@ test("reconcileSettings ends blocked sessions and touches allowed sessions", asy
 
 test("handleVoiceStateUpdate records join/leave membership events and refreshes realtime instructions", async () => {
   const { manager, logs } = createManager();
+  const now = Date.now();
   const refreshCalls = [];
   manager.instructionManager.scheduleRealtimeInstructionRefresh = (payload) => {
     refreshCalls.push(payload);
@@ -5244,7 +5321,27 @@ test("handleVoiceStateUpdate records join/leave membership events and refreshes 
 
   const session = createSession({
     mode: "openai_realtime",
-    membershipEvents: []
+    membershipEvents: [],
+    pendingAmbientThought: {
+      id: "thought-1",
+      status: "queued",
+      trigger: "timer",
+      draftText: "save the octopus fact",
+      currentText: "save the octopus fact",
+      createdAt: now - 30_000,
+      updatedAt: now - 30_000,
+      basisAt: now - 30_000,
+      notBeforeAt: now + 5_000,
+      expiresAt: now + 60_000,
+      revision: 1,
+      lastDecisionReason: "felt half-baked",
+      lastDecisionAction: "hold",
+      memoryFactCount: 0,
+      usedMemory: false,
+      invalidatedAt: null,
+      invalidatedByUserId: null,
+      invalidationReason: null
+    }
   });
   manager.sessions.set("guild-1", session);
 
@@ -5307,6 +5404,66 @@ test("handleVoiceStateUpdate records join/leave membership events and refreshes 
   assert.equal(membershipLogs.length, 2);
   assert.equal(membershipLogs[0]?.metadata?.eventType, "join");
   assert.equal(membershipLogs[1]?.metadata?.eventType, "leave");
+  assert.equal(session.pendingAmbientThought?.status, "reconsider");
+  assert.equal(session.pendingAmbientThought?.lastDecisionReason, "felt half-baked");
+  assert.equal(session.pendingAmbientThought?.invalidationReason, "member_leave");
+  assert.equal(session.pendingAmbientThought?.invalidatedByUserId, "user-2");
+});
+
+test("handleVoiceChannelEffectSend marks a pending ambient thought stale without erasing its hold reason", async () => {
+  const { manager, logs } = createManager();
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    pendingAmbientThought: {
+      id: "thought-1",
+      status: "queued",
+      trigger: "timer",
+      draftText: "drop the cursed rimshot line later",
+      currentText: "drop the cursed rimshot line later",
+      createdAt: now - 30_000,
+      updatedAt: now - 30_000,
+      basisAt: now - 30_000,
+      notBeforeAt: now + 5_000,
+      expiresAt: now + 60_000,
+      revision: 1,
+      lastDecisionReason: "felt half-baked",
+      lastDecisionAction: "hold",
+      memoryFactCount: 0,
+      usedMemory: false,
+      invalidatedAt: null,
+      invalidatedByUserId: null,
+      invalidationReason: null
+    }
+  });
+  manager.sessions.set("guild-1", session);
+
+  await manager.handleVoiceChannelEffectSend({
+    guild: {
+      id: "guild-1",
+      members: {
+        cache: new Map([
+          ["user-2", { displayName: "bob" }]
+        ])
+      }
+    },
+    channelId: "voice-1",
+    userId: "user-2",
+    soundId: "sound-1",
+    soundboardSound: {
+      name: "rimshot"
+    },
+    soundVolume: 0.5,
+    emoji: null,
+    animationType: null,
+    animationId: null
+  });
+
+  assert.equal(session.pendingAmbientThought?.status, "reconsider");
+  assert.equal(session.pendingAmbientThought?.lastDecisionReason, "felt half-baked");
+  assert.equal(session.pendingAmbientThought?.invalidationReason, "voice_effect");
+  assert.equal(session.pendingAmbientThought?.invalidatedByUserId, "user-2");
+  assert.equal(logs.some((entry) => entry?.content === "voice_channel_effect_send"), true);
 });
 
 test("dispose detaches handlers and clears join locks", async () => {

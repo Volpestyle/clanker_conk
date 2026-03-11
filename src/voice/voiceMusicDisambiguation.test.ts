@@ -548,3 +548,31 @@ test("maybeHandlePendingMusicDisambiguationTurn rejects hallucinated LLM selecti
   assert.equal(handled, false);
   assert.equal(requestPlayCalls.length, 0);
 });
+
+test("maybeHandlePendingMusicDisambiguationTurn requires an active music command session", async () => {
+  const promptContext = {
+    active: true,
+    query: "minecraft music",
+    platform: "youtube",
+    action: "play_now",
+    requestedByUserId: "user-1",
+    options: OPTIONS
+  };
+  const { host, requestPlayCalls, clearMusicDisambiguationSessions, clearVoiceCommandSessions } =
+    createDisambiguationHost({
+      promptContext,
+      isVoiceCommandSessionActive: false
+    });
+
+  const handled = await maybeHandlePendingMusicDisambiguationTurn(host, {
+    session: createSession(),
+    settings: createTestSettings({}),
+    userId: "user-1",
+    transcript: "2"
+  });
+
+  assert.equal(handled, false);
+  assert.equal(requestPlayCalls.length, 0);
+  assert.equal(clearMusicDisambiguationSessions.length, 0);
+  assert.equal(clearVoiceCommandSessions.length, 0);
+});

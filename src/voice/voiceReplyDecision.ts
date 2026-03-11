@@ -720,7 +720,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     };
   }
 
-  // Bridge mode: hard classifier gate
+  // Classifier-first admission for bridge and optional full-brain classifier mode.
   const commonFields = {
     participantCount,
     directAddressed,
@@ -862,7 +862,7 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
     parts.push(`Transcript: "${input.transcript}"`);
   }
 
-  parts.push(`Shared attention: ${input.conversationContext.attentionMode === "ACTIVE" ? "ACTIVE" : "AMBIENT"}.`);
+  parts.push(`Current room continuity state: ${input.conversationContext.attentionMode === "ACTIVE" ? "ACTIVE" : "AMBIENT"}.`);
   if (normalizedInputKind !== "event") {
     if (input.conversationContext.currentSpeakerActive) {
       parts.push("Current speaker is already in your active thread.");
@@ -872,6 +872,7 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
       parts.push("Current speaker is not currently in an active thread with you.");
     }
   }
+  parts.push("Treat this as continuity context, not an automatic yes.");
 
   // Conversation recency
   if (input.conversationContext.recentAssistantReply) {

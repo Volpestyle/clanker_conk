@@ -82,7 +82,7 @@ test("runVoiceReplyClassifier emits debug prompt/result logs when VOICE_CLASSIFI
     assert.equal(result.replyPrompts.hiddenByDefault, true);
     assert.match(String(result.replyPrompts.systemPrompt || ""), /Return exactly YES or NO/i);
     assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Transcript: "Yo\."/);
-    assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Shared attention: AMBIENT\./);
+    assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Current room continuity state: AMBIENT\./);
     assert.match(
       String(result.replyPrompts.initialUserPrompt || ""),
       /Current speaker is not currently in an active thread with you\./
@@ -127,7 +127,7 @@ test("runVoiceReplyClassifier does not emit debug logs when VOICE_CLASSIFIER_DEB
   }
 });
 
-test("runVoiceReplyClassifier uses an OpenAI-safe token floor for native realtime presets", async () => {
+test("runVoiceReplyClassifier uses an OpenAI-safe token floor for bridge admission presets", async () => {
   const { manager, generateCalls } = createClassifierTestContext("YES");
   const result = await runVoiceReplyClassifier(manager, {
     ...buildClassifierArgs(),
@@ -136,6 +136,9 @@ test("runVoiceReplyClassifier uses an OpenAI-safe token floor for native realtim
         preset: "openai_native_realtime"
       },
       voice: {
+        conversationPolicy: {
+          replyPath: "bridge"
+        },
         admission: {
           mode: "classifier_gate"
         }

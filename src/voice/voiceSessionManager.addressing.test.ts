@@ -94,6 +94,55 @@ function baseSettings(overrides: Record<string, unknown> = {}) {
   return createCanonicalVoiceTestSettings(deepMerge(normalizedLegacy, canonicalOverrides));
 }
 
+function bridgeSettings(overrides: Record<string, unknown> = {}) {
+  return baseSettings(deepMerge({
+    voice: {
+      conversationPolicy: {
+        replyPath: "bridge"
+      },
+      admission: {
+        mode: "classifier_gate"
+      }
+    }
+  }, overrides));
+}
+
+function brainGenerationSettings(overrides: Record<string, unknown> = {}) {
+  return baseSettings(
+    deepMerge(
+      {
+        voice: {
+          conversationPolicy: {
+            replyPath: "brain"
+          },
+          admission: {
+            mode: "generation_decides"
+          }
+        }
+      },
+      overrides
+    )
+  );
+}
+
+function brainClassifierSettings(overrides: Record<string, unknown> = {}) {
+  return baseSettings(
+    deepMerge(
+      {
+        voice: {
+          conversationPolicy: {
+            replyPath: "brain"
+          },
+          admission: {
+            mode: "classifier_gate"
+          }
+        }
+      },
+      overrides
+    )
+  );
+}
+
 test("reply decider blocks turns when transcript is missing", async () => {
   const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -119,14 +168,7 @@ test("reply decider keeps representative low-signal turns on the generation path
       throw new Error("classifier should stay out of these low-signal cases");
     }
   });
-  const settings = baseSettings({
-    voice: {
-      admission: {
-        mode: "generation_decides"
-      }
-    }
-  });
-  settings.voice.admission.mode = "generation_decides";
+  const settings = brainGenerationSettings();
 
   const cases = [
     {
@@ -180,14 +222,7 @@ test("reply decider keeps greeting-like turns on the generation path across fres
       throw new Error("classifier should stay out of greeting soft-admission cases");
     }
   });
-  const settings = baseSettings({
-    voice: {
-      admission: {
-        mode: "generation_decides"
-      }
-    }
-  });
-  settings.voice.admission.mode = "generation_decides";
+  const settings = brainGenerationSettings();
 
   const cases = [
     {
@@ -232,14 +267,7 @@ test("reply decider keeps recent-context soft followups on generation_decides", 
       throw new Error("classifier should stay out of recent-context soft followups");
     }
   });
-  const settings = baseSettings({
-    voice: {
-      admission: {
-        mode: "generation_decides"
-      }
-    }
-  });
-  settings.voice.admission.mode = "generation_decides";
+  const settings = brainGenerationSettings();
 
   const cases = [
     {
@@ -292,7 +320,7 @@ test("reply decider keeps recent-context soft followups on generation_decides", 
   }
 });
 
-test("reply decider allows direct wake-word pings via classifier with directAddressed hint", async () => {
+test("reply decider allows direct wake-word pings via the bridge classifier with directAddressed hint", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -309,7 +337,7 @@ test("reply decider allows direct wake-word pings via classifier with directAddr
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings(),
+    settings: bridgeSettings(),
     transcript: "clanker"
   });
 
@@ -319,7 +347,7 @@ test("reply decider allows direct wake-word pings via classifier with directAddr
   assert.equal(callCount, 1);
 });
 
-test("reply decider allows short clanker wake ping", async () => {
+test("reply decider allows short clanker wake ping through the bridge classifier", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -336,7 +364,7 @@ test("reply decider allows short clanker wake ping", async () => {
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings(),
+    settings: bridgeSettings(),
     transcript: "yo clanker"
   });
 
@@ -369,7 +397,7 @@ test("shouldPersistUserTranscriptTimelineTurn persists any non-empty transcript"
 });
 
 
-test("reply decider in merged realtime mode allows short clips through classifier", async () => {
+test("reply decider on the bridge path allows short clips through the classifier", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -388,7 +416,7 @@ test("reply decider in merged realtime mode allows short clips through classifie
       lastAudioDeltaAt: Date.now() - 1_400
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
@@ -410,7 +438,7 @@ test("reply decider in merged realtime mode allows short clips through classifie
   assert.equal(callCount, 1);
 });
 
-test("reply decider flows eagerness-0 unaddressed turns to classifier/generation (no hard reject)", async () => {
+test("reply decider flows eagerness-0 unaddressed turns to generation on the brain path (no hard reject)", async () => {
   const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
@@ -421,7 +449,7 @@ test("reply decider flows eagerness-0 unaddressed turns to classifier/generation
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: brainGenerationSettings({
       voice: {
         ambientReplyEagerness: 0,
         replyDecisionLlm: {
@@ -433,10 +461,10 @@ test("reply decider flows eagerness-0 unaddressed turns to classifier/generation
     transcript: "what do you think about this"
   });
 
-  // Eagerness 0 no longer hard-rejects — it flows through to the classifier.
-  // The default mock returns NO, so the classifier denies, but it was NOT a hard reject.
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "classifier_deny");
+  // Eagerness 0 no longer hard-rejects — on the brain path it still reaches
+  // generation-owned admission instead of being dropped deterministically.
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "generation_decides");
 });
 
 test("reply decider blocks unaddressed turns in command-only mode", async () => {
@@ -537,14 +565,7 @@ test("reply decider denies unaddressed turns while music is playing and wake lat
 
 test("reply decider lets generation decide unaddressed turns in realtime brain mode", async () => {
   const manager = createManager();
-  const settings = baseSettings({
-    voice: {
-      admission: {
-        mode: "generation_decides"
-      }
-    }
-  });
-  settings.voice.admission.mode = "generation_decides";
+  const settings = brainGenerationSettings();
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "guild-1",
@@ -563,12 +584,12 @@ test("reply decider lets generation decide unaddressed turns in realtime brain m
   assert.equal(decision.directAddressed, false);
 });
 
-test("reply decider routes wake-like variants through brain decides or classifier with directAddressed hint", async () => {
+test("reply decider keeps wake-like variants on generation_decides on the brain path", async () => {
   const cases = [
-    { text: "yo plink", expected: true },
-    { text: "hi clunky", expected: true },
-    { text: "yo clunker can you answer this?", expected: true },
-    { text: "cleaner can you jump in?", expected: true }
+    "yo plink",
+    "hi clunky",
+    "yo clunker can you answer this?",
+    "cleaner can you jump in?"
   ];
   let callCount = 0;
   const manager = createManager({
@@ -577,16 +598,9 @@ test("reply decider routes wake-like variants through brain decides or classifie
       return { text: "NO" };
     }
   });
-  const settings = baseSettings({
-    voice: {
-      admission: {
-        mode: "generation_decides"
-      }
-    }
-  });
-  settings.voice.admission.mode = "generation_decides";
+  const settings = brainGenerationSettings();
 
-  for (const row of cases) {
+  for (const transcript of cases) {
     const decision = await manager.evaluateVoiceReplyDecision({
       session: {
         guildId: "guild-1",
@@ -597,19 +611,11 @@ test("reply decider routes wake-like variants through brain decides or classifie
       },
       userId: "speaker-1",
       settings,
-      transcript: row.text
+      transcript
     });
 
-    assert.equal(decision.allow, row.expected, row.text);
-    const reason = String(decision.reason || "");
-    assert.equal(
-      ["classifier_allow", "generation_decides"].includes(reason),
-      true,
-      row.text
-    );
-    if (reason === "classifier_allow") {
-      assert.equal(decision.directAddressed, true, row.text);
-    }
+    assert.equal(decision.allow, true, transcript);
+    assert.equal(decision.reason, "generation_decides", transcript);
   }
 
   assert.equal(callCount, 0);
@@ -813,7 +819,7 @@ test("reply decider uses classifier with directAddressed hint without memory loo
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       memory: {
         enabled: true
       }
@@ -919,7 +925,7 @@ test("reply decider keeps representative full-brain classifier-skip settings on 
   }
 });
 
-test("reply decider bypasses classifier in generation_only realtime admission mode", async () => {
+test("reply decider bypasses classifier in generation_decides admission mode", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -940,7 +946,7 @@ test("reply decider bypasses classifier in generation_only realtime admission mo
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
-          realtimeAdmissionMode: "generation_only",
+          realtimeAdmissionMode: "generation_decides",
           provider: "anthropic",
           model: "claude-haiku-4-5"
         }
@@ -952,6 +958,42 @@ test("reply decider bypasses classifier in generation_only realtime admission mo
   assert.equal(decision.allow, true);
   assert.equal(decision.reason, "generation_decides");
   assert.equal(callCount, 0);
+});
+
+test("reply decider runs classifier when full-brain admission mode is classifier_gate", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 220,
+    },
+    userId: "speaker-1",
+    settings: brainClassifierSettings({
+      voice: {
+        ambientReplyEagerness: 60,
+        replyDecisionLlm: {
+          realtimeAdmissionMode: "classifier_gate",
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "what should we do next?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_allow");
+  assert.equal(callCount, 1);
 });
 
 test("reply decider routes single-human assistant followups through classifier", async () => {
@@ -991,11 +1033,11 @@ test("reply decider routes single-human assistant followups through classifier",
         ]
       },
       userId: "speaker-1",
-      settings: baseSettings({
+      settings: bridgeSettings({
         voice: {
           ambientReplyEagerness: 50,
           replyDecisionLlm: {
-            realtimeAdmissionMode: "hard_classifier",
+            realtimeAdmissionMode: "classifier_gate",
             provider: "anthropic",
             model: "claude-haiku-4-5"
           }
@@ -1051,11 +1093,11 @@ test("reply decider still runs classifier when single-human assistant followup w
       ]
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 50,
         replyDecisionLlm: {
-          realtimeAdmissionMode: "hard_classifier",
+          realtimeAdmissionMode: "classifier_gate",
           provider: "anthropic",
           model: "claude-haiku-4-5"
         }
@@ -1109,11 +1151,11 @@ test("reply decider can disable single-human assistant followup fast path via en
         ]
       },
       userId: "speaker-1",
-      settings: baseSettings({
+      settings: bridgeSettings({
         voice: {
           ambientReplyEagerness: 50,
           replyDecisionLlm: {
-            realtimeAdmissionMode: "hard_classifier",
+            realtimeAdmissionMode: "classifier_gate",
             provider: "anthropic",
             model: "claude-haiku-4-5"
           }
@@ -1153,7 +1195,7 @@ test("reply decider runs classifier for non-direct multi-user realtime turns", a
       lastInboundAudioAt: Date.now() - 280,
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
@@ -1188,7 +1230,7 @@ test("reply decider fast-paths merged bot-name tokens as direct address", async 
       lastInboundAudioAt: Date.now() - 220,
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
@@ -1227,7 +1269,7 @@ test("reply decider keeps bot awake across speakers after a recent direct addres
       lastDirectAddressUserId: "speaker-2"
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
@@ -1265,7 +1307,7 @@ test("reply decider runs classifier after wake context gets stale", async () => 
       lastAudioDeltaAt: Date.now() - 42_000
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
@@ -1300,16 +1342,13 @@ test("reply decider hard-denies malformed classifier output", async () => {
       lastInboundAudioAt: Date.now() - 220
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
-        admission: {
-          mode: "classifier_gate"
-        },
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
-          realtimeAdmissionMode: "hard_classifier"
+          realtimeAdmissionMode: "classifier_gate"
         }
       }
     }),
@@ -1347,13 +1386,13 @@ test("reply classifier prompt includes attributed history and current turn field
     },
     userId: "speaker-1",
     settings: (() => {
-      const settings = baseSettings({
+      const settings = bridgeSettings({
         voice: {
           ambientReplyEagerness: 60,
           replyDecisionLlm: {
             provider: "anthropic",
             model: "claude-haiku-4-5",
-            realtimeAdmissionMode: "hard_classifier"
+            realtimeAdmissionMode: "classifier_gate"
           }
         }
       });
@@ -1393,13 +1432,13 @@ test("reply classifier prompt labels room events distinctly from spoken transcri
       membershipEvents: [{ userId: "speaker-1", displayName: "vuhlp", eventType: "join", at: Date.now() - 500 }]
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
-          realtimeAdmissionMode: "hard_classifier"
+          realtimeAdmissionMode: "classifier_gate"
         }
       }
     }),
@@ -1443,13 +1482,13 @@ test("reply classifier prompt treats the bot self-join event as a self-arrival",
       membershipEvents: [{ userId: "bot-user", displayName: "clanker conk", eventType: "join", at: Date.now() - 500 }]
     },
     userId: "bot-user",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
-          realtimeAdmissionMode: "hard_classifier"
+          realtimeAdmissionMode: "classifier_gate"
         }
       }
     }),
@@ -1494,13 +1533,13 @@ test("reply decider routes garbled bot-name requests through runtime admission",
       lastInboundAudioAt: Date.now() - 240
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
-          realtimeAdmissionMode: "hard_classifier"
+          realtimeAdmissionMode: "classifier_gate"
         }
       }
     }),
@@ -1611,13 +1650,13 @@ test("reply decider applies music wake latch across speakers and extends on admi
   const decision = await manager.evaluateVoiceReplyDecision({
     session,
     userId: "speaker-2",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
-          realtimeAdmissionMode: "hard_classifier"
+          realtimeAdmissionMode: "classifier_gate"
         }
       }
     }),
@@ -1696,12 +1735,9 @@ test("classifier sees participant list so it can infer addressing from transcrip
       lastInboundAudioAt: Date.now() - 220
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
-        admission: {
-          mode: "classifier_gate"
-        },
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -1772,7 +1808,7 @@ test("reply decider routes direct-addressed turns through classifier", async () 
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings({
+    settings: bridgeSettings({
       voice: {
         ambientReplyEagerness: 60,
         replyDecisionLlm: {
@@ -1955,7 +1991,7 @@ test("direct address denied when classifier LLM is unavailable", async () => {
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings(),
+    settings: bridgeSettings(),
     transcript: "clanker can you explain that"
   });
 
@@ -2609,7 +2645,7 @@ test("runRealtimeTurn forwards short post-reply clips through merged realtime ge
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );
   assert.equal(Boolean(addressingLog), true);
-  assert.equal(addressingLog?.metadata?.reason, "classifier_allow");
+  assert.equal(addressingLog?.metadata?.reason, "generation_decides");
 });
 
 test("runRealtimeTurn drops near-silent clips before ASR", async () => {
