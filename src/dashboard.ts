@@ -81,7 +81,9 @@ export interface DashboardBot {
 }
 
 export interface DashboardMemory {
-  readMemoryMarkdown(): Promise<string>;
+  readMemoryMarkdown(opts?: {
+    guildId?: string | null;
+  }): Promise<string>;
   refreshMemoryMarkdown(): Promise<unknown>;
   loadFactProfile?(payload: {
     userId?: string | null;
@@ -204,10 +206,10 @@ export function createDashboardServer({
 
   const app = new Hono<DashboardEnv>();
   const publicFrameIngressRateLimit = new Map<string, FixedWindowBucket>();
-  const getStatsPayload = () => {
+  const getStatsPayload = (guildId: string | null = null) => {
     const botRuntime = bot.getRuntimeState();
     return {
-      stats: store.getStats(),
+      stats: store.getStats({ guildId }),
       runtime: {
         ...botRuntime,
         publicHttps: publicHttpsEntrypoint?.getState?.() || null,

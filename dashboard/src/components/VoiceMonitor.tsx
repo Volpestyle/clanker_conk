@@ -12,6 +12,7 @@ import {
   type LatencyTurnEntry
 } from "../hooks/useVoiceSSE";
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
+import { useDashboardGuildScope } from "../guildScope";
 import { CopyButton, Section } from "./ui";
 
 // ---- helpers ----
@@ -216,11 +217,6 @@ function isFinalHistoryTranscriptEventType(eventType: unknown, source: unknown):
   }
   return true;
 }
-
-type Guild = {
-  id: string;
-  name: string;
-};
 
 type VoiceJoinResponse = {
   ok: boolean;
@@ -1663,10 +1659,9 @@ function formatDuration(seconds: number): string {
 
 export default function VoiceMonitor() {
   const { voiceState, events, status } = useVoiceSSE();
-  const history = useVoiceHistory();
+  const { guilds, selectedGuildId } = useDashboardGuildScope();
+  const history = useVoiceHistory(selectedGuildId || null);
   const { refresh: refreshHistory, ingestLiveEvent } = history;
-  const [guilds, setGuilds] = useState<Guild[]>([]);
-  const [selectedGuildId, setSelectedGuildId] = useState("");
   const [joinTextChannelId, setJoinTextChannelId] = useState(DEFAULT_JOIN_TEXT_CHANNEL_ID);
   const [joinPending, setJoinPending] = useState(false);
   const [joinStatus, setJoinStatus] = useState<{
@@ -1684,7 +1679,14 @@ export default function VoiceMonitor() {
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
   const lastProcessedLiveEventKeyRef = useRef("");
 
-  const sessions = useMemo(() => voiceState?.sessions || [], [voiceState?.sessions]);
+  const sessions = useMemo(
+    () =>
+      (voiceState?.sessions || []).filter((session) => {
+        if (!selectedGuildId) return true;
+        return String(session.guildId || "").trim() === selectedGuildId;
+      }),
+    [selectedGuildId, voiceState?.sessions]
+  );
 
   // Auto-refresh history when a live session disappears
   useEffect(() => {
@@ -1711,31 +1713,6 @@ export default function VoiceMonitor() {
     }
   }, [events, ingestLiveEvent, refreshHistory]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    api<Guild[]>("/api/guilds")
-      .then((rows) => {
-        if (cancelled) return;
-        const nextGuilds = Array.isArray(rows) ? rows : [];
-        setGuilds(nextGuilds);
-        setSelectedGuildId((current) => {
-          if (current && nextGuilds.some((guild) => guild.id === current)) return current;
-          const saved = localStorage.getItem("dashboard_last_guild_id") || "";
-          if (saved && nextGuilds.some((guild) => guild.id === saved)) return saved;
-          return nextGuilds[0]?.id || "";
-        });
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setGuilds([]);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const toggleKind = (kind: string) => {
     setActiveKinds((prev) => {
       const next = new Set(prev);
@@ -1746,6 +1723,8 @@ export default function VoiceMonitor() {
   };
 
   const filteredEvents = events.filter((e) => {
+    const eventGuildId = String(e.guildId || "").trim();
+    if (selectedGuildId && eventGuildId && eventGuildId !== selectedGuildId) return false;
     const kindShort = (e.kind || "").replace(/^voice_/, "");
     if (kindShort === "runtime" && !showRuntime) return false;
     return activeKinds.has(kindShort);
@@ -1795,23 +1774,10 @@ export default function VoiceMonitor() {
       <section className="vm-join panel">
         <div className="vm-join-row">
           <div className="vm-join-field">
-            <label className="vm-join-label" htmlFor="vm-join-guild">Guild</label>
-            <select
-              id="vm-join-guild"
-              value={selectedGuildId}
-              onChange={(event) => {
-                setSelectedGuildId(event.target.value);
-                localStorage.setItem("dashboard_last_guild_id", event.target.value);
-              }}
-              disabled={joinPending || guilds.length <= 1}
-            >
-              {guilds.length === 0 && <option value="">Auto-detect</option>}
-              {guilds.map((guild) => (
-                <option key={guild.id} value={guild.id}>
-                  {guild.name}
-                </option>
-              ))}
-            </select>
+            <label className="vm-join-label">Guild</label>
+            <div className="vm-join-static-field">
+              {guilds.find((guild) => guild.id === selectedGuildId)?.name || selectedGuildId || "No guild selected"}
+            </div>
           </div>
           <div className="vm-join-field">
             <label className="vm-join-label" htmlFor="vm-join-source-channel">

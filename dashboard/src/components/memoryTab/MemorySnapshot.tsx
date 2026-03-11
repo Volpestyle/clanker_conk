@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import Skeleton from "../Skeleton";
 import { renderMarkdown } from "../../renderMarkdown";
 import { PanelHead } from "../ui";
+import { useDashboardGuildScope } from "../../guildScope";
 
 interface Props {
   markdown: string | null | undefined;
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function MemorySnapshot({ markdown, onRefresh }: Props) {
+  const { selectedGuild } = useDashboardGuildScope();
   const rendered = useMemo(
     () => (markdown ? renderMarkdown(markdown) : ""),
     [markdown]
@@ -16,7 +18,7 @@ export default function MemorySnapshot({ markdown, onRefresh }: Props) {
 
   return (
     <div>
-      <PanelHead title="Operator Summary">
+      <PanelHead title={selectedGuild?.name ? `${selectedGuild.name} Summary` : "Operator Summary"}>
         <button type="button" className="sm" onClick={onRefresh}>
           Refresh summary
         </button>

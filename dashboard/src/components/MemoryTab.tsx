@@ -1,5 +1,4 @@
-import { useState, useEffect } from "react";
-import { api } from "../api";
+import { useEffect, useState } from "react";
 import { FilterPills } from "./ui";
 import MemoryRuntimeSnapshot from "./memoryTab/MemoryRuntimeSnapshot";
 import MemorySnapshot from "./memoryTab/MemorySnapshot";
@@ -12,11 +11,6 @@ const MEMORY_SUB_TABS = ["runtime", "snapshot", "inspector", "profiles", "reflec
 const MEMORY_SUB_TAB_STORAGE_KEY = "dashboard_memory_sub_tab";
 
 type SubTab = (typeof MEMORY_SUB_TABS)[number];
-
-interface Guild {
-  id: string;
-  name: string;
-}
 
 interface Props {
   markdown: string | null | undefined;
@@ -52,13 +46,6 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
   const [subTab, setSubTab] = useState<SubTab>(() =>
     loadStoredMemorySubTab("runtime")
   );
-  const [guilds, setGuilds] = useState<Guild[]>([]);
-
-  useEffect(() => {
-    api<Guild[]>("/api/guilds")
-      .then((data) => setGuilds(data || []))
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     saveStoredMemorySubTab(subTab);
@@ -81,22 +68,22 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
         }}
       />
       <div style={{ display: subTab === "runtime" ? undefined : "none" }}>
-        <MemoryRuntimeSnapshot guilds={guilds} notify={notify} />
+        <MemoryRuntimeSnapshot notify={notify} />
       </div>
       <div style={{ display: subTab === "snapshot" ? undefined : "none" }}>
         <MemorySnapshot markdown={markdown} onRefresh={onRefresh} />
       </div>
       <div style={{ display: subTab === "inspector" ? undefined : "none" }}>
-        <MemoryInspector guilds={guilds} onMemoryMutated={onRefresh} />
+        <MemoryInspector onMemoryMutated={onRefresh} />
       </div>
       <div style={{ display: subTab === "reflections" ? undefined : "none" }}>
-        <MemoryReflections guilds={guilds} />
+        <MemoryReflections />
       </div>
       <div style={{ display: subTab === "search" ? undefined : "none" }}>
-        <MemorySearch guilds={guilds} notify={notify} />
+        <MemorySearch notify={notify} />
       </div>
       <div style={{ display: subTab === "profiles" ? undefined : "none" }}>
-        <MemoryFactProfiles guilds={guilds} notify={notify} />
+        <MemoryFactProfiles notify={notify} />
       </div>
     </section>
   );

@@ -2,12 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../../api";
 import { PanelHead } from "../ui";
 import MemoryMessagesTable, { type RelevantMessage } from "./MemoryMessagesTable";
-import { ChannelIdField, GuildSelectField, getLastGuildId, saveLastGuildId } from "./MemoryFormFields";
-
-interface Guild {
-  id: string;
-  name: string;
-}
+import { ChannelIdField } from "./MemoryFormFields";
+import { useDashboardGuildScope } from "../../guildScope";
 
 interface FactRow {
   id?: number | null;
@@ -163,13 +159,11 @@ function ParticipantProfileList({ profiles }: { profiles: ParticipantProfile[] }
 }
 
 export default function MemoryRuntimeSnapshot({
-  guilds,
   notify
 }: {
-  guilds: Guild[];
   notify: (text: string, type?: string) => void;
 }) {
-  const [guildId, setGuildId] = useState("");
+  const { selectedGuildId } = useDashboardGuildScope();
   const [mode, setMode] = useState<"text" | "voice">("text");
   const [channelId, setChannelId] = useState("");
   const [userId, setUserId] = useState("");
@@ -179,18 +173,12 @@ export default function MemoryRuntimeSnapshot({
   const [result, setResult] = useState<RuntimeSnapshotResponse | null>(null);
 
   useEffect(() => {
-    if (!guildId && guilds.length > 0) {
-      const saved = getLastGuildId();
-      const restored = saved && guilds.some((g) => g.id === saved);
-      const next = restored ? saved : guilds[0].id;
-      setGuildId(next);
-      saveLastGuildId(next);
-    }
-  }, [guildId, guilds]);
+    setResult(null);
+  }, [selectedGuildId]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!guildId) return;
+    if (!selectedGuildId) return;
     setLoading(true);
     try {
       const participantIds = [...new Set(
@@ -202,7 +190,7 @@ export default function MemoryRuntimeSnapshot({
       const data = await api<RuntimeSnapshotResponse>("/api/memory/runtime-snapshot", {
         method: "POST",
         body: {
-          guildId,
+          guildId: selectedGuildId,
           mode,
           channelId: channelId.trim() || null,
           userId: userId.trim() || null,
@@ -231,7 +219,6 @@ export default function MemoryRuntimeSnapshot({
 
       <form className="memory-form" onSubmit={handleSubmit}>
         <div className="memory-form-row">
-          <GuildSelectField guilds={guilds} guildId={guildId} onGuildChange={setGuildId} />
           <label>
             Mode
             <select value={mode} onChange={(event) => setMode(event.target.value === "voice" ? "voice" : "text")}>
@@ -274,7 +261,7 @@ export default function MemoryRuntimeSnapshot({
             />
           </label>
           <div className="memory-form-action">
-            <button type="submit" className="cta" disabled={loading || !guildId}>
+            <button type="submit" className="cta" disabled={loading || !selectedGuildId}>
               {loading ? "Generating..." : "Generate Snapshot"}
             </button>
           </div>

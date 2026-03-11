@@ -1,16 +1,10 @@
 import { useState, type FormEvent } from "react";
 import { api } from "../../api";
 import MemoryResultsTable, { type FactResult } from "./MemoryResultsTable";
-import { useEffect } from "react";
-import { ChannelIdField, GuildSelectField, getLastGuildId, saveLastGuildId } from "./MemoryFormFields";
-
-interface Guild {
-  id: string;
-  name: string;
-}
+import { ChannelIdField } from "./MemoryFormFields";
+import { useDashboardGuildScope } from "../../guildScope";
 
 interface Props {
-  guilds: Guild[];
   notify: (text: string, type?: string) => void;
 }
 
@@ -18,30 +12,20 @@ interface MemorySearchResponse {
   results?: FactResult[];
 }
 
-export default function MemorySearch({ guilds, notify }: Props) {
-  const [guildId, setGuildId] = useState("");
+export default function MemorySearch({ notify }: Props) {
+  const { selectedGuildId } = useDashboardGuildScope();
   const [query, setQuery] = useState("");
   const [channelId, setChannelId] = useState("");
   const [limit, setLimit] = useState(10);
   const [results, setResults] = useState<FactResult[] | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!guildId && guilds.length > 0) {
-      const saved = getLastGuildId();
-      const restored = saved && guilds.some((g) => g.id === saved);
-      const next = restored ? saved : guilds[0].id;
-      setGuildId(next);
-      saveLastGuildId(next);
-    }
-  }, [guildId, guilds]);
-
   const handleSearch = async (e: FormEvent) => {
     e.preventDefault();
-    if (!guildId || !query.trim()) return;
+    if (!selectedGuildId || !query.trim()) return;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ q: query.trim(), guildId, limit: String(limit) });
+      const params = new URLSearchParams({ q: query.trim(), guildId: selectedGuildId, limit: String(limit) });
       if (channelId.trim()) params.set("channelId", channelId.trim());
       const data = await api<MemorySearchResponse>(`/api/memory/search?${params}`);
       setResults(data.results || []);
@@ -56,7 +40,6 @@ export default function MemorySearch({ guilds, notify }: Props) {
     <div>
       <form className="memory-form" onSubmit={handleSearch}>
         <div className="memory-form-row">
-          <GuildSelectField guilds={guilds} guildId={guildId} onGuildChange={setGuildId} />
           <label>
             Query
             <input
@@ -78,7 +61,7 @@ export default function MemorySearch({ guilds, notify }: Props) {
             </select>
           </label>
           <div className="memory-form-action">
-            <button type="submit" className="cta" disabled={loading || !guildId || !query.trim()}>
+            <button type="submit" className="cta" disabled={loading || !selectedGuildId || !query.trim()}>
               {loading ? "Searching..." : "Search"}
             </button>
           </div>

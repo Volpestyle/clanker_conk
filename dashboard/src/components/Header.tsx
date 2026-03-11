@@ -1,14 +1,25 @@
 import { useState } from "react";
 import { ApiError, createDashboardSession, destroyDashboardSession, type DashboardAuthState } from "../api";
 import { StatusDot } from "./ui";
+import type { DashboardGuild } from "../guildScope";
 
 type HeaderProps = {
   isReady?: boolean;
   authState?: DashboardAuthState | null;
   onAuthChanged?: () => Promise<void> | void;
+  guilds?: DashboardGuild[];
+  selectedGuildId?: string;
+  onGuildChange?: (guildId: string) => void;
 };
 
-export default function Header({ isReady, authState = null, onAuthChanged }: HeaderProps) {
+export default function Header({
+  isReady,
+  authState = null,
+  onAuthChanged,
+  guilds = [],
+  selectedGuildId = "",
+  onGuildChange
+}: HeaderProps) {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [showToken, setShowToken] = useState(false);
@@ -17,6 +28,7 @@ export default function Header({ isReady, authState = null, onAuthChanged }: Hea
 
   const requiresToken = Boolean(authState?.requiresToken);
   const authenticated = Boolean(authState?.authenticated);
+  const dashboardUnlocked = !requiresToken || authenticated;
   const configurationError = String(authState?.configurationError || "").trim();
   const statusText =
     requiresToken && !authenticated
@@ -86,6 +98,24 @@ export default function Header({ isReady, authState = null, onAuthChanged }: Hea
           </div>
         </div>
         <div className="hero-right">
+          {dashboardUnlocked && guilds.length > 0 && onGuildChange ? (
+            <label className="hero-guild-scope">
+              <span className="hero-guild-label">Guild</span>
+              <select
+                className="hero-guild-select"
+                value={selectedGuildId}
+                onChange={(event) => onGuildChange(event.target.value)}
+                disabled={guilds.length <= 1}
+                aria-label="Selected guild"
+              >
+                {guilds.map((guild) => (
+                  <option key={guild.id} value={guild.id}>
+                    {guild.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <span className={`hero-status${isReady && (!requiresToken || authenticated) ? " online" : ""}`}>
             {statusText}
           </span>

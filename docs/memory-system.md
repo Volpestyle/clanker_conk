@@ -23,7 +23,7 @@ The memory system has two persistence layers:
 
 Supporting infrastructure:
 - **Daily journals** (`memory/YYYY-MM-DD.md`): append-only logs of all ingested text and transcripts. Raw material consumed by reflection.
-- **Snapshot** (`memory/MEMORY.md`): periodically regenerated markdown for operator/dashboard inspection — not consumed by the model.
+- **Snapshot** (`memory/MEMORY.md`): periodically regenerated global markdown for operator inspection. The dashboard can also request a guild-scoped summary view without changing the on-disk file. Runtime prompts never consume this markdown directly.
 - **Runtime snapshot** (dashboard API): previews the actual turn-scoped memory slice the model would receive for a given guild/channel/user/query combination.
 
 ## Flow Diagram
@@ -302,7 +302,7 @@ Both sides captured via synthetic message IDs:
 
 Dashboard API:
 
-- `GET /api/memory` — snapshot markdown.
+- `GET /api/memory?guildId=` — operator summary markdown. Without `guildId`, returns the global snapshot. With `guildId`, returns a guild-scoped dashboard summary.
 - `POST /api/memory/refresh` — regenerate snapshot.
 - `POST /api/memory/runtime-snapshot` — preview the real runtime memory slice for a prospective turn, including participant profiles, guidance, behavioral facts, and conversation recall.
 - `GET /api/memory/search?q=&guildId=&channelId=&limit=` — hybrid durable fact search.
@@ -311,7 +311,7 @@ Dashboard API:
 - `PUT /api/memory/facts/:factId` — edit a durable fact from the dashboard inspector.
 - `DELETE /api/memory/facts/:factId` — soft-delete a durable fact from the dashboard inspector.
 - `GET /api/memory/subjects` — list subjects with fact counts.
-- `GET /api/memory/reflections` — reflection run history.
+- `GET /api/memory/reflections?guildId=` — reflection run history, optionally scoped to one guild.
 
 Action log kinds: `memory_fact`, `memory_reflection_start`, `memory_reflection_complete`, `memory_reflection_error`, `memory_embedding_call`, `memory_embedding_error`, `memory_log_prune`.
 

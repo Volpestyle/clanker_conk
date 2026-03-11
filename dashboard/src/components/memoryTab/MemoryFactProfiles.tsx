@@ -1,15 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../../api";
 import MemoryMessagesTable, { type RelevantMessage } from "./MemoryMessagesTable";
-import { ChannelIdField, GuildSelectField, getLastGuildId, saveLastGuildId } from "./MemoryFormFields";
-
-interface Guild {
-  id: string;
-  name: string;
-}
+import { ChannelIdField } from "./MemoryFormFields";
+import { useDashboardGuildScope } from "../../guildScope";
 
 interface Props {
-  guilds: Guild[];
   notify: (text: string, type?: string) => void;
 }
 
@@ -131,8 +126,8 @@ function FactProfileFactList({
   );
 }
 
-export default function MemoryFactProfiles({ guilds, notify }: Props) {
-  const [guildId, setGuildId] = useState("");
+export default function MemoryFactProfiles({ notify }: Props) {
+  const { selectedGuildId } = useDashboardGuildScope();
   const [userId, setUserId] = useState("");
   const [channelId, setChannelId] = useState("");
   const [queryText, setQueryText] = useState("");
@@ -140,21 +135,15 @@ export default function MemoryFactProfiles({ guilds, notify }: Props) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!guildId && guilds.length > 0) {
-      const saved = getLastGuildId();
-      const restored = saved && guilds.some((g) => g.id === saved);
-      const next = restored ? saved : guilds[0].id;
-      setGuildId(next);
-      saveLastGuildId(next);
-    }
-  }, [guildId, guilds]);
+    setResult(null);
+  }, [selectedGuildId]);
 
   const handleInspect = async (e: FormEvent) => {
     e.preventDefault();
-    if (!guildId) return;
+    if (!selectedGuildId) return;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ guildId });
+      const params = new URLSearchParams({ guildId: selectedGuildId });
       if (userId.trim()) params.set("userId", userId.trim());
       if (channelId.trim()) params.set("channelId", channelId.trim());
       if (queryText.trim()) params.set("queryText", queryText.trim());
@@ -192,7 +181,6 @@ export default function MemoryFactProfiles({ guilds, notify }: Props) {
 
       <form className="memory-form" onSubmit={handleInspect}>
         <div className="memory-form-row">
-          <GuildSelectField guilds={guilds} guildId={guildId} onGuildChange={setGuildId} />
           <label>
             User ID <span style={{ color: "var(--ink-3)" }}>(optional)</span>
             <input
@@ -216,7 +204,7 @@ export default function MemoryFactProfiles({ guilds, notify }: Props) {
             />
           </label>
           <div className="memory-form-action">
-            <button type="submit" className="cta" disabled={loading || !guildId}>
+            <button type="submit" className="cta" disabled={loading || !selectedGuildId}>
               {loading ? "Loading..." : "Inspect"}
             </button>
           </div>

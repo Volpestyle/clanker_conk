@@ -9,6 +9,11 @@ import DailyCost from "./components/DailyCost";
 import PerformancePanel from "./components/PerformancePanel";
 import StaleIndicator from "./components/StaleIndicator";
 import { loadStoredTab, saveStoredTab } from "./tabState";
+import {
+  DashboardGuildScopeProvider,
+  useDashboardGuildScope,
+  type DashboardGuild
+} from "./guildScope";
 
 const SettingsForm = lazy(() => import("./components/SettingsForm"));
 const MemoryTab = lazy(() => import("./components/MemoryTab"));
@@ -91,6 +96,29 @@ const MAIN_TABS: MainTabDefinition[] = [
   }
 ];
 
+function mergeDashboardActions(
+  persisted: Record<string, unknown>[],
+  live: Record<string, unknown>[]
+) {
+  const merged = new Map<string, Record<string, unknown>>();
+
+  for (const action of [...live, ...persisted]) {
+    const actionId = Number(action?.id || 0);
+    const key = actionId > 0
+      ? `id:${actionId}`
+      : `${String(action?.created_at || "")}:${String(action?.message_id || "")}:${String(action?.kind || "")}`;
+    if (!merged.has(key)) {
+      merged.set(key, action);
+    }
+  }
+
+  return [...merged.values()].sort((a, b) => {
+    const aTime = Date.parse(String(a?.created_at || ""));
+    const bTime = Date.parse(String(b?.created_at || ""));
+    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+  });
+}
+
 export default function App() {
   const auth = usePolling(() => getDashboardAuthState(), 0);
   const authState = (auth.data as DashboardAuthState | null) || null;
@@ -138,6 +166,27 @@ function AuthenticatedDashboard({
   authState: DashboardAuthState;
   onAuthChanged: () => Promise<void>;
 }) {
+  const guildsQuery = usePolling(() => api<DashboardGuild[]>("/api/guilds"), 60_000);
+  const guilds = useMemo(
+    () => (Array.isArray(guildsQuery.data) ? guildsQuery.data : []),
+    [guildsQuery.data]
+  );
+
+  return (
+    <DashboardGuildScopeProvider guilds={guilds}>
+      <AuthenticatedDashboardShell authState={authState} onAuthChanged={onAuthChanged} />
+    </DashboardGuildScopeProvider>
+  );
+}
+
+function AuthenticatedDashboardShell({
+  authState,
+  onAuthChanged
+}: {
+  authState: DashboardAuthState;
+  onAuthChanged: () => Promise<void>;
+}) {
+  const { guilds, selectedGuildId, selectedGuild, setSelectedGuildId } = useDashboardGuildScope();
   const initialTabRef = useRef<MainTab | null>(null);
   if (initialTabRef.current === null) {
     initialTabRef.current = loadStoredTab(MAIN_TAB_STORAGE_KEY, MAIN_TAB_IDS, "activity");
@@ -167,16 +216,62 @@ function AuthenticatedDashboard({
   }, []);
 
   const activity = useActivitySSE();
-  const textActions = usePolling(
-    () => api("/api/actions?kinds=sent_reply,sent_message&sinceHours=24&limit=1000"),
+  const scopedActivityActions = usePolling(
+    () => {
+      const params = new URLSearchParams({
+        sinceHours: "24",
+        limit: "220"
+      });
+      if (selectedGuildId) params.set("guildId", selectedGuildId);
+      return api(`/api/actions?${params.toString()}`);
+    },
     30_000
   );
-  const memory = usePolling(() => api("/api/memory"), 30_000);
+  const textActions = usePolling(
+    () => {
+      const params = new URLSearchParams({
+        kinds: "sent_reply,sent_message",
+        sinceHours: "24",
+        limit: "1000"
+      });
+      if (selectedGuildId) params.set("guildId", selectedGuildId);
+      return api(`/api/actions?${params.toString()}`);
+    },
+    30_000
+  );
+  const memory = usePolling(
+    () => {
+      const params = new URLSearchParams();
+      if (selectedGuildId) params.set("guildId", selectedGuildId);
+      const suffix = params.toString();
+      return api(`/api/memory${suffix ? `?${suffix}` : ""}`);
+    },
+    30_000
+  );
+  const scopedStats = usePolling(
+    () => {
+      const params = new URLSearchParams();
+      if (selectedGuildId) params.set("guildId", selectedGuildId);
+      const suffix = params.toString();
+      return api(`/api/stats${suffix ? `?${suffix}` : ""}`);
+    },
+    15_000
+  );
   const settings = usePolling(() => api("/api/settings"), 0);
   const llmModels = usePolling(() => api("/api/llm/models"), 0);
+  const reloadScopedActivityActions = scopedActivityActions.reload;
+  const reloadTextActions = textActions.reload;
   const reloadMemory = memory.reload;
+  const reloadScopedStats = scopedStats.reload;
   const reloadSettings = settings.reload;
   const settingsUpdatedAt = String(settings.data?._meta?.updatedAt || "").trim();
+
+  useEffect(() => {
+    void reloadScopedActivityActions();
+    void reloadTextActions();
+    void reloadMemory();
+    void reloadScopedStats();
+  }, [reloadMemory, reloadScopedActivityActions, reloadScopedStats, reloadTextActions, selectedGuildId]);
 
   const handleSettingsSave = useCallback(async (patch) => {
     setSettingsSaveBusy(true);
@@ -243,13 +338,20 @@ function AuthenticatedDashboard({
 
   const handleMemoryRefresh = useCallback(async () => {
     try {
-      await api("/api/memory/refresh", { method: "POST" });
-      reloadMemory();
-      notify("Memory regenerated");
+      await api("/api/memory/refresh", {
+        method: "POST",
+        body: selectedGuildId ? { guildId: selectedGuildId } : {}
+      });
+      await reloadMemory();
+      notify(
+        selectedGuild?.name
+          ? `Regenerated ${selectedGuild.name} memory summary`
+          : "Memory regenerated"
+      );
     } catch (err) {
       notify(err.message, "error");
     }
-  }, [reloadMemory, notify]);
+  }, [notify, reloadMemory, selectedGuild?.name, selectedGuildId]);
 
   const handleSettingsRefresh = useCallback(async () => {
     setSettingsRefreshBusy(true);
@@ -275,35 +377,46 @@ function AuthenticatedDashboard({
   }, [notify]);
 
   const isReady = activity.stats?.runtime?.isReady ?? false;
-  const mergedTextActions = useMemo(() => {
-    const persisted = Array.isArray(textActions.data) ? textActions.data : [];
-    const live = Array.isArray(activity.actions)
-      ? activity.actions.filter((action) => action?.kind === "sent_reply" || action?.kind === "sent_message")
-      : [];
-    const merged = new Map<string, Record<string, unknown>>();
-
-    for (const action of [...live, ...persisted]) {
-      const actionId = Number(action?.id || 0);
-      const key = actionId > 0
-        ? `id:${actionId}`
-        : `${String(action?.created_at || "")}:${String(action?.message_id || "")}:${String(action?.kind || "")}`;
-      if (!merged.has(key)) {
-        merged.set(key, action);
-      }
-    }
-
-    return [...merged.values()].sort((a, b) => {
-      const aTime = Date.parse(String(a?.created_at || ""));
-      const bTime = Date.parse(String(b?.created_at || ""));
-      return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
-    });
-  }, [activity.actions, textActions.data]);
+  const liveActionsForGuild = useMemo(
+    () =>
+      (Array.isArray(activity.actions) ? activity.actions : []).filter((action) => {
+        if (!selectedGuildId) return true;
+        const actionGuildId = String(action?.guild_id || action?.guildId || "").trim();
+        return actionGuildId === selectedGuildId;
+      }),
+    [activity.actions, selectedGuildId]
+  );
+  const mergedActivityActions = useMemo(
+    () => mergeDashboardActions(
+      Array.isArray(scopedActivityActions.data) ? scopedActivityActions.data : [],
+      liveActionsForGuild
+    ),
+    [liveActionsForGuild, scopedActivityActions.data]
+  );
+  const mergedTextActions = useMemo(
+    () =>
+      mergeDashboardActions(
+        Array.isArray(textActions.data) ? textActions.data : [],
+        liveActionsForGuild.filter((action) => action?.kind === "sent_reply" || action?.kind === "sent_message")
+      ),
+    [liveActionsForGuild, textActions.data]
+  );
+  const dashboardStats = selectedGuildId
+    ? scopedStats.data
+    : scopedStats.data || activity.stats;
 
   return (
     <main className="shell">
-      <Header isReady={isReady} authState={authState} onAuthChanged={onAuthChanged} />
+      <Header
+        isReady={isReady}
+        authState={authState}
+        onAuthChanged={onAuthChanged}
+        guilds={guilds}
+        selectedGuildId={selectedGuildId}
+        onGuildChange={setSelectedGuildId}
+      />
 
-      <MetricsBar stats={activity.stats} />
+      <MetricsBar stats={dashboardStats} />
       <StaleIndicator lastSuccess={activity.lastSuccess} />
 
       <nav className="main-tabs" role="tablist">
@@ -328,10 +441,10 @@ function AuthenticatedDashboard({
               {toast.text}
             </p>
           )}
-          <ActionStream actions={activity.actions} />
+          <ActionStream actions={mergedActivityActions} />
           <div className="stack">
-            <PerformancePanel performance={activity.stats?.stats?.performance} />
-            <DailyCost rows={activity.stats?.stats?.dailyCost} />
+            <PerformancePanel performance={dashboardStats?.stats?.performance} />
+            <DailyCost rows={dashboardStats?.stats?.dailyCost} />
           </div>
         </section>
       )}

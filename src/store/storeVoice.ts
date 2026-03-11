@@ -33,30 +33,29 @@ interface VoiceSessionEventRow {
 export function getRecentVoiceSessions(
   store: VoiceStore,
   limit = 3,
-  opts: { sinceIso?: string | null } = {}
+  opts: { sinceIso?: string | null; guildId?: string | null } = {}
 ) {
 const boundedLimit = clamp(Math.floor(Number(limit) || 3), 1, 200);
 const normalizedSinceIso = String(opts?.sinceIso || "").trim();
-const whereClause = normalizedSinceIso
-  ? `WHERE kind IN ('voice_session_start', 'voice_session_end') AND created_at >= ?`
-  : `WHERE kind IN ('voice_session_start', 'voice_session_end')`;
-const rows = normalizedSinceIso
-  ? store.db
-    .prepare<VoiceSessionRow, [string]>(
-      `SELECT id, created_at, guild_id, kind, content, metadata
-           FROM actions
-           ${whereClause}
-           ORDER BY created_at DESC`
-    )
-    .all(normalizedSinceIso)
-  : store.db
-    .prepare<VoiceSessionRow, []>(
-      `SELECT id, created_at, guild_id, kind, content, metadata
-           FROM actions
-           ${whereClause}
-           ORDER BY created_at DESC`
-    )
-    .all();
+const normalizedGuildId = String(opts?.guildId || "").trim();
+const conditions = ["kind IN ('voice_session_start', 'voice_session_end')"];
+const params: string[] = [];
+if (normalizedSinceIso) {
+  conditions.push("created_at >= ?");
+  params.push(normalizedSinceIso);
+}
+if (normalizedGuildId) {
+  conditions.push("guild_id = ?");
+  params.push(normalizedGuildId);
+}
+const rows = store.db
+  .prepare<VoiceSessionRow, string[]>(
+    `SELECT id, created_at, guild_id, kind, content, metadata
+         FROM actions
+         WHERE ${conditions.join(" AND ")}
+         ORDER BY created_at DESC`
+  )
+  .all(...params);
 
 const starts = new Map<string, { guildId: string; mode: string; startedAt: string }>();
 const ends = new Map<string, { endedAt: string; durationSeconds: number; endReason: string }>();

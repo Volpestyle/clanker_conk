@@ -1,11 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
-import { GuildSelectField, getLastGuildId, saveLastGuildId } from "./MemoryFormFields";
-
-interface Guild {
-  id: string;
-  name: string;
-}
+import { useDashboardGuildScope } from "../../guildScope";
 
 interface SubjectRow {
   guild_id: string;
@@ -37,7 +32,6 @@ interface FactEditorState {
 }
 
 interface Props {
-  guilds: Guild[];
   onMemoryMutated?: () => void;
 }
 
@@ -120,8 +114,8 @@ function formatApiError(error: unknown) {
   }
 }
 
-export default function MemoryInspector({ guilds, onMemoryMutated }: Props) {
-  const [guildId, setGuildId] = useState("");
+export default function MemoryInspector({ onMemoryMutated }: Props) {
+  const { selectedGuildId } = useDashboardGuildScope();
   const [subjects, setSubjects] = useState<SubjectRow[]>([]);
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
   const [facts, setFacts] = useState<FactRow[]>([]);
@@ -136,23 +130,13 @@ export default function MemoryInspector({ guilds, onMemoryMutated }: Props) {
   const [savingFactId, setSavingFactId] = useState<number | null>(null);
   const [deletingFactId, setDeletingFactId] = useState<number | null>(null);
 
-  useEffect(() => {
-    if (!guildId && guilds.length > 0) {
-      const saved = getLastGuildId();
-      const restored = saved && guilds.some((guild) => guild.id === saved);
-      const next = restored ? saved : guilds[0].id;
-      setGuildId(next);
-      saveLastGuildId(next);
-    }
-  }, [guildId, guilds]);
-
   const loadSubjects = useCallback(async () => {
-    if (!guildId) return;
+    if (!selectedGuildId) return;
     setLoadingSubjects(true);
     setStatus(null);
     try {
       const data = await api<{ subjects: SubjectRow[] }>(
-        `/api/memory/subjects?guildId=${encodeURIComponent(guildId)}&limit=300`
+        `/api/memory/subjects?guildId=${encodeURIComponent(selectedGuildId)}&limit=300`
       );
       setSubjects(Array.isArray(data.subjects) ? data.subjects : []);
     } catch (error: unknown) {
@@ -164,14 +148,14 @@ export default function MemoryInspector({ guilds, onMemoryMutated }: Props) {
     } finally {
       setLoadingSubjects(false);
     }
-  }, [guildId]);
+  }, [selectedGuildId]);
 
   const loadFacts = useCallback(async (subject: string | null) => {
-    if (!guildId) return;
+    if (!selectedGuildId) return;
     setLoadingFacts(true);
     setStatus(null);
     try {
-      const params = new URLSearchParams({ guildId, limit: String(factLimit) });
+      const params = new URLSearchParams({ guildId: selectedGuildId, limit: String(factLimit) });
       if (subject) params.set("subject", subject);
       if (factQuery.trim()) params.set("q", factQuery.trim());
       const data = await api<{ facts: FactRow[] }>(`/api/memory/facts?${params}`);
@@ -185,26 +169,26 @@ export default function MemoryInspector({ guilds, onMemoryMutated }: Props) {
     } finally {
       setLoadingFacts(false);
     }
-  }, [factLimit, factQuery, guildId]);
+  }, [factLimit, factQuery, selectedGuildId]);
 
   const refreshInspector = useCallback(async (subjectOverride: string | null = selectedSubject) => {
     await Promise.all([loadSubjects(), loadFacts(subjectOverride)]);
   }, [loadFacts, loadSubjects, selectedSubject]);
 
   useEffect(() => {
-    if (!guildId) return;
+    if (!selectedGuildId) return;
     setSelectedSubject(null);
     setFacts([]);
     setExpandedFactId(null);
     setEditor(null);
     setStatus(null);
     void loadSubjects();
-  }, [guildId, loadSubjects]);
+  }, [loadSubjects, selectedGuildId]);
 
   useEffect(() => {
-    if (!guildId) return;
+    if (!selectedGuildId) return;
     void loadFacts(selectedSubject);
-  }, [guildId, loadFacts, selectedSubject]);
+  }, [loadFacts, selectedGuildId, selectedSubject]);
 
   useEffect(() => {
     if (expandedFactId === null) {
@@ -245,7 +229,7 @@ export default function MemoryInspector({ guilds, onMemoryMutated }: Props) {
   }, []);
 
   const handleSaveFact = useCallback(async (fact: FactRow) => {
-    if (!guildId || !editor) return;
+    if (!selectedGuildId || !editor) return;
 
     const normalizedSubject = normalizeFactEditorText(editor.subject, 120);
     const normalizedFact = normalizeFactEditorText(editor.fact, 400);
@@ -272,7 +256,7 @@ export default function MemoryInspector({ guilds, onMemoryMutated }: Props) {
       await api<FactMutationResponse>(`/api/memory/facts/${encodeURIComponent(String(fact.id))}`, {
         method: "PUT",
         body: {
-          guildId,
+          guildId: selectedGuildId,
           subject: normalizedSubject,
           fact: normalizedFact,
           factType: normalizedFactType,
@@ -304,10 +288,10 @@ export default function MemoryInspector({ guilds, onMemoryMutated }: Props) {
     } finally {
       setSavingFactId(null);
     }
-  }, [editor, guildId, onMemoryMutated, refreshInspector, selectedSubject]);
+  }, [editor, onMemoryMutated, refreshInspector, selectedGuildId, selectedSubject]);
 
   const handleDeleteFact = useCallback(async (fact: FactRow) => {
-    if (!guildId) return;
+    if (!selectedGuildId) return;
     if (!globalThis.confirm(`Delete durable fact #${fact.id}?`)) return;
 
     setDeletingFactId(fact.id);
@@ -316,7 +300,7 @@ export default function MemoryInspector({ guilds, onMemoryMutated }: Props) {
       await api<FactMutationResponse>(`/api/memory/facts/${encodeURIComponent(String(fact.id))}`, {
         method: "DELETE",
         body: {
-          guildId
+          guildId: selectedGuildId
         }
       });
 
@@ -333,14 +317,11 @@ export default function MemoryInspector({ guilds, onMemoryMutated }: Props) {
     } finally {
       setDeletingFactId(null);
     }
-  }, [guildId, onMemoryMutated, refreshInspector, selectedSubject]);
+  }, [onMemoryMutated, refreshInspector, selectedGuildId, selectedSubject]);
 
   return (
     <div className="inspector-layout">
       <div className="inspector-toolbar">
-        <div className="inspector-toolbar-left">
-          <GuildSelectField guilds={guilds} guildId={guildId} onGuildChange={setGuildId} />
-        </div>
         <div className="inspector-toolbar-right">
           <span className="inspector-stat">
             {loadingSubjects ? "Loading subjects..." : `${filteredSubjects.length} subjects`}

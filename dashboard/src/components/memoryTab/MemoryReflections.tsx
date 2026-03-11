@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import { PanelHead } from "../ui";
-
-interface Guild {
-  id: string;
-  name: string;
-}
+import { useDashboardGuildScope } from "../../guildScope";
 
 interface ReflectionFact {
   subject?: string;
@@ -89,7 +85,8 @@ function statusLabel(status?: string) {
   return "Running";
 }
 
-export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
+export default function MemoryReflections() {
+  const { guilds, selectedGuildId } = useDashboardGuildScope();
   const [runs, setRuns] = useState<ReflectionRun[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -100,14 +97,18 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
     setLoading(true);
     setError("");
     try {
-      const data = await api<ReflectionResponse>(`/api/memory/reflections?limit=${encodeURIComponent(String(nextLimit))}`);
+      const params = new URLSearchParams({
+        limit: String(nextLimit)
+      });
+      if (selectedGuildId) params.set("guildId", selectedGuildId);
+      const data = await api<ReflectionResponse>(`/api/memory/reflections?${params.toString()}`);
       setRuns(Array.isArray(data?.runs) ? data.runs : []);
     } catch (loadError: unknown) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
       setLoading(false);
     }
-  }, [limit]);
+  }, [limit, selectedGuildId]);
 
   const deleteRun = useCallback(async (runId: string) => {
     if (!runId) return;

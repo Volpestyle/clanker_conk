@@ -531,9 +531,14 @@
   color: var(--ink-3);
 }
 
-.channel-checklist-guild-select {
+.channel-checklist-scope {
   margin-bottom: 6px;
-  width: 100%;
+  color: var(--ink-2);
+  font-size: 0.74rem;
+}
+
+.channel-checklist-scope strong {
+  color: var(--ink-0);
 }
 
 .channel-checklist-toolbar {

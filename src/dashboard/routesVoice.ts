@@ -589,12 +589,13 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
 
   app.get("/api/voice/history/sessions", (c) => {
     const limit = parseBoundedInt(c.req.query("limit"), 100, 1, 200);
+    const guildId = String(c.req.query("guildId") || "").trim() || null;
     const sinceHoursRaw = Number(c.req.query("sinceHours"));
     const sinceIso =
       Number.isFinite(sinceHoursRaw) && sinceHoursRaw > 0
         ? new Date(Date.now() - sinceHoursRaw * 60 * 60 * 1000).toISOString()
         : null;
-    return c.json(store.getRecentVoiceSessions(limit, { sinceIso }));
+    return c.json(store.getRecentVoiceSessions(limit, { sinceIso, guildId }));
   });
 
   app.get("/api/voice/history/sessions/:sessionId/events", (c) => {
@@ -603,13 +604,16 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
   });
 
   app.get("/api/memory", async (c) => {
-    return c.json({ markdown: await memory.readMemoryMarkdown() });
+    const guildId = String(c.req.query("guildId") || "").trim() || null;
+    return c.json({ guildId, markdown: await memory.readMemoryMarkdown({ guildId }) });
   });
 
   app.post("/api/memory/refresh", async (c) => {
+    const body = await readDashboardBody(c);
+    const guildId = String(body.guildId || "").trim() || null;
     await memory.refreshMemoryMarkdown();
-    const markdown = await memory.readMemoryMarkdown();
-    return c.json({ ok: true, markdown });
+    const markdown = await memory.readMemoryMarkdown({ guildId });
+    return c.json({ ok: true, guildId, markdown });
   });
 
   app.post("/api/memory/runtime-snapshot", async (c) => {
@@ -921,8 +925,10 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
 
   app.get("/api/memory/reflections", (c) => {
     const limit = parseBoundedInt(c.req.query("limit"), 20, 1, 100);
+    const guildId = String(c.req.query("guildId") || "").trim() || null;
     return c.json({
-      runs: store.getRecentMemoryReflections(limit)
+      guildId,
+      runs: store.getRecentMemoryReflections(limit, { guildId })
     });
   });
 

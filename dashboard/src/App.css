@@ -210,6 +210,36 @@ body {
   flex-shrink: 0;
 }
 
+.hero-guild-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+}
+
+.hero-guild-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.hero-guild-select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 34px 7px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--ink-0);
+  font-size: 0.78rem;
+}
+
+.hero-guild-select:disabled {
+  opacity: 0.78;
+}
+
 .hero-status {
   font-size: 0.64rem;
   font-weight: 600;
@@ -1540,6 +1570,7 @@ button.sm {
   .hero-right {
     width: 100%;
     justify-content: space-between;
+    flex-wrap: wrap;
   }
   .hero-ident {
     flex-direction: column;
@@ -1547,6 +1578,9 @@ button.sm {
   }
   .hero-divider {
     display: none;
+  }
+  .hero-guild-scope {
+    min-width: min(100%, 280px);
   }
 }
 

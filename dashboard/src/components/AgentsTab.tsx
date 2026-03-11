@@ -1,5 +1,6 @@
 import { usePolling } from "../hooks/usePolling";
 import { api } from "../api";
+import { useDashboardGuildScope } from "../guildScope";
 
 // ---- Types ----
 
@@ -156,8 +157,16 @@ function SessionCard({ session }: { session: BrowserSession }) {
 // ---- AgentsTab (main) ----
 
 export default function AgentsTab() {
+  const { selectedGuildId, selectedGuild } = useDashboardGuildScope();
   const { data } = usePolling(
-    () => api<BrowserSessionsResponse>("/api/agents/browser-sessions?sinceHours=24&limit=50"),
+    () => {
+      const params = new URLSearchParams({
+        sinceHours: "24",
+        limit: "50"
+      });
+      if (selectedGuildId) params.set("guildId", selectedGuildId);
+      return api<BrowserSessionsResponse>(`/api/agents/browser-sessions?${params.toString()}`);
+    },
     30_000
   );
 
@@ -174,7 +183,11 @@ export default function AgentsTab() {
               <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
             </svg>
           </span>
-          <p>No browser sessions in the last 24 hours.</p>
+          <p>
+            {selectedGuild?.name
+              ? `No browser sessions for ${selectedGuild.name} in the last 24 hours.`
+              : "No browser sessions in the last 24 hours."}
+          </p>
         </div>
       </section>
     );

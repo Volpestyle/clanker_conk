@@ -12,6 +12,7 @@ interface StatsStore {
   getReplyPerformanceStats(args?: {
     windowHours?: number;
     maxSamples?: number;
+    guildId?: string | null;
   }): {
     windowHours: number;
     sampleLimit: number;
@@ -54,21 +55,34 @@ interface DayCostRow {
   usd: number;
 }
 
-export function getReplyPerformanceStats(store: StatsStore, { windowHours = 24, maxSamples = 4000 } = {}) {
+export function getReplyPerformanceStats(
+  store: StatsStore,
+  { windowHours = 24, maxSamples = 4000, guildId = null }: { windowHours?: number; maxSamples?: number; guildId?: string | null } = {}
+) {
 const boundedHours = clamp(Math.floor(Number(windowHours) || 24), 1, 168);
 const boundedSamples = clamp(Math.floor(Number(maxSamples) || 4000), 100, 20000);
 const sinceIso = new Date(Date.now() - boundedHours * 60 * 60 * 1000).toISOString();
+const normalizedGuildId = String(guildId || "").trim();
+const conditions = [
+  "created_at >= ?",
+  "kind IN ('sent_reply', 'sent_message', 'reply_skipped')"
+];
+const params: Array<string | number> = [sinceIso];
+if (normalizedGuildId) {
+  conditions.push("guild_id = ?");
+  params.push(normalizedGuildId);
+}
+params.push(boundedSamples);
 
 const rows = store.db
-  .prepare<ActionMetadataRow, [string, number]>(
+  .prepare<ActionMetadataRow, Array<string | number>>(
     `SELECT kind, metadata
          FROM actions
-         WHERE created_at >= ?
-           AND kind IN ('sent_reply', 'sent_message', 'reply_skipped')
+         WHERE ${conditions.join(" AND ")}
          ORDER BY id DESC
          LIMIT ?`
   )
-  .all(sinceIso, boundedSamples);
+  .all(...params);
 
 const byKind = {
   sent_reply: 0,
@@ -123,35 +137,63 @@ return {
 };
 }
 
-export function getStats(store: StatsStore) {
+export function getStats(store: StatsStore, { guildId = null }: { guildId?: string | null } = {}) {
 const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+const normalizedGuildId = String(guildId || "").trim();
+const actionConditions = ["created_at >= ?"];
+const actionParams: Array<string | number> = [since24h];
+if (normalizedGuildId) {
+  actionConditions.push("guild_id = ?");
+  actionParams.push(normalizedGuildId);
+}
 
 const rows = store.db
-  .prepare<ActionKindCountRow, [string]>(
+  .prepare<ActionKindCountRow, Array<string | number>>(
     `SELECT kind, COUNT(*) AS count
          FROM actions
-         WHERE created_at >= ?
+         WHERE ${actionConditions.join(" AND ")}
          GROUP BY kind`
   )
-  .all(since24h);
+  .all(...actionParams);
 
-const totalCostRow = store.db
-  .prepare<TotalCostRow, []>(
-    `SELECT COALESCE(SUM(usd_cost), 0) AS total
-         FROM actions`
-  )
-  .get();
+const totalCostRow = normalizedGuildId
+  ? store.db
+    .prepare<TotalCostRow, [string]>(
+      `SELECT COALESCE(SUM(usd_cost), 0) AS total
+           FROM actions
+           WHERE guild_id = ?`
+    )
+    .get(normalizedGuildId)
+  : store.db
+    .prepare<TotalCostRow, []>(
+      `SELECT COALESCE(SUM(usd_cost), 0) AS total
+           FROM actions`
+    )
+    .get();
 
-const dayCostRows = store.db
-  .prepare<DayCostRow, [string]>(
-    `SELECT substr(created_at, 1, 10) AS day, COALESCE(SUM(usd_cost), 0) AS usd
-         FROM actions
-         WHERE created_at >= ?
-         GROUP BY day
-         ORDER BY day DESC
-         LIMIT 14`
-  )
-  .all(new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString());
+const dailySinceIso = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+const dayCostRows = normalizedGuildId
+  ? store.db
+    .prepare<DayCostRow, [string, string]>(
+      `SELECT substr(created_at, 1, 10) AS day, COALESCE(SUM(usd_cost), 0) AS usd
+           FROM actions
+           WHERE created_at >= ?
+             AND guild_id = ?
+           GROUP BY day
+           ORDER BY day DESC
+           LIMIT 14`
+    )
+    .all(dailySinceIso, normalizedGuildId)
+  : store.db
+    .prepare<DayCostRow, [string]>(
+      `SELECT substr(created_at, 1, 10) AS day, COALESCE(SUM(usd_cost), 0) AS usd
+           FROM actions
+           WHERE created_at >= ?
+           GROUP BY day
+           ORDER BY day DESC
+           LIMIT 14`
+    )
+    .all(dailySinceIso);
 
   const out = {
   last24h: {
@@ -177,7 +219,8 @@ const dayCostRows = store.db
   dailyCost: dayCostRows,
   performance: store.getReplyPerformanceStats({
     windowHours: 24,
-    maxSamples: 4000
+    maxSamples: 4000,
+    guildId: normalizedGuildId || null
   })
 };
 

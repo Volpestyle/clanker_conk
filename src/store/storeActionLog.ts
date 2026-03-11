@@ -268,18 +268,30 @@ export function getRecentActions(
   }));
 }
 
-export function getRecentMemoryReflections(store: ActionLogStore, limit = 20) {
+export function getRecentMemoryReflections(
+  store: ActionLogStore,
+  limit = 20,
+  opts: { guildId?: string | null } = {}
+) {
   const parsedLimit = Number(limit);
   const boundedLimit = clamp(Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : 20, 1, 100);
+  const normalizedGuildId = String(opts?.guildId || "").trim();
+  const params: Array<string | number> = [];
+  const conditions = ["kind IN ('memory_reflection_start', 'memory_reflection_complete', 'memory_reflection_error')"];
+  if (normalizedGuildId) {
+    conditions.push("guild_id = ?");
+    params.push(normalizedGuildId);
+  }
+  params.push(Math.max(60, boundedLimit * 6));
   const rows = store.db
-    .prepare<ActionLogRow, [number]>(
+    .prepare<ActionLogRow, Array<string | number>>(
       `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
          FROM actions
-         WHERE kind IN ('memory_reflection_start', 'memory_reflection_complete', 'memory_reflection_error')
+         WHERE ${conditions.join(" AND ")}
          ORDER BY created_at DESC
          LIMIT ?`
     )
-    .all(Math.max(60, boundedLimit * 6));
+    .all(...params);
 
   const runs = new Map();
   for (const row of rows) {
@@ -454,9 +466,14 @@ export function deleteReflectionRun(store: ActionLogStore, runId: string): { del
   return { deleted: result.changes };
 }
 
-export function getRecentBrowserSessions(store: ActionLogStore, limit = 50, opts: { sinceIso?: string | null } = {}) {
+export function getRecentBrowserSessions(
+  store: ActionLogStore,
+  limit = 50,
+  opts: { sinceIso?: string | null; guildId?: string | null } = {}
+) {
   const parsedLimit = clamp(Math.floor(Number(limit) || 50), 1, 200);
   const sinceIso = String(opts?.sinceIso || "").trim();
+  const guildId = String(opts?.guildId || "").trim();
 
   const conditions: string[] = [
     "kind IN ('browser_browse_call', 'browser_tool_step', 'browser_agent_session_turn')"
@@ -466,6 +483,10 @@ export function getRecentBrowserSessions(store: ActionLogStore, limit = 50, opts
   if (sinceIso) {
     conditions.push("created_at >= ?");
     params.push(sinceIso);
+  }
+  if (guildId) {
+    conditions.push("guild_id = ?");
+    params.push(guildId);
   }
 
   const whereClause = conditions.join(" AND ");

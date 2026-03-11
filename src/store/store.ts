@@ -384,11 +384,11 @@ export class Store {
     return getRecentActions(this, limit, opts);
   }
 
-  getRecentMemoryReflections(limit = 20) {
-    return getRecentMemoryReflections(this, limit);
+  getRecentMemoryReflections(limit = 20, opts: { guildId?: string | null } = {}) {
+    return getRecentMemoryReflections(this, limit, opts);
   }
 
-  getRecentBrowserSessions(limit = 50, opts: { sinceIso?: string | null } = {}) {
+  getRecentBrowserSessions(limit = 50, opts: { sinceIso?: string | null; guildId?: string | null } = {}) {
     return getRecentBrowserSessions(this, limit, opts);
   }
 
@@ -421,7 +421,7 @@ export class Store {
     return recordSharedLink(this, opts);
   }
 
-  getRecentVoiceSessions(limit = 3, opts: { sinceIso?: string | null } = {}) {
+  getRecentVoiceSessions(limit = 3, opts: { sinceIso?: string | null; guildId?: string | null } = {}) {
     return getRecentVoiceSessions(this, limit, opts);
   }
 
@@ -429,12 +429,12 @@ export class Store {
     return getVoiceSessionEvents(this, sessionId, limit);
   }
 
-  getReplyPerformanceStats(opts: { windowHours?: number; maxSamples?: number } = {}) {
+  getReplyPerformanceStats(opts: { windowHours?: number; maxSamples?: number; guildId?: string | null } = {}) {
     return getReplyPerformanceStats(this, opts);
   }
 
-  getStats() {
-    return getStats(this);
+  getStats(opts: { guildId?: string | null } = {}) {
+    return getStats(this, opts);
   }
 
   createAutomation(opts: {

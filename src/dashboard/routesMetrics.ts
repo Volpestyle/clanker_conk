@@ -7,7 +7,7 @@ import { parseBoundedInt } from "./shared.ts";
 export interface MetricsRouteDeps {
   store: Store;
   publicHttpsEntrypoint: DashboardPublicHttpsEntrypoint | null;
-  getStatsPayload: () => unknown;
+  getStatsPayload: (guildId?: string | null) => unknown;
   activitySseClients: Set<DashboardSseClient>;
   writeSseEvent: (client: DashboardSseClient, eventName: string, payload: unknown) => Promise<void>;
 }
@@ -17,6 +17,7 @@ export function attachMetricsRoutes(app: DashboardApp, deps: MetricsRouteDeps) {
 
   app.get("/api/actions", (c) => {
     const limit = parseBoundedInt(c.req.query("limit"), 200, 1, 1000);
+    const guildId = String(c.req.query("guildId") || "").trim() || null;
     const kinds = String(c.req.query("kinds") || "")
       .split(",")
       .map((value) => value.trim())
@@ -27,7 +28,7 @@ export function attachMetricsRoutes(app: DashboardApp, deps: MetricsRouteDeps) {
         ? new Date(Date.now() - sinceHoursRaw * 60 * 60 * 1000).toISOString()
         : null;
 
-    return c.json(store.getRecentActions(limit, { kinds, sinceIso }));
+    return c.json(store.getRecentActions(limit, { kinds, sinceIso, guildId }));
   });
 
   app.get("/api/agents/browser-sessions", (c) => {
@@ -35,12 +36,14 @@ export function attachMetricsRoutes(app: DashboardApp, deps: MetricsRouteDeps) {
     const sinceHours = Number.isFinite(sinceHoursRaw) && sinceHoursRaw > 0 ? sinceHoursRaw : 24;
     const sinceIso = new Date(Date.now() - sinceHours * 60 * 60 * 1000).toISOString();
     const limit = parseBoundedInt(c.req.query("limit"), 50, 1, 200);
-    const sessions = store.getRecentBrowserSessions(limit, { sinceIso });
-    return c.json({ sessions });
+    const guildId = String(c.req.query("guildId") || "").trim() || null;
+    const sessions = store.getRecentBrowserSessions(limit, { sinceIso, guildId });
+    return c.json({ guildId, sessions });
   });
 
   app.get("/api/stats", (c) => {
-    return c.json(getStatsPayload());
+    const guildId = String(c.req.query("guildId") || "").trim() || null;
+    return c.json(getStatsPayload(guildId));
   });
 
   app.get("/api/public-https", (c) => {
@@ -83,7 +86,7 @@ export function attachMetricsRoutes(app: DashboardApp, deps: MetricsRouteDeps) {
       try {
         await writeSseEvent(client, "activity_snapshot", {
           actions: store.getRecentActions(220),
-          stats: getStatsPayload()
+          stats: getStatsPayload(null)
         });
       } catch {
         cleanup();
@@ -92,7 +95,7 @@ export function attachMetricsRoutes(app: DashboardApp, deps: MetricsRouteDeps) {
       }
 
       statsInterval = setInterval(() => {
-        void writeSseEvent(client, "stats_update", getStatsPayload()).catch(() => {
+        void writeSseEvent(client, "stats_update", getStatsPayload(null)).catch(() => {
           cleanup();
         });
       }, 3_000);

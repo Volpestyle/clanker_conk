@@ -27,7 +27,7 @@ import {
   normalizeQueryEmbeddingText,
   normalizeStoredFactText,
   normalizeSelfFactForDisplay,
-  parseDailyEntryLine,
+  parseDailyEntryLineWithScope,
   passesHybridRelevanceGate,
   resolveDirectiveScopeConfig,
   sanitizeInline,
@@ -1258,20 +1258,34 @@ export class MemoryManager {
   }
 
   async refreshMemoryMarkdown() {
-    const peopleSection = this.buildPeopleSection();
-    const selfSection = this.buildSelfSection(6);
-    const recentDailyEntries = await this.getRecentDailyEntries({ days: 3, maxEntries: 120 });
+    const markdown = await this.buildMemoryMarkdown();
+    await fs.mkdir(this.memoryDirPath, { recursive: true });
+    await fs.writeFile(this.memoryFilePath, markdown, "utf8");
+  }
+
+  async buildMemoryMarkdown({ guildId = null }: { guildId?: string | null } = {}) {
+    const normalizedGuildId = String(guildId || "").trim() || null;
+    const peopleSection = this.buildPeopleSection(normalizedGuildId);
+    const selfSection = this.buildSelfSection(6, normalizedGuildId);
+    const recentDailyEntries = await this.getRecentDailyEntries({
+      days: 3,
+      maxEntries: 120,
+      guildId: normalizedGuildId
+    });
     const highlightsSection = buildHighlightsSection(recentDailyEntries, 24);
-    const loreSection = this.buildLoreSection(6);
+    const loreSection = this.buildLoreSection(6, normalizedGuildId);
     const dailyFiles = await this.getRecentDailyFiles(5);
     const dailyFilesLine = dailyFiles.length
       ? dailyFiles.map((filePath) => `memory/${path.basename(filePath)}`).join(", ")
       : "(No daily files yet.)";
+    const scopeLine = normalizedGuildId
+      ? `_Operator-facing summary for guild \`${normalizedGuildId}\`. Runtime prompts use indexed durable facts + retrieval, not this markdown file directly._`
+      : "_Operator-facing summary. Runtime prompts use indexed durable facts + retrieval, not this markdown file directly._";
 
-    const markdown = [
+    return [
       "# Durable Memory Snapshot",
       "",
-      "_Operator-facing summary. Runtime prompts use indexed durable facts + retrieval, not this markdown file directly._",
+      scopeLine,
       "",
       "## People (Durable Facts)",
       ...(peopleSection.length ? peopleSection : ["- (No stable people facts yet.)"]),
@@ -1287,14 +1301,18 @@ export class MemoryManager {
       "",
       "## Source Daily Logs",
       "- Daily logs are append-only in `memory/YYYY-MM-DD.md`.",
-      `- Recent files: ${dailyFilesLine}`
+      normalizedGuildId
+        ? `- Recent files: ${dailyFilesLine} (entries filtered to guild \`${normalizedGuildId}\`).`
+        : `- Recent files: ${dailyFilesLine}`
     ].join("\n");
-
-    await fs.mkdir(this.memoryDirPath, { recursive: true });
-    await fs.writeFile(this.memoryFilePath, markdown, "utf8");
   }
 
-  async readMemoryMarkdown() {
+  async readMemoryMarkdown({ guildId = null }: { guildId?: string | null } = {}) {
+    const normalizedGuildId = String(guildId || "").trim() || null;
+    if (normalizedGuildId) {
+      return await this.buildMemoryMarkdown({ guildId: normalizedGuildId });
+    }
+
     try {
       return await fs.readFile(this.memoryFilePath, "utf8");
     } catch {
@@ -1302,9 +1320,10 @@ export class MemoryManager {
     }
   }
 
-  buildPeopleSection() {
+  buildPeopleSection(guildId: string | null = null) {
+    const normalizedGuildId = String(guildId || "").trim() || null;
     const subjects = this.store
-      .getMemorySubjects(80)
+      .getMemorySubjects(80, normalizedGuildId ? { guildId: normalizedGuildId } : null)
       .filter((subjectRow) => subjectRow.subject !== LORE_SUBJECT && subjectRow.subject !== SELF_SUBJECT);
     const factsByScopedSubject = this.getPeopleFactsByScopedSubject(subjects);
     const peopleLines = [];
@@ -1320,7 +1339,7 @@ export class MemoryManager {
         )
       ].slice(0, 6);
       if (!cleaned.length) continue;
-      const scopeLabel = subjectRow.guild_id ? `[guild:${subjectRow.guild_id}] ` : "";
+      const scopeLabel = normalizedGuildId ? "" : subjectRow.guild_id ? `[guild:${subjectRow.guild_id}] ` : "";
       peopleLines.push(`- ${scopeLabel}${subjectRow.subject}: ${cleaned.join(" | ")}`);
     }
 
@@ -1364,8 +1383,13 @@ export class MemoryManager {
     return factsByScopedSubject;
   }
 
-  buildSelfSection(maxItems = 6) {
-    const rows = this.store.getFactsForSubjectScoped(SELF_SUBJECT, 32, null);
+  buildSelfSection(maxItems = 6, guildId: string | null = null) {
+    const normalizedGuildId = String(guildId || "").trim() || null;
+    const rows = this.store.getFactsForSubjectScoped(
+      SELF_SUBJECT,
+      32,
+      normalizedGuildId ? { guildId: normalizedGuildId } : null
+    );
     const durableSelfLines = [];
     const seen = new Set();
     for (const row of rows) {
@@ -1374,14 +1398,19 @@ export class MemoryManager {
       const key = `${row.guild_id || ""}:${normalized.toLowerCase()}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const scopeLabel = row.guild_id ? `[guild:${row.guild_id}] ` : "";
+      const scopeLabel = normalizedGuildId ? "" : row.guild_id ? `[guild:${row.guild_id}] ` : "";
       durableSelfLines.push(`- ${scopeLabel}${normalized}`);
     }
     return durableSelfLines.slice(0, Math.max(1, maxItems));
   }
 
-  buildLoreSection(maxItems = 6) {
-    const rows = this.store.getFactsForSubjectScoped(LORE_SUBJECT, 32, null);
+  buildLoreSection(maxItems = 6, guildId: string | null = null) {
+    const normalizedGuildId = String(guildId || "").trim() || null;
+    const rows = this.store.getFactsForSubjectScoped(
+      LORE_SUBJECT,
+      32,
+      normalizedGuildId ? { guildId: normalizedGuildId } : null
+    );
     const durableLoreLines = [];
     const seen = new Set();
     for (const row of rows) {
@@ -1390,7 +1419,7 @@ export class MemoryManager {
       const key = `${row.guild_id || ""}:${normalized.toLowerCase()}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const scopeLabel = row.guild_id ? `[guild:${row.guild_id}] ` : "";
+      const scopeLabel = normalizedGuildId ? "" : row.guild_id ? `[guild:${row.guild_id}] ` : "";
       durableLoreLines.push(`- ${scopeLabel}${normalized}`);
     }
     return durableLoreLines.slice(0, Math.max(1, maxItems));
@@ -1633,8 +1662,9 @@ export class MemoryManager {
     }
   }
 
-  async getRecentDailyEntries({ days = 3, maxEntries = 120 } = {}) {
+  async getRecentDailyEntries({ days = 3, maxEntries = 120, guildId = null } = {}) {
     const files = await this.getRecentDailyFiles(days);
+    const normalizedGuildId = String(guildId || "").trim() || null;
     const entries = [];
 
     for (const filePath of files) {
@@ -1646,8 +1676,14 @@ export class MemoryManager {
       }
 
       for (const line of text.split("\n")) {
-        const parsed = parseDailyEntryLine(line);
-        if (parsed) entries.push(parsed);
+        const parsed = parseDailyEntryLineWithScope(line);
+        if (!parsed) continue;
+        if (normalizedGuildId && String(parsed.guildId || "").trim() !== normalizedGuildId) continue;
+        entries.push({
+          author: parsed.author,
+          text: parsed.content,
+          timestampMs: parsed.timestampMs
+        });
       }
     }
 

@@ -28,6 +28,57 @@ test("dashboard memory search handles missing params and valid lookups", async (
   }
 });
 
+test("dashboard memory summary routes honor guild scope", async () => {
+  const readCalls: Array<Record<string, unknown> | undefined> = [];
+  let refreshCalls = 0;
+
+  const result = await withDashboardServer(
+    {
+      memoryOverrides: {
+        async readMemoryMarkdown(opts) {
+          readCalls.push(opts as Record<string, unknown> | undefined);
+          const guildId = String(opts?.guildId || "").trim();
+          return guildId ? `# Summary for ${guildId}` : "# Global summary";
+        },
+        async refreshMemoryMarkdown() {
+          refreshCalls += 1;
+          return true;
+        }
+      }
+    },
+    async ({ baseUrl }) => {
+      const scoped = await fetch(`${baseUrl}/api/memory?guildId=guild-2`);
+      assert.equal(scoped.status, 200);
+      const scopedJson = await scoped.json();
+      assert.equal(scopedJson.guildId, "guild-2");
+      assert.equal(scopedJson.markdown, "# Summary for guild-2");
+
+      const refreshed = await fetch(`${baseUrl}/api/memory/refresh`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          guildId: "guild-2"
+        })
+      });
+      assert.equal(refreshed.status, 200);
+      const refreshedJson = await refreshed.json();
+      assert.equal(refreshedJson.guildId, "guild-2");
+      assert.equal(refreshedJson.markdown, "# Summary for guild-2");
+      assert.equal(refreshCalls, 1);
+      assert.deepEqual(readCalls, [
+        { guildId: "guild-2" },
+        { guildId: "guild-2" }
+      ]);
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard fact profile route returns durable and active voice cache views", async () => {
   const result = await withDashboardServer(
     {
@@ -595,6 +646,105 @@ test("dashboard memory reflections returns recent reflection runs with extracted
     assert.equal(typeof json.runs[0]?.rawResponseText, "string");
     assert.equal(json.runs[0]?.savedFacts[0]?.saveReason, "added_new");
     assert.equal(json.runs[0]?.skippedFacts[0]?.saveReason, "unresolved_author_subject");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard memory reflections can be filtered to one guild", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.logAction({
+      kind: "memory_reflection_start",
+      guildId: "guild-1",
+      content: "Reflecting on guild-1",
+      metadata: {
+        runId: "reflection_run_g1",
+        dateKey: "2026-03-03",
+        guildId: "guild-1"
+      }
+    });
+    store.logAction({
+      kind: "memory_reflection_complete",
+      guildId: "guild-1",
+      content: "Completed reflection for guild-1",
+      metadata: {
+        runId: "reflection_run_g1",
+        dateKey: "2026-03-03",
+        guildId: "guild-1"
+      }
+    });
+    store.logAction({
+      kind: "memory_reflection_start",
+      guildId: "guild-2",
+      content: "Reflecting on guild-2",
+      metadata: {
+        runId: "reflection_run_g2",
+        dateKey: "2026-03-03",
+        guildId: "guild-2"
+      }
+    });
+    store.logAction({
+      kind: "memory_reflection_complete",
+      guildId: "guild-2",
+      content: "Completed reflection for guild-2",
+      metadata: {
+        runId: "reflection_run_g2",
+        dateKey: "2026-03-03",
+        guildId: "guild-2"
+      }
+    });
+
+    const response = await fetch(`${baseUrl}/api/memory/reflections?limit=10&guildId=guild-1`);
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.guildId, "guild-1");
+    assert.equal(Array.isArray(json.runs), true);
+    assert.equal(json.runs.length, 1);
+    assert.equal(json.runs[0]?.guildId, "guild-1");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard browser session history can be filtered to one guild", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.logAction({
+      kind: "browser_browse_call",
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "user-1",
+      content: "Open the guild-1 changelog",
+      metadata: {
+        sessionId: "browser-session-g1",
+        steps: 2,
+        totalCostUsd: 0.12
+      }
+    });
+    store.logAction({
+      kind: "browser_browse_call",
+      guildId: "guild-2",
+      channelId: "chan-2",
+      userId: "user-2",
+      content: "Open the guild-2 changelog",
+      metadata: {
+        sessionId: "browser-session-g2",
+        steps: 4,
+        totalCostUsd: 0.34
+      }
+    });
+
+    const response = await fetch(`${baseUrl}/api/agents/browser-sessions?limit=10&guildId=guild-1`);
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.guildId, "guild-1");
+    assert.equal(Array.isArray(json.sessions), true);
+    assert.equal(json.sessions.length, 1);
+    assert.equal(json.sessions[0]?.sessionId, "browser-session-g1");
+    assert.equal(json.sessions[0]?.guildId, "guild-1");
   });
 
   if (result?.skipped) {

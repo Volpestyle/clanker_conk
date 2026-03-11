@@ -1,18 +1,13 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { api } from "../api";
 import { parseUniqueList } from "../../../src/settings/listNormalization.ts";
-import { getLastGuildId, saveLastGuildId } from "./memoryTab/MemoryFormFields";
+import { useDashboardGuildScope } from "../guildScope";
 
 type GuildChannel = {
   id: string;
   name: string;
   type: "text" | "voice";
   category: string | null;
-};
-
-type Guild = {
-  id: string;
-  name: string;
 };
 
 type ChannelChecklistProps = {
@@ -30,27 +25,12 @@ export function ChannelChecklist({
   onChange,
   channelType = "all"
 }: ChannelChecklistProps) {
-  const [guilds, setGuilds] = useState<Guild[]>([]);
+  const { guilds, selectedGuildId } = useDashboardGuildScope();
   const [channels, setChannels] = useState<GuildChannel[]>([]);
-  const [selectedGuildId, setSelectedGuildId] = useState("");
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("");
 
   const selectedIds = useMemo(() => new Set(parseUniqueList(value)), [value]);
-
-  useEffect(() => {
-    api<Guild[]>("/api/guilds")
-      .then((rows) => {
-        const list = Array.isArray(rows) ? rows : [];
-        setGuilds(list);
-        const savedGuildId = getLastGuildId();
-        const restoredGuild = savedGuildId && list.some((g) => g.id === savedGuildId);
-        const guildId = restoredGuild ? savedGuildId : list[0]?.id || "";
-        setSelectedGuildId(guildId);
-        saveLastGuildId(guildId);
-      })
-      .catch(() => setGuilds([]));
-  }, []);
 
   useEffect(() => {
     if (!selectedGuildId) return;
@@ -113,20 +93,9 @@ export function ChannelChecklist({
       <p className="channel-checklist-hint">{hint}</p>
 
       {guilds.length > 1 && (
-        <select
-          className="channel-checklist-guild-select"
-          value={selectedGuildId}
-          onChange={(e) => {
-            setSelectedGuildId(e.target.value);
-            saveLastGuildId(e.target.value);
-          }}
-        >
-          {guilds.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name}
-            </option>
-          ))}
-        </select>
+        <p className="channel-checklist-scope">
+          Showing channels for <strong>{guilds.find((guild) => guild.id === selectedGuildId)?.name || selectedGuildId}</strong>
+        </p>
       )}
 
       <div className="channel-checklist-toolbar">

@@ -18,7 +18,7 @@ function extractSessionId(metadata: unknown): string {
   return String(rawSessionId || "").trim();
 }
 
-export function useVoiceHistory() {
+export function useVoiceHistory(guildId: string | null = null) {
   const [sessions, setSessions] = useState<HistorySession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [events, setEvents] = useState<VoiceEvent[]>([]);
@@ -26,14 +26,26 @@ export function useVoiceHistory() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchSessions = useCallback(() => {
-    api<HistorySession[]>("/api/voice/history/sessions?sinceHours=24&limit=100")
+    const params = new URLSearchParams({
+      sinceHours: "24",
+      limit: "100"
+    });
+    const normalizedGuildId = String(guildId || "").trim();
+    if (normalizedGuildId) params.set("guildId", normalizedGuildId);
+    api<HistorySession[]>(`/api/voice/history/sessions?${params.toString()}`)
       .then((rows) => setSessions(Array.isArray(rows) ? rows : []))
       .catch(() => setSessions([]));
-  }, []);
+  }, [guildId]);
 
   useEffect(() => {
     fetchSessions();
   }, [fetchSessions]);
+
+  useEffect(() => {
+    setSelectedSessionId(null);
+    setEvents([]);
+    setError(null);
+  }, [guildId]);
 
   useEffect(() => {
     if (!selectedSessionId) {
