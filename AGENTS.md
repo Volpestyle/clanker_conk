@@ -20,6 +20,7 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 
 ## General
 
+- When doing large changes, don't worry about tests until the very end. It's better to have ME prove our system manually before spending energy making and fixing tests.
 - Always update canonical documentation of related feature when updating code. Prefer to avoid 'past tense' language, stating a canonical truth rather than a redesign or migration plan, unless explicitly asked for plan.
 - Don't add new tests willy nilly. This can lead to bloat and heavy tech debt. Tests should only test critical business logic paths and edge cases.
 - If you find tests that seem to be adding useless bloat, testing legacy things, or are redundant, please remove them.
