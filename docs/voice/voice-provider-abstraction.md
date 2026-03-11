@@ -1,12 +1,13 @@
 # Voice Pipeline — Provider Abstraction and Stage Reference
 
-> **Scope:** Current voice pipeline stages, runtime modes, and canonical settings surfaces.
+> **Scope:** Current voice transport stack, runtime modes, and canonical settings surfaces.
+> Shared attention model: [`../presence-and-attention.md`](../presence-and-attention.md)
 > Activity model and knob map: [`../clanker-activity.md`](../clanker-activity.md)
 > Capture and ASR details: [`voice-capture-and-asr-pipeline.md`](voice-capture-and-asr-pipeline.md)
 > Reply orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
 > Output and barge-in: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
 
-This document describes the voice stack as a preset-driven runtime plus nested voice policy settings.
+This document describes the voice spoke of the shared attention model: capture, transcription, admission, transport, output, and voice-side ambient delivery.
 
 ## 1. Canonical Settings Surface
 
@@ -37,6 +38,8 @@ The voice stack keeps transport and behavior separate:
 3. `admission` decides whether a turn should reach generation
 4. `generation` and `tools` run either in the provider-native loop or the orchestrator loop
 5. `output` speaks through realtime or API TTS, then `clankvoxClient` paces generated PCM into the Rust mixer while preserving queued speech unless an interruption clears it
+
+Shared attention sits above this stack. Voice does not own the whole conversational mind; it owns how attention becomes audible in a live room.
 
 Runtime mode values:
 
@@ -152,6 +155,8 @@ The public admission surface is:
 
 Canonical music playback / wake-latch semantics live in [`music.md`](music.md).
 
+This stage is the voice spoke's cost and floor gate. It is not a second conversational policy layer separate from shared attention. Its job is to decide when a voice turn is eligible to reach the main reply brain under live-room constraints.
+
 Classifier binding is resolved through:
 
 - preset defaults in `src/settings/agentStack.ts`
@@ -200,6 +205,8 @@ Canonical cadence settings:
 - `initiative.voice.eagerness`
 - `initiative.voice.minSilenceSeconds`
 - `initiative.voice.minSecondsBetweenThoughts`
+
+This is the voice transport for ambient attention. It is the spoken counterpart to ambient text initiative, not a separate behavioral system.
 
 Implementation note:
 

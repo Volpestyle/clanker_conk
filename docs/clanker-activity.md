@@ -1,11 +1,12 @@
 # Clanker Activity Model
 
-> **Scope:** Current shipped activity paths across text and voice.
+> **Scope:** Current shipped mapping from the shared attention model into text and voice behavior.
+> Shared attention model: [`presence-and-attention.md`](presence-and-attention.md)
 > Unified text initiative cycle: [`initiative-unified-spec.md`](initiative-unified-spec.md)
 > Voice pipeline and stage settings: [`voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
 > Architecture overview: [`technical-architecture.md`](technical-architecture.md)
 
-This document is the source of truth for how the bot decides when to speak, which runtime path is active, and which settings surface owns each part of that behavior.
+This document is the source of truth for how the current runtime surfaces one shared conversational attention model through text and voice. It documents the shipped spokes and guardrails, not a giant transport-level finite-state machine.
 
 ### Autonomy Principle
 
@@ -21,26 +22,36 @@ Settings shape context, budgets, and transport. They do not script the bot's cre
 
 ## Mental Model
 
-Text has three shipped paths:
+The canonical behavioral picture is:
+
+- one shared attention hub with `ACTIVE` and `AMBIENT`
+- a text spoke that decides how attention surfaces in channels
+- a voice spoke that decides how attention surfaces in VC
+- orthogonal overlays such as music playback, wake latch, and assistant output lock
+
+What is currently shipped under that model:
+
+Text has four shipped surfaces:
 
 1. `Directly addressed reply`
 2. `Recent-window follow-up reply`
 3. `Cold ambient reactive reply`
 4. `Unified initiative cycle`
 
-Voice has three shipped paths:
+Voice has four shipped surfaces:
 
 1. `Directed or engaged voice reply`
-2. `Voice thought engine`
-3. `Tool-assisted reply inside the active turn`
+2. `Voice admission and floor ownership`
+3. `Voice thought engine`
+4. `Tool-assisted reply inside the active turn`
 
-Discovery feed items are optional context inside the unified initiative cycle.
+Discovery feed items are optional context inside the ambient text surface. Music playback is an overlay on top of attention, not a third attention mode.
 
 ## Text Activity Paths
 
 ### 1. Directly Addressed Reply
 
-This is the highest-priority text path.
+This is the clearest text-side promotion into `ACTIVE`.
 
 Triggers include:
 
@@ -51,7 +62,7 @@ Triggers include:
 Behavior:
 
 - the message enters the reply pipeline immediately
-- direct address raises admission priority, but it does not mark the turn as response-required
+- direct address promotes conversational attention, but it does not mark the turn as response-required
 - the model still decides the exact reply or `[SKIP]`
 - global blockers still apply, including permissions, rate limits, cooldowns, and runtime failures
 
@@ -73,7 +84,7 @@ Relevant code:
 
 ### 2. Recent-Window Follow-Up Reply
 
-If the bot already has a message in the recent channel window, later non-addressed turns can still enter reply admission as a follow-up.
+If the bot already has a message in the recent channel window, later non-addressed turns can still enter reply admission as a follow-up. This is the text spoke's current shipped version of sustained `ACTIVE` attention.
 
 Behavior:
 
@@ -90,7 +101,7 @@ Relevant code:
 
 ### 3. Cold Ambient Reactive Reply
 
-If there is no recent thread to continue, the bot can still consider a non-addressed text reply as an ambient chime-in.
+If there is no recent thread to continue, the bot can still consider a non-addressed text reply as an ambient chime-in. This is a reactive ambient surface, not an engaged-thread surface.
 
 Behavior:
 
@@ -106,7 +117,7 @@ Relevant code:
 
 ### 4. Unified Initiative Cycle
 
-This is the cold-start text path. It handles both conversational chime-ins and standalone proactive posts.
+This is the cold-start ambient text surface. It handles both conversational chime-ins and standalone proactive posts.
 
 Behavior:
 
@@ -120,7 +131,7 @@ Canonical channel pool:
 
 - `permissions.replies.replyChannelIds`
 
-`initiative.discovery.*` controls feed and media infrastructure for the same cycle.
+`initiative.discovery.*` controls feed and media infrastructure for the same ambient cycle.
 
 Main settings:
 
@@ -145,7 +156,7 @@ Relevant code:
 
 ### 1. Directed Or Engaged Voice Reply
 
-Voice behavior runs only inside an active voice session. The reply path considers direct address, command follow-up state, speaker ownership, recent room context, and output locking.
+Voice behavior runs only inside an active voice session. The reply path considers direct address, command follow-up state, speaker ownership, recent room context, and output locking. This is the main voice-side `ACTIVE` surface.
 
 Behavior:
 
@@ -173,7 +184,9 @@ Relevant code:
 
 ### 2. Voice Admission Gate
 
-Voice admission has two layers:
+Voice admission is not a separate mind. It is the voice spoke's cost/floor gate on top of shared attention.
+
+Voice admission currently has two layers:
 
 1. deterministic gates
 2. classifier or generation-owned skip behavior, depending on reply path
@@ -198,7 +211,7 @@ Relevant code:
 
 ### 3. Voice Thought Engine
 
-This is the voice equivalent of unsolicited initiative. It runs only while a voice session is active and the room is quiet enough.
+This is the ambient voice surface. It runs only while a voice session is active and the room is quiet enough.
 
 Behavior:
 
@@ -226,7 +239,7 @@ Relevant code:
 
 ### 4. Voice Runtime Modes
 
-Voice uses three reply-path shapes:
+Voice uses three reply-path shapes under the same attention model:
 
 - `native`: provider-native audio in and audio out
 - `bridge`: local transcription, then labeled text into the realtime provider
@@ -243,7 +256,7 @@ The operator-facing knobs are:
 
 ### Text Scope
 
-Reactive replies and initiative both respect the text permission surfaces:
+Reactive replies and ambient text delivery both respect the text permission surfaces:
 
 - `permissions.replies.replyChannelIds`
 - `permissions.replies.allowedChannelIds`
@@ -254,7 +267,7 @@ Reactive replies and initiative both respect the text permission surfaces:
 
 ### Voice Scope
 
-Voice session eligibility is controlled separately:
+Voice session eligibility is controlled separately. Shared attention can span text and voice in the same social context, but transport access is still modality-specific:
 
 - `voice.channelPolicy.allowedChannelIds`
 - `voice.channelPolicy.blockedChannelIds`
@@ -270,7 +283,7 @@ Text channel permissions do not determine which voice channels the bot may join.
 | Surface | What it controls |
 |---|---|
 | `interaction.activity.ambientReplyEagerness` | Cold ambient text replies when there is no direct address or active follow-up thread |
-| `interaction.activity.responseWindowEagerness` | How sticky recent engagement is for text and voice follow-up replies |
+| `interaction.activity.responseWindowEagerness` | How sticky shared recent engagement is for text and voice follow-up replies |
 | `interaction.activity.reactivity` | Shared quick reactions such as emoji responses and other lightweight acknowledgements |
 | `voice.conversationPolicy.ambientReplyEagerness` | Ambient voice replies when the bot is in VC but not directly addressed |
 
@@ -286,13 +299,13 @@ Text channel permissions do not determine which voice channels the bot may join.
 
 | Surface | What it controls |
 |---|---|
-| `initiative.text.enabled` | Master switch for unified text initiative |
-| `initiative.text.eagerness` | Probability gate before the initiative LLM call |
-| `initiative.text.minMinutesBetweenPosts` | Minimum gap between initiative considerations |
-| `initiative.text.maxPostsPerDay` | Daily initiative budget |
+| `initiative.text.enabled` | Master switch for ambient text delivery |
+| `initiative.text.eagerness` | Probability gate before the ambient text LLM call |
+| `initiative.text.minMinutesBetweenPosts` | Minimum gap between ambient text considerations |
+| `initiative.text.maxPostsPerDay` | Daily ambient text budget |
 | `initiative.text.lookbackMessages` | Per-channel context window size |
 | `initiative.text.allowActiveCuriosity` | Whether `web_search` and `browser_browse` are available |
-| `initiative.text.maxToolSteps` / `initiative.text.maxToolCalls` | Initiative tool-loop budgets |
+| `initiative.text.maxToolSteps` / `initiative.text.maxToolCalls` | Ambient text tool-loop budgets |
 | `initiative.discovery.*` | Passive feed collection, source curation, and media budgets |
 
 ### Voice Controls
@@ -302,13 +315,13 @@ Text channel permissions do not determine which voice channels the bot may join.
 | `voice.conversationPolicy.commandOnlyMode` | Restricts voice behavior toward commands and explicit wakeups |
 | `voice.conversationPolicy.replyPath` | `native`, `bridge`, or `brain` |
 | `voice.conversationPolicy.ttsMode` | Realtime or API TTS output for brain path |
-| `voice.admission.mode` | Public admission mode surface |
+| `voice.admission.mode` | Public voice-side admission surface |
 | `voice.admission.musicWakeLatchSeconds` | Follow-up wake window during music playback |
 | `voice.soundboard.eagerness` | How readily the bot uses Discord soundboard beats when they fit |
 | `voice.transcription.*` | ASR enablement and language hinting |
 | `voice.sessionLimits.*` | Session duration and concurrency limits |
 | `agentStack.runtimeConfig.voice.*` | Provider/runtime-specific transport and generation config |
-| `initiative.voice.*` | Voice thought-engine cadence |
+| `initiative.voice.*` | Ambient voice thought cadence |
 
 ## Tool Calling Model
 

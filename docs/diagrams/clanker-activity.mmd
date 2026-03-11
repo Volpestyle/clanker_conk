@@ -1,53 +1,43 @@
 flowchart TD
-    Start["Text activity entrypoint"]
-
-    subgraph Incoming["Incoming message path"]
-        Msg["New Discord text message"]
-        Direct{"Direct mention, reply-to-bot,\nor exact bot name / alias?"}
-        DirectPath["Immediate reply path"]
-        Unsolicited{"permissions.replies.allowUnsolicitedReplies?"}
-        RecentWindow{"Bot already in recent\nmessage window?"}
-        RecentPath["Recent-window follow-up\ninteraction.activity.responseWindowEagerness shapes stickiness"]
-        AmbientGate{"interaction.activity.ambientReplyEagerness\nadmits cold ambient reply?"}
-        AmbientPath["Cold ambient reactive reply"]
-        NoImmediate["No immediate reply\nmessage stored for continuity"]
+    subgraph Hub["Shared Attention Hub"]
+        Active["ACTIVE<br/>Clanker is engaged"]
+        Ambient["AMBIENT<br/>Clanker is in the room"]
     end
 
-    subgraph Initiative["Unified text initiative"]
-        Tick["60s in-process tick"]
-        InitEnabled{"initiative.text.enabled\ncooldown met\ndaily cap available?"}
-        EagerRoll{"initiative.text.eagerness\nprobability roll passed?"}
-        ChannelPool["Eligible channels\npermissions.replies.replyChannelIds"]
-        Context["Channel summaries\npassive feed candidates\nmemory + behavior guidance"]
-        InitDecision["LLM decides whether to post,\nwhich channel fits,\nand whether to use tools/media"]
+    subgraph Promotion["Promotion / Sustain Signals"]
+        TextDirect["Text direct mention<br/>reply-to-bot<br/>bot-name mention"]
+        VoiceDirect["Voice wake word<br/>voice direct address"]
+        Followup["Recent engaged follow-up<br/>same conversation still live"]
     end
 
-    subgraph Shared["Shared global blockers"]
-        Guardrails["permissions.replies.allowReplies\nmessage rate limits\nmin gap between messages\nsafety/runtime failure"]
+    subgraph Text["Text Spoke"]
+        TextReply["Reactive text replies<br/>main brain may answer or [SKIP]"]
+        TextAmbient["Ambient text delivery<br/>initiative / thought post"]
     end
 
-    Start --> Msg
-    Start --> Tick
+    subgraph Voice["Voice Spoke"]
+        VoiceReply["Voice reply path<br/>main brain may answer or [SKIP]"]
+        VoiceAmbient["Ambient voice delivery<br/>voice thought surface"]
+    end
 
-    Msg --> Direct
-    Direct -->|Yes| DirectPath
-    Direct -->|No| Unsolicited
-    Unsolicited -->|No| NoImmediate
-    Unsolicited -->|Yes| RecentWindow
-    RecentWindow -->|Yes| RecentPath
-    RecentWindow -->|No| AmbientGate
-    AmbientGate -->|Yes| AmbientPath
-    AmbientGate -->|No| NoImmediate
+    subgraph Reflex["Reflex / Overlay Layers"]
+        Interrupt["Interrupt safety<br/>acoustic gate / interrupt classifier"]
+        Music["Music overlay<br/>playing / paused_wake_word / ducking"]
+        Controls["Compact playback controls<br/>optional mini music brain"]
+    end
 
-    Tick --> InitEnabled
-    InitEnabled -->|No| NoInit["Skip this tick"]
-    InitEnabled -->|Yes| EagerRoll
-    EagerRoll -->|No| NoInit
-    EagerRoll -->|Yes| ChannelPool
-    ChannelPool --> Context
-    Context --> InitDecision
+    TextDirect --> Active
+    VoiceDirect --> Active
+    Followup --> Active
+    Active --> Ambient
 
-    DirectPath --> Guardrails
-    RecentPath --> Guardrails
-    AmbientPath --> Guardrails
-    InitDecision --> Guardrails
+    Active --> TextReply
+    Ambient --> TextAmbient
+
+    Active --> VoiceReply
+    Ambient --> VoiceAmbient
+
+    Music -. room overlay .-> Active
+    Music -. room overlay .-> Ambient
+    Interrupt -. transport guardrail .-> VoiceReply
+    Controls -. music reflex .-> VoiceReply

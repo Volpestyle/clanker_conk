@@ -158,6 +158,8 @@ Barge-in sits at the intersection of two concerns:
 
 The system keeps infrastructure decisions deterministic, but gives the agent ownership of what happens next once a real interrupt exists.
 
+This layer is voice transport hygiene under the shared attention model. It protects the floor; it does not define a separate voice-only social state.
+
 ## 8. Why We Handle Barge-In Ourselves
 
 OpenAI's Realtime API has built-in interruption handling, but it only works when audio flows directly through OpenAI's channels (WebRTC or WebSocket with direct audio). Our bot routes audio through Discord:

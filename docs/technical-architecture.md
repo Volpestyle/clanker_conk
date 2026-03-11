@@ -4,6 +4,7 @@ This document explains the live runtime shape of the bot: where core decisions h
 
 Canonical companion docs:
 
+- `docs/presence-and-attention.md`
 - `docs/clanker-activity.md`
 - `docs/initiative-unified-spec.md`
 - `docs/voice/voice-provider-abstraction.md`
@@ -18,17 +19,19 @@ Code entrypoint:
 Core runtime:
 
 - `src/bot.ts`: Discord orchestration and scheduler entrypoints
-- `src/bot/*`: reply admission, reply pipeline, initiative, automations, permissions, continuity, memory slices, and message history
+- `src/bot/*`: text reply admission, reply pipeline, ambient text initiative, automations, permissions, continuity, memory slices, and message history
 - `src/settings/settingsSchema.ts`: canonical persisted settings schema
 - `src/settings/agentStack.ts`: preset resolution and runtime binding helpers
 - `src/store/settingsNormalization.ts`: settings normalization into the canonical shape
 - `src/llm.ts`: provider/runtime abstraction for generation, embeddings, image/video generation, ASR, and TTS
 - `src/memory/*`: durable memory extraction, storage, lookup, and reflection
 - `src/services/discovery.ts`: passive feed collection for the unified initiative cycle
-- `src/voice/*`: session lifecycle, capture, turn processing, admission, tool dispatch, output, and thought engine
+- `src/voice/*`: session lifecycle, capture, turn processing, voice-side admission, tool dispatch, output, and ambient voice thought delivery
 - `src/tools/*`: shared text/voice tool schemas and execution wrappers
 - `src/agents/*`: browser and code-agent runtimes
 - `src/dashboard.ts` and `dashboard/src/*`: REST control plane and dashboard UI
+
+Behaviorally, the bot is documented as one shared attention system with text and voice spokes. That attention layer is currently implemented across several modules rather than one single package: text reply admission and recent windows, initiative, voice reply admission, thought generation, and music/floor overlays.
 
 ## 2. Runtime Lifecycle
 
@@ -39,9 +42,12 @@ At a high level:
 
 1. settings are loaded and normalized
 2. Discord events and schedulers enter `src/bot.ts`
-3. text replies, initiative, automations, and voice sessions route into their domain handlers
-4. the LLM/tool layer is consulted only after deterministic guardrails pass
-5. actions and messages are persisted back into SQLite and memory logs
+3. shared conversational attention is shaped by direct address, recent engagement, and ambient cadence
+4. text replies, ambient text delivery, automations, and voice sessions route into their domain handlers
+5. the LLM/tool layer is consulted only after deterministic guardrails pass
+6. actions and messages are persisted back into SQLite and memory logs
+
+Text and voice are separate transports under that shared attention layer. Music playback, wake latch, and barge-in are overlays on the voice side, not separate attention modes.
 
 ## 3. Tool Orchestration
 
@@ -200,6 +206,8 @@ Voice is split into independent layers:
 - output / barge-in
 - proactive voice thought generation
 
+These layers are the voice spoke of the shared attention model. They decide how attention becomes audible in a room; they do not define a separate voice-only mind.
+
 Canonical public surfaces:
 
 - transport/runtime: `agentStack.runtimeConfig.voice.*`
@@ -218,7 +226,7 @@ Voice-specific docs:
 
 ## 8. Unified Initiative Flow
 
-Text proactivity is owned by `src/bot/initiativeEngine.ts`.
+Ambient text delivery is owned by `src/bot/initiativeEngine.ts`.
 
 The runtime splits responsibility like this:
 
@@ -234,6 +242,8 @@ The model decides:
 - whether to use tools
 - whether to include links
 - whether to request media
+
+This is the text spoke's ambient delivery path. The corresponding voice spoke is the voice thought engine.
 
 Canonical references:
 

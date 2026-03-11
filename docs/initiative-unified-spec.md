@@ -1,19 +1,22 @@
 # Unified Initiative System
 
-> **Scope:** Current shipped text initiative cycle.
+> **Scope:** Current shipped ambient text delivery cycle.
+> Shared attention model: [`presence-and-attention.md`](presence-and-attention.md)
 > Activity model overview: [`clanker-activity.md`](clanker-activity.md)
 > Voice pipeline reference: [`voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
 
-This document describes the unified text initiative system in `src/bot/initiativeEngine.ts`.
+This document describes the text-side ambient delivery system in `src/bot/initiativeEngine.ts`.
 
 ## Core Model
 
-One text initiative cycle handles all cold-start text behavior:
+One text initiative cycle handles the text spoke of `AMBIENT` attention:
 
 - conversational chime-ins in active channels
 - standalone proactive posts
 - optional sharing of passive discovery feed items
 - optional active curiosity through tools
+
+This is not a second personality and not a separate “initiative mind.” It is the current text transport for ambient thoughts.
 
 The discovery service is now feed infrastructure, not a separate delivery engine. It gathers candidates that the initiative prompt may consider alongside channel context and memory.
 
@@ -24,6 +27,7 @@ The discovery service is now feed infrastructure, not a separate delivery engine
 - Discovery candidates are optional context, not assignments.
 - `initiative.text.eagerness` is a probability gate before the LLM call, not a content rule.
 - The model can always `[SKIP]`.
+- Shared attention may be informed by voice context, but initiative delivery is still a text action.
 
 ## Runtime Flow
 
@@ -37,13 +41,13 @@ The runtime flow in `src/bot/initiativeEngine.ts` is:
 
 ### 1. Tick
 
-The bot runs one in-process initiative tick every `60s`.
+The bot runs one in-process ambient text tick every `60s`.
 
 There is no replay catchup after downtime. If the process is offline, skipped initiative opportunities are simply missed.
 
 ### 2. Deterministic Gates
 
-Before the model is consulted, the runtime checks:
+Before the model is consulted for an ambient text thought, the runtime checks:
 
 - `initiative.text.enabled`
 - eligible channel pool is non-empty
@@ -105,6 +109,8 @@ The final output can:
 
 Media availability is governed by `initiative.discovery.*` budgets and allowlists.
 
+This delivery surface stays text-only even when the context that informed the thought included linked VC transcript rows.
+
 ## Canonical Channel Pool
 
 The unified initiative pool is:
@@ -160,6 +166,16 @@ The shipped initiative prompt in `src/prompts/promptText.ts` is structured like 
 Behavior guidance comes from memory-backed `guidance` and `behavioral` facts.
 
 The prompt explicitly frames initiative as a text-channel action. Voice-derived transcript lines may still appear in channel summaries when they were persisted into the linked text channel, but they are context only, not a separate voice-delivery path.
+
+## Relationship To Shared Attention
+
+In the shared attention model:
+
+- direct mentions and active exchanges promote Clanker into `ACTIVE`
+- this initiative loop is the current text transport for `AMBIENT`
+- the voice thought engine is the corresponding voice transport for `AMBIENT`
+
+The transports stay different, but the behavioral intent is the same: Clanker is present, occasionally thinks of something worth surfacing, and may still choose silence.
 
 ## Settings Reference
 

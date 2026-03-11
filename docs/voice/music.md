@@ -42,6 +42,8 @@ They are related but not the same:
 - music can be `paused_wake_word` while the bot is taking the floor
 - the wake latch affects admission behavior, not the playback transport itself
 
+Music is an overlay on top of shared attention, not a third attention mode. Clanker can be `ACTIVE` or `AMBIENT` while music is present.
+
 ## 3. Playback Phases
 
 Important phase meanings:
