@@ -265,6 +265,10 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceStreamWatchBrainContextMinIntervalSeconds = 6;
   form.voiceStreamWatchBrainContextMaxEntries = 5;
   form.voiceStreamWatchBrainContextPrompt = "Use stream snapshots as context for replies.";
+  form.voiceStreamWatchNativeDiscordMaxFramesPerSecond = 4;
+  form.voiceStreamWatchNativeDiscordPreferredQuality = 88;
+  form.voiceStreamWatchNativeDiscordPreferredPixelCount = 1920 * 1080;
+  form.voiceStreamWatchNativeDiscordPreferredStreamType = "camera";
   form.voiceAsrLanguageMode = "fixed";
   form.voiceAsrLanguageHint = "en-us";
   form.voiceStreamingEnabled = false;
@@ -330,6 +334,10 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(effectivePatch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
   assert.equal(effectivePatch.voice.streamWatch.brainContextMaxEntries, 5);
   assert.equal(effectivePatch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
+  assert.equal(effectivePatch.voice.streamWatch.nativeDiscordMaxFramesPerSecond, 4);
+  assert.equal(effectivePatch.voice.streamWatch.nativeDiscordPreferredQuality, 88);
+  assert.equal(effectivePatch.voice.streamWatch.nativeDiscordPreferredPixelCount, 1920 * 1080);
+  assert.equal(effectivePatch.voice.streamWatch.nativeDiscordPreferredStreamType, "camera");
   assert.equal(effectivePatch.voice.conversationPolicy.streaming.enabled, false);
   assert.equal(effectivePatch.voice.conversationPolicy.streaming.minSentencesPerChunk, 4);
   assert.equal(effectivePatch.voice.conversationPolicy.streaming.eagerFirstChunkChars, 84);

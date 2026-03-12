@@ -463,11 +463,21 @@ export const LEAVE_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
 };
 
-export const OFFER_SCREEN_SHARE_LINK_SCHEMA: SharedToolSchema = {
-  name: "offer_screen_share_link",
-  description: "Send the active speaker a temporary screen-share link in the text channel so they can start sharing their screen.",
+export const START_SCREEN_WATCH_SCHEMA: SharedToolSchema = {
+  name: "start_screen_watch",
+  description: "Start watching the most relevant active stream using the best available runtime path. Optionally specify a target name or Discord user id when you want a specific sharer. The runtime may bind to an already-live Discord sharer or fall back to a capture-link flow.",
   voiceContinuationPolicy: "if_no_spoken_text",
-  parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
+  parameters: {
+    type: "object",
+    properties: {
+      target: {
+        type: "string",
+        description: "Optional sharer to watch. Prefer the active Discord display name from current voice context when multiple people are sharing."
+      }
+    },
+    required: [],
+    additionalProperties: false
+  }
 };
 
 export const PLAY_SOUNDBOARD_SCHEMA: SharedToolSchema = {

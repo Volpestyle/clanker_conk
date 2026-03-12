@@ -105,7 +105,7 @@ function collectAvailableVoiceToolNames({
   if (memoryAvailable) {
     names.add("memory_write");
   }
-  if (screenShareAvailable) names.add("offer_screen_share_link");
+  if (screenShareAvailable) names.add("start_screen_watch");
   if (voiceToolsAvailable) {
     for (const name of VOICE_CONTROL_TOOL_NAMES) names.add(name);
   }
@@ -402,11 +402,11 @@ export function buildVoiceTurnPrompt({
     } else if (normalizedRuntimeEventContext?.category === "screen_share") {
       const actorLabel = normalizedRuntimeEventContext.actorDisplayName || speaker;
       if (normalizedRuntimeEventContext.eventType === "share_start") {
-        parts.push(`Voice runtime event cue: ${actorLabel} started screen sharing.`);
+        parts.push(`Voice runtime event cue: ${actorLabel} started sharing their screen.`);
       } else if (normalizedRuntimeEventContext.eventType === "scene_changed") {
-        parts.push(`Voice runtime event cue: ${actorLabel}'s screen-share scene changed.`);
+        parts.push(`Voice runtime event cue: ${actorLabel}'s on-screen scene changed.`);
       } else {
-        parts.push(`Voice runtime event cue: ${actorLabel} is still screen sharing and the room is quiet.`);
+        parts.push(`Voice runtime event cue: ${actorLabel} is still sharing their screen and the room is quiet.`);
       }
       parts.push(`Structured event type: screen_share.${normalizedRuntimeEventContext.eventType}.`);
       if (normalizedRuntimeEventContext.hasVisibleFrame) {
@@ -554,7 +554,7 @@ export function buildVoiceTurnPrompt({
   const normalizedDurableContext = selectPromptDurableContextEntries(durableContext);
   if (hasDirectVisionFrame) {
     const screenContextParts = [
-      "Live screen share: You can see the user's screen directly in the attached image.",
+      "Live screen watch: You can see the user's screen directly in the attached image.",
       "Comment on what you see whenever it feels natural. React to interesting moments, changes, or anything worth noting.",
       "If there is a brief factual screen observation worth saving privately, call screen_note with it (max 20 words). Do not speak the note aloud unless it also belongs in your spoken reply.",
       "If something genuinely noteworthy happens that is not already in the key moments list below, call screen_moment with a brief description. Otherwise do not call it.",
@@ -574,7 +574,7 @@ export function buildVoiceTurnPrompt({
   } else if (normalizedStreamWatchBrainContext?.notes?.length) {
     parts.push(
       [
-        "Live stream-watch keyframe context:",
+        "Recent screen-watch keyframe context:",
         normalizedStreamWatchBrainContext.prompt
           ? `- Guidance: ${normalizedStreamWatchBrainContext.prompt}`
           : null,
@@ -717,7 +717,7 @@ export function buildVoiceTurnPrompt({
   }
 
   if (allowScreenShareToolCall) {
-    parts.push("offer_screen_share_link: when the speaker asks to see/watch their screen.");
+    parts.push("start_screen_watch: begin screen watch when live visual context would help. If multiple Discord shares are live and you want a specific one, pass { target: \"display name\" }. The runtime binds to an active Discord sharer when possible and falls back automatically when needed.");
   }
 
   if (allowVoiceToolCalls) {

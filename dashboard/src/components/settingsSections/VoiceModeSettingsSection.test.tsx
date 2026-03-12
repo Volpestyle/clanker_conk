@@ -217,8 +217,8 @@ test("stream watch renders a compact mental model and hides advanced tuning behi
     )
   );
 
-  assert.equal(markup.includes("How screen share works"), true);
-  assert.equal(markup.includes("Advanced stream watch settings"), true);
+  assert.equal(markup.includes("How screen watch works"), true);
+  assert.equal(markup.includes("Advanced screen watch settings"), true);
   assert.equal(markup.includes("Screen share pipeline"), false);
 });
 

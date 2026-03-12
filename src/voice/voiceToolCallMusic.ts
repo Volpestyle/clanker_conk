@@ -524,7 +524,7 @@ export async function executeVoiceMusicQueueAddTool(
     args,
     action: "queue_add"
   });
-  if (!resolved.ok) return resolved.response;
+  if (resolved.ok === false) return resolved.response;
   const { query, resolvedTracks } = resolved;
   const wasEmpty = queueState.tracks.length === 0;
   const rawPos = args?.position;
@@ -593,7 +593,7 @@ export async function executeVoiceMusicQueueNextTool(
     args,
     action: "queue_next"
   });
-  if (!resolved.ok) return resolved.response;
+  if (resolved.ok === false) return resolved.response;
   const { query, resolvedTracks } = resolved;
   const insertAt = queueState.nowPlayingIndex == null
     ? queueState.tracks.length

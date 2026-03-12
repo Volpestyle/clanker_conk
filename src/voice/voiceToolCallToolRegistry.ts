@@ -171,8 +171,8 @@ export function resolveVoiceRealtimeToolDescriptors(
 ) {
   const exportTarget = resolveRealtimeToolExportTarget({ session, target });
   const screenShareCapability =
-    typeof manager.getVoiceScreenShareCapability === "function"
-      ? manager.getVoiceScreenShareCapability({
+    typeof manager.getVoiceScreenWatchCapability === "function"
+      ? manager.getVoiceScreenWatchCapability({
           settings,
           guildId: session?.guildId || null,
           channelId: session?.textChannelId || null,
@@ -224,9 +224,9 @@ export function resolveVoiceRealtimeToolDescriptors(
   );
   const includeScreenShare = Boolean(
     screenShareCapability?.available &&
-      typeof manager.offerVoiceScreenShareLink === "function" &&
+      typeof manager.startVoiceScreenWatch === "function" &&
       session?.guildId &&
-      session?.textChannelId
+      (screenShareCapability?.nativeAvailable || session?.textChannelId)
   );
   const localTools = buildVoiceRealtimeLocalToolSchemas({
     browserAvailable: includeBrowser,

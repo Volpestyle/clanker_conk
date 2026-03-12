@@ -1001,7 +1001,7 @@ function McpPanel({ session }: { session: VoiceSession }) {
   );
 }
 
-// ---- Screen Share ----
+// ---- Screen Watch ----
 
 function StreamWatchDetail({ session }: { session: VoiceSession }) {
   const sw = session.streamWatch;
@@ -1024,7 +1024,7 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
   if (!hasAnyStreamWatchData) return null;
 
   return (
-    <Section title="Screen Share" badge={sw.active ? "active" : "idle"} defaultOpen>
+    <Section title="Screen Watch" badge={sw.active ? "active" : "idle"} defaultOpen>
       <div className="vm-detail-grid">
         <Stat label="Target" value={sw.targetUserId?.slice(0, 8) || "none"} />
         <Stat label="Requested By" value={sw.requestedByUserId?.slice(0, 8) || "none"} />
@@ -1398,7 +1398,7 @@ function SessionCard({ session }: { session: VoiceSession }) {
           {/* MCP Servers */}
           <McpPanel session={session} />
 
-          {/* Screen Share */}
+          {/* Screen Watch */}
           <StreamWatchDetail session={session} />
 
           {/* Music */}

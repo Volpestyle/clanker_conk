@@ -35,6 +35,17 @@ import type { ThoughtEngine } from "./thoughtEngine.ts";
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { ensureAsrSessionConnected } from "./voiceAsrBridge.ts";
 import {
+  applyNativeDiscordVideoState,
+  ensureNativeDiscordScreenShareState,
+  listActiveNativeDiscordScreenSharers,
+  recordNativeDiscordVideoFrame,
+  removeNativeDiscordVideoSharer
+} from "./nativeDiscordScreenShare.ts";
+import {
+  decodeNativeDiscordVideoFrameToJpeg,
+  hasNativeDiscordVideoDecoderSupport
+} from "./nativeDiscordVideoDecoder.ts";
+import {
   maybeTriggerAssistantDirectedSoundboard,
   normalizeSoundboardRefs
 } from "./voiceSoundboard.ts";
@@ -73,9 +84,11 @@ type SessionLifecycleHost = VoiceToolCallManager & Pick<
   | "resolveSpeakingEndFinalizeDelayMs"
   | "sessions"
   | "setActiveReplyInterruptionPolicy"
+  | "stopWatchStreamForUser"
   | "shouldUsePerUserTranscription"
   | "soundboardDirector"
   | "touchActivity"
+  | "ingestStreamFrame"
 > & {
   bargeInController: Pick<BargeInController, "isBargeInOutputSuppressed">;
   captureManager: Pick<CaptureManager, "startInboundCapture">;
@@ -1232,14 +1245,199 @@ export class SessionLifecycle {
       }
     };
 
+    const onUserVideoState = (payload) => {
+      if (!payload || typeof payload !== "object") return;
+      const normalizedUserId = String(payload.userId || "").trim();
+      if (!normalizedUserId) return;
+
+      const updatedState = applyNativeDiscordVideoState(session, payload);
+      this.host.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        content: "native_discord_screen_share_state_updated",
+        metadata: {
+          sessionId: session.id,
+          codec: updatedState.codec,
+          streamCount: updatedState.streams.length,
+          activeSharerCount: listActiveNativeDiscordScreenSharers(session).length,
+          targetUserId: session.streamWatch?.targetUserId || null
+        }
+      });
+      this.host.instructionManager.scheduleRealtimeInstructionRefresh({
+        session,
+        settings,
+        reason: "native_discord_screen_share_state"
+      });
+    };
+
+    const onUserVideoEnd = (payload) => {
+      if (!payload || typeof payload !== "object") return;
+      const normalizedUserId = String(payload.userId || "").trim();
+      if (!normalizedUserId) return;
+
+      const removedState = removeNativeDiscordVideoSharer(session, normalizedUserId);
+      this.host.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        content: "native_discord_screen_share_ended",
+        metadata: {
+          sessionId: session.id,
+          codec: removedState?.codec || null,
+          ssrc: Number.isFinite(Number(payload.ssrc)) ? Math.max(0, Math.floor(Number(payload.ssrc))) : null,
+          activeSharerCount: listActiveNativeDiscordScreenSharers(session).length,
+          targetUserId: session.streamWatch?.targetUserId || null
+        }
+      });
+      this.host.instructionManager.scheduleRealtimeInstructionRefresh({
+        session,
+        settings,
+        reason: "native_discord_screen_share_ended"
+      });
+
+      if (session.streamWatch?.active && String(session.streamWatch.targetUserId || "") === normalizedUserId) {
+        void this.host.stopWatchStreamForUser({
+          guildId: session.guildId,
+          targetUserId: normalizedUserId,
+          settings,
+          reason: "native_discord_screen_share_ended"
+        }).catch((error) => {
+          this.logAsyncFailure({
+            session,
+            content: "native_discord_screen_share_stop_failed",
+            error,
+            metadata: {
+              targetUserId: normalizedUserId
+            }
+          });
+        });
+      }
+    };
+
+    const onUserVideoFrame = (payload) => {
+      if (!payload || typeof payload !== "object") return;
+      const normalizedUserId = String(payload.userId || "").trim();
+      if (!normalizedUserId) return;
+
+      recordNativeDiscordVideoFrame(session, payload);
+      if (!session.streamWatch?.active) return;
+      if (String(session.streamWatch.targetUserId || "") !== normalizedUserId) return;
+      if (!payload.keyframe) return;
+
+      const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+      nativeScreenShare.lastDecodeAttemptAt = Date.now();
+      nativeScreenShare.ffmpegAvailable = hasNativeDiscordVideoDecoderSupport();
+      if (!nativeScreenShare.ffmpegAvailable) {
+        if (nativeScreenShare.lastDecodeFailureReason !== "ffmpeg_not_installed") {
+          nativeScreenShare.lastDecodeFailureAt = Date.now();
+          nativeScreenShare.lastDecodeFailureReason = "ffmpeg_not_installed";
+          this.host.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: normalizedUserId,
+            content: "native_discord_video_decode_unavailable",
+            metadata: {
+              sessionId: session.id,
+              codec: String(payload.codec || "").trim().toLowerCase() || null
+            }
+          });
+        }
+        return;
+      }
+
+      if (nativeScreenShare.decodeInFlight) {
+        this.host.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: normalizedUserId,
+          content: "native_discord_video_frame_dropped_while_decoding",
+          metadata: {
+            sessionId: session.id,
+            codec: String(payload.codec || "").trim().toLowerCase() || null
+          }
+        });
+        return;
+      }
+
+      nativeScreenShare.decodeInFlight = true;
+      void (async () => {
+        try {
+          const decoded = await decodeNativeDiscordVideoFrameToJpeg({
+            codec: payload.codec,
+            frameBase64: payload.frameBase64,
+            rtpTimestamp: payload.rtpTimestamp
+          });
+          nativeScreenShare.lastDecodeSuccessAt = Date.now();
+          nativeScreenShare.lastDecodeFailureReason = null;
+
+          const ingestResult = await this.host.ingestStreamFrame({
+            guildId: session.guildId,
+            streamerUserId: normalizedUserId,
+            mimeType: decoded.mimeType,
+            dataBase64: decoded.dataBase64,
+            source: `native_discord_video:${String(payload.codec || "").trim().toLowerCase() || "unknown"}`,
+            settings
+          });
+          if (!ingestResult?.accepted) {
+            const ingestReason = String(ingestResult?.reason || "").trim().toLowerCase();
+            if (
+              ingestReason &&
+              ingestReason !== "watch_not_active" &&
+              ingestReason !== "target_user_mismatch"
+            ) {
+              this.host.store.logAction({
+                kind: "voice_runtime",
+                guildId: session.guildId,
+                channelId: session.textChannelId,
+                userId: normalizedUserId,
+                content: "native_discord_video_frame_rejected",
+                metadata: {
+                  sessionId: session.id,
+                  reason: ingestReason,
+                  codec: String(payload.codec || "").trim().toLowerCase() || null
+                }
+              });
+            }
+          }
+        } catch (error) {
+          nativeScreenShare.lastDecodeFailureAt = Date.now();
+          nativeScreenShare.lastDecodeFailureReason = String((error as Error)?.message || error);
+          this.host.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: normalizedUserId,
+            content: `native_discord_video_decode_failed: ${String((error as Error)?.message || error)}`,
+            metadata: {
+              sessionId: session.id,
+              codec: String(payload.codec || "").trim().toLowerCase() || null
+            }
+          });
+        } finally {
+          nativeScreenShare.decodeInFlight = false;
+        }
+      })();
+    };
+
     if (session.voxClient) {
       session.voxClient.on("speakingStart", onSpeakingStart);
       session.voxClient.on("speakingEnd", onSpeakingEnd);
       session.voxClient.on("clientDisconnect", onClientDisconnect);
+      session.voxClient.on("userVideoState", onUserVideoState);
+      session.voxClient.on("userVideoFrame", onUserVideoFrame);
+      session.voxClient.on("userVideoEnd", onUserVideoEnd);
       session.cleanupHandlers.push(() => {
         session.voxClient?.off("speakingStart", onSpeakingStart);
         session.voxClient?.off("speakingEnd", onSpeakingEnd);
         session.voxClient?.off("clientDisconnect", onClientDisconnect);
+        session.voxClient?.off("userVideoState", onUserVideoState);
+        session.voxClient?.off("userVideoFrame", onUserVideoFrame);
+        session.voxClient?.off("userVideoEnd", onUserVideoEnd);
       });
     }
   }

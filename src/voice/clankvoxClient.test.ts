@@ -237,3 +237,136 @@ test("ClankvoxClient emits structured IPC errors while preserving error message 
     }
   ]);
 });
+
+test("ClankvoxClient subscribeUserVideo forwards the native video subscription command", () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const child = new FakeSubprocess();
+  attachFakeChild(client, child);
+
+  client.subscribeUserVideo({
+    userId: "user-1",
+    maxFramesPerSecond: 3,
+    preferredQuality: 80,
+    preferredPixelCount: 1_920 * 1_080,
+    preferredStreamType: "screen"
+  });
+  client.unsubscribeUserVideo("user-1");
+
+  assert.deepEqual(child.commands, [
+    {
+      type: "subscribe_user_video",
+      userId: "user-1",
+      maxFramesPerSecond: 3,
+      preferredQuality: 80,
+      preferredPixelCount: 2_073_600,
+      preferredStreamType: "screen"
+    },
+    {
+      type: "unsubscribe_user_video",
+      userId: "user-1"
+    }
+  ]);
+});
+
+test("ClankvoxClient emits parsed native video state, frame, and end events", () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const handleMessage = Reflect.get(client, "_handleMessage").bind(client);
+  const stateEvents: unknown[] = [];
+  const frameEvents: unknown[] = [];
+  const endEvents: unknown[] = [];
+
+  client.on("userVideoState", (payload) => {
+    stateEvents.push(payload);
+  });
+  client.on("userVideoFrame", (payload) => {
+    frameEvents.push(payload);
+  });
+  client.on("userVideoEnd", (payload) => {
+    endEvents.push(payload);
+  });
+
+  handleMessage({
+    type: "user_video_state",
+    userId: "user-1",
+    audioSsrc: 111,
+    videoSsrc: 222,
+    codec: "h264",
+    streams: [
+      {
+        ssrc: 222,
+        rtxSsrc: 333,
+        rid: "50",
+        quality: 100,
+        streamType: "screen",
+        active: true,
+        maxBitrate: 2_000_000,
+        maxFramerate: 30,
+        maxResolution: {
+          width: 1280,
+          height: 720,
+          type: "fixed"
+        }
+      }
+    ]
+  });
+  handleMessage({
+    type: "user_video_frame",
+    userId: "user-1",
+    ssrc: 222,
+    codec: "vp8",
+    keyframe: true,
+    frameBase64: "AAAA",
+    rtpTimestamp: 444,
+    streamType: "screen",
+    rid: "100"
+  });
+  handleMessage({
+    type: "user_video_end",
+    userId: "user-1",
+    ssrc: 222
+  });
+
+  assert.deepEqual(stateEvents, [
+    {
+      userId: "user-1",
+      audioSsrc: 111,
+      videoSsrc: 222,
+      codec: "h264",
+      streams: [
+        {
+          ssrc: 222,
+          rtxSsrc: 333,
+          rid: "50",
+          quality: 100,
+          streamType: "screen",
+          active: true,
+          maxBitrate: 2_000_000,
+          maxFramerate: 30,
+          maxResolution: {
+            width: 1280,
+            height: 720,
+            type: "fixed"
+          }
+        }
+      ]
+    }
+  ]);
+  assert.deepEqual(frameEvents, [
+    {
+      userId: "user-1",
+      ssrc: 222,
+      codec: "vp8",
+      keyframe: true,
+      frameBase64: "AAAA",
+      rtpTimestamp: 444,
+      streamType: "screen",
+      rid: "100"
+    }
+  ]);
+  assert.deepEqual(endEvents, [
+    {
+      userId: "user-1",
+      ssrc: 222
+    }
+  ]);
+});

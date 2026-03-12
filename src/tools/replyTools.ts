@@ -25,6 +25,7 @@ const MAX_WEB_SCRAPE_DEFAULT_CHARS = 8000;
 const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_CODE_TASK_LEN = 2000;
 const MAX_VOICE_MUSIC_QUERY_LEN = 180;
+const MAX_SCREEN_WATCH_TARGET_LEN = 120;
 
 function appendBrowserScreenshotNote(content: string, imageInputs: ImageInput[] | undefined) {
   const imageCount = Array.isArray(imageInputs) ? imageInputs.length : 0;
@@ -104,18 +105,21 @@ export type ReplyToolRuntime = {
     }>;
   };
   screenShare?: {
-    offerLink: (opts: {
+    startWatch: (opts: {
       settings: Record<string, unknown>;
       guildId: string;
       channelId: string | null;
       requesterUserId: string;
+      target?: string;
       transcript: string;
       source: string;
       signal?: AbortSignal;
     }) => Promise<{
-      offered?: boolean;
+      started?: boolean;
       reused?: boolean;
+      transport?: "native" | "link" | null;
       reason?: string | null;
+      targetUserId?: string | null;
       linkUrl?: string | null;
       expiresInMinutes?: number | null;
     }>;
@@ -284,7 +288,7 @@ const REPLY_TOOL_HANDLERS: Record<
   memory_write: executeMemoryWrite,
   conversation_search: executeConversationSearch,
   image_lookup: async (input, _runtime, context) => await executeImageLookup(input, context),
-  offer_screen_share_link: async (_input, runtime, context) => await executeOfferScreenShareLink(runtime, context),
+  start_screen_watch: async (input, runtime, context) => await executeStartScreenWatch(input, runtime, context),
   play_soundboard: executePlaySoundboard,
   screen_note: executeScreenNote,
   screen_moment: executeScreenMoment,
@@ -739,34 +743,45 @@ async function executeImageLookup(
   };
 }
 
-async function executeOfferScreenShareLink(
+async function executeStartScreenWatch(
+  input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
-  if (!runtime.screenShare?.offerLink) {
-    return { content: "Screen-share link offers are not available.", isError: true };
+  if (!runtime.screenShare?.startWatch) {
+    return { content: "Screen watch is not available.", isError: true };
   }
-  if (!context.guildId || !context.channelId || !context.userId) {
-    return { content: "Screen-share context is incomplete.", isError: true };
+  if (!context.guildId || !context.userId) {
+    return { content: "Screen watch context is incomplete.", isError: true };
   }
+  const target = normalizeDirectiveText(
+    String(input?.target || ""),
+    MAX_SCREEN_WATCH_TARGET_LEN
+  );
 
   try {
-    const result = await runtime.screenShare.offerLink({
+    const result = await runtime.screenShare.startWatch({
       settings: context.settings,
       guildId: context.guildId,
       channelId: context.channelId,
       requesterUserId: context.userId,
+      target: target || undefined,
       transcript: context.sourceText,
-      source: String(context.trace?.source || "reply_tool_offer_screen_share_link"),
+      source: String(context.trace?.source || "reply_tool_start_screen_watch"),
       signal: context.signal
     });
     return {
       content: JSON.stringify({
-        ok: Boolean(result?.offered || result?.reused),
-        offered: Boolean(result?.offered),
+        ok: Boolean(result?.started || result?.reused),
+        started: Boolean(result?.started || result?.reused),
         reused: Boolean(result?.reused),
+        transport:
+          result?.transport === "native" || result?.transport === "link"
+            ? result.transport
+            : null,
         reason: result?.reason ? String(result.reason) : null,
+        targetUserId: result?.targetUserId ? String(result.targetUserId) : null,
         linkUrl: result?.linkUrl ? String(result.linkUrl) : null,
         expiresInMinutes: Number.isFinite(Number(result?.expiresInMinutes))
           ? Math.max(0, Math.round(Number(result.expiresInMinutes)))
@@ -775,7 +790,7 @@ async function executeOfferScreenShareLink(
     };
   } catch (error) {
     return {
-      content: `Screen-share link offer failed: ${String((error as Error)?.message || error)}`,
+      content: `Screen watch start failed: ${String((error as Error)?.message || error)}`,
       isError: true
     };
   }

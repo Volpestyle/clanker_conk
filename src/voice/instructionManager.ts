@@ -37,6 +37,7 @@ import {
   loadSessionBehavioralMemoryFacts,
   loadSessionConversationHistory
 } from "./voiceSessionMemoryCache.ts";
+import { getNativeDiscordScreenSharePromptEntries } from "./nativeDiscordScreenShare.ts";
 import {
   buildVoiceInstructions,
   isTransportOnlySession,
@@ -211,7 +212,7 @@ type InstructionManagerHost = VoiceToolCallManager & {
     session: VoiceSession,
     settings?: InstructionSettings
   ) => StreamWatchPromptContext | null;
-  getVoiceScreenShareCapability: (args?: {
+  getVoiceScreenWatchCapability: (args?: {
     settings?: InstructionSettings;
     guildId?: string | null;
     channelId?: string | null;
@@ -754,12 +755,16 @@ export class InstructionManager {
       Array.isArray(streamWatchBrainContext?.notes) && streamWatchBrainContext.notes.length > 0;
     const hasActiveScreenFrameContext = hasScreenFrameContext && Boolean(streamWatchBrainContext?.active);
     const hasRecentScreenFrameMemory = hasScreenFrameContext && !streamWatchBrainContext?.active;
-    const screenShareCapability = this.host.getVoiceScreenShareCapability({
+    const screenShareCapability = this.host.getVoiceScreenWatchCapability({
       settings,
       guildId: session?.guildId || null,
       channelId: session?.textChannelId || null,
       requesterUserId: speakerUserId || null
     });
+    const nativeDiscordSharers = getNativeDiscordScreenSharePromptEntries(
+      session,
+      this.host.resolveVoiceSpeakerName
+    );
     const participants = this.host.getVoiceChannelParticipants(session);
     const recentMembershipEvents = this.host.getRecentVoiceMembershipEvents(session, {
       maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
@@ -1019,11 +1024,16 @@ export class InstructionManager {
       );
     }
 
+    const rawScreenShareReason = String(screenShareCapability?.reason || "").trim().toLowerCase();
+    const screenShareReason = rawScreenShareReason || "unavailable";
+    const screenShareAvailable = Boolean(screenShareCapability?.available);
+    const screenShareSupported = Boolean(screenShareCapability?.supported);
+
     if (hasActiveScreenFrameContext) {
       sections.push(
         [
           "Visual context:",
-          "- You currently have screen-share frame snapshots for this conversation.",
+          "- You currently have screen-watch frame snapshots for this conversation.",
           "- You may comment only on what those snapshots show.",
           "- Do not imply you have a continuous live view beyond the provided frame context."
         ].join("\n")
@@ -1033,23 +1043,19 @@ export class InstructionManager {
         [
           "Visual context:",
           "- You do not currently see the user's screen.",
-          "- You do retain notes from an earlier screen-share in this conversation.",
+          "- You do retain notes from an earlier screen-watch in this conversation.",
           "- If asked, answer only from those earlier notes and make clear they are not a live view."
         ].join("\n")
       );
     } else {
-      const rawScreenShareReason = String(screenShareCapability?.reason || "").trim().toLowerCase();
-      const screenShareReason = rawScreenShareReason || "unavailable";
-      const screenShareAvailable = Boolean(screenShareCapability?.available);
-      const screenShareSupported = Boolean(screenShareCapability?.supported);
       if (screenShareAvailable) {
         sections.push(
           [
             "Visual context:",
             "- You do not currently see the user's screen.",
             "- Do not claim to see, watch, or react to on-screen content until actual frame context is provided.",
-            "- If the speaker asks you to see/watch/share their screen or stream, call offer_screen_share_link.",
-            "- After offering the link, you may briefly tell them to open the link and start sharing."
+            "- If the speaker asks you to see/watch/share their screen or stream, call start_screen_watch.",
+            "- The runtime chooses the best available watch method automatically."
           ].join("\n")
         );
       } else if (screenShareSupported) {
@@ -1057,9 +1063,9 @@ export class InstructionManager {
           [
             "Visual context:",
             "- You do not currently see the user's screen.",
-            "- Screen-share link capability exists but is unavailable right now.",
+            "- Screen watch exists but is unavailable right now.",
             `- Current unavailability reason: ${screenShareReason}.`,
-            "- If asked, say the link flow is unavailable right now.",
+            "- If asked, say screen watch is unavailable right now.",
             "- Do not claim to see or watch the screen."
           ].join("\n")
         );
@@ -1069,16 +1075,45 @@ export class InstructionManager {
             "Visual context:",
             "- You do not currently see the user's screen.",
             "- Do not claim to see, watch, or react to on-screen content.",
-            "- If asked about screen sharing, explain that you need an active screen-share link and incoming frame context before you can comment on what is on screen."
+            "- If asked about screen watching, explain that you need active frame context before you can comment on what is on screen."
           ].join("\n")
         );
       }
     }
 
+    if (nativeDiscordSharers.length > 0) {
+      const nativeStreamActionLine = screenShareAvailable
+        ? "- If watching one of them would help, call start_screen_watch to request actual frame context."
+        : screenShareSupported
+          ? "- Screen watch start is unavailable right now, so do not call start_screen_watch yet."
+          : "- Screen watch is unavailable in this session, so do not call start_screen_watch.";
+      const nativeStreamTargetLine = screenShareAvailable
+        ? "- If more than one share is live and you want a specific one, pass { target: \"display name\" }."
+        : "- If more than one share is live, keep track of who is sharing but do not request a watch until it becomes available.";
+      sections.push(
+        [
+          "Native Discord streams live right now:",
+          ...nativeDiscordSharers.slice(0, 6).map((entry) => {
+            const details = [
+              entry.streamType,
+              entry.codec,
+              entry.width && entry.height ? `${entry.width}x${entry.height}` : null
+            ]
+              .filter(Boolean)
+              .join(", ");
+            return `- ${entry.displayName}${details ? ` (${details})` : ""}`;
+          }),
+          "- You do not automatically see those shares just because they are active.",
+          nativeStreamActionLine,
+          nativeStreamTargetLine
+        ].join("\n")
+      );
+    }
+
     if (hasScreenFrameContext) {
       sections.push(
         [
-          hasActiveScreenFrameContext ? "Screen-share stream frame context:" : "Recent screen-share memory:",
+          hasActiveScreenFrameContext ? "Screen-watch frame context:" : "Recent screen-watch memory:",
           `- Guidance: ${String(streamWatchBrainContext?.prompt || "").trim()}`,
           ...(streamWatchBrainContext?.notes || []).slice(-8).map((note) => `- ${note}`),
           hasActiveScreenFrameContext

@@ -72,7 +72,7 @@ Reply-loop conditional tools:
 
 - `memory_search`
 - `image_lookup`
-- `offer_screen_share_link`
+- `start_screen_watch`
 
 Voice-centric tools:
 

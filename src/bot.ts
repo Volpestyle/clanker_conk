@@ -63,8 +63,8 @@ import {
   maybeRunInitiativeCycle as maybeRunInitiativeCycleForInitiativeEngine
 } from "./bot/initiativeEngine.ts";
 import {
-  getVoiceScreenShareCapability as getVoiceScreenShareCapabilityForScreenShare,
-  offerVoiceScreenShareLink as offerVoiceScreenShareLinkForScreenShare,
+  getVoiceScreenWatchCapability as getVoiceScreenWatchCapabilityForScreenShare,
+  startVoiceScreenWatch as startVoiceScreenWatchForScreenShare,
 } from "./bot/screenShare.ts";
 import type { ScreenShareSessionManagerLike } from "./bot/screenShare.ts";
 import {
@@ -361,10 +361,10 @@ export class ClankerBot {
       generateVoiceTurn: (payload) =>
         generateVoiceTurnReplyForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload),
       activeReplies: this.activeReplies,
-      getVoiceScreenShareCapability: (payload) =>
-        getVoiceScreenShareCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
-      offerVoiceScreenShareLink: (payload) =>
-        offerVoiceScreenShareLinkForScreenShare(this.toScreenShareRuntime(), payload)
+      getVoiceScreenWatchCapability: (payload) =>
+        getVoiceScreenWatchCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
+      startVoiceScreenWatch: (payload) =>
+        startVoiceScreenWatchForScreenShare(this.toScreenShareRuntime(), payload)
     });
 
     this.registerEvents();

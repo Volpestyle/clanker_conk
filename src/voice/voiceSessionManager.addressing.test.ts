@@ -2098,7 +2098,7 @@ test("reply decider allows same-speaker pending command followup before command-
   assert.equal(decision.reason, "pending_command_followup");
 });
 
-test("reply decider allows active music command followup before eagerness rejection", async () => {
+test("reply decider allows active music command followup even before the transcript is pre-resolved", async () => {
   const manager = createManager();
   const now = Date.now();
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -2151,7 +2151,7 @@ test("reply decider allows active music command followup before eagerness reject
         }
       }
     }),
-    transcript: "the second one"
+    transcript: "yeah, the chill one from earlier"
   });
 
   assert.equal(decision.allow, true);
@@ -2278,7 +2278,7 @@ test("reply decider lets bare cancel phrasing from another speaker fall through 
   assert.equal(classifierCalls, 1);
 });
 
-test("reply decider keeps unrelated chatter blocked during pending music followup", async () => {
+test("reply decider keeps other-speaker chatter blocked during pending music followup", async () => {
   const manager = createManager();
   const now = Date.now();
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -2325,7 +2325,7 @@ test("reply decider keeps unrelated chatter blocked during pending music followu
         ]
       }
     },
-    userId: "speaker-1",
+    userId: "speaker-2",
     settings: baseSettings({
       voice: {
         ambientReplyEagerness: 0,
@@ -2339,7 +2339,7 @@ test("reply decider keeps unrelated chatter blocked during pending music followu
     transcript: "that song is crazy"
   });
 
-  // Unrelated chatter is denied because music is active and wake latch is not armed.
+  // Other-speaker chatter is denied because music is active and wake latch is not armed.
   assert.equal(decision.allow, false);
   assert.equal(decision.reason, "music_playing_not_awake");
 });
@@ -5913,6 +5913,156 @@ test("buildRealtimeInstructions forbids claiming screen vision before frame cont
   assert.equal(instructions.includes("Do not claim to see, watch, or react to on-screen content until actual frame context is provided."), true);
   assert.equal(instructions.includes("call start_screen_watch"), true);
   assert.equal(instructions.includes("Recent voice effects: bob played soundboard \"rimshot\""), true);
+});
+
+test("buildRealtimeInstructions surfaces active native Discord sharers without implying live vision", () => {
+  const manager = createManager();
+  manager.getVoiceScreenWatchCapability = () => ({
+    supported: true,
+    enabled: true,
+    available: true,
+    status: "ready",
+    publicUrl: "",
+    reason: null
+  });
+  manager.resolveVoiceSpeakerName = (_session, userId) => {
+    if (String(userId || "") === "speaker-2") return "bob";
+    return "unknown";
+  };
+
+  const instructions = manager.instructionManager.buildRealtimeInstructions({
+    session: {
+      id: "session-native-screen-share-1",
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      startedAt: Date.now() - 5_000,
+      membershipEvents: [],
+      voiceChannelEffects: [],
+      nativeScreenShare: {
+        sharers: new Map([[
+          "speaker-2",
+          {
+            userId: "speaker-2",
+            codec: "h264",
+            updatedAt: Date.now(),
+            lastFrameAt: 0,
+            lastFrameCodec: null,
+            lastFrameKeyframeAt: 0,
+            audioSsrc: null,
+            videoSsrc: 123,
+            streams: [
+              {
+                ssrc: 123,
+                rtxSsrc: null,
+                rid: null,
+                quality: 100,
+                streamType: "screen",
+                active: true,
+                maxBitrate: null,
+                maxFramerate: 30,
+                width: 1280,
+                height: 720,
+                resolutionType: "fixed",
+                pixelCount: 921600
+              }
+            ]
+          }
+        ]]),
+        subscribedTargetUserId: null,
+        decodeInFlight: false,
+        lastDecodeAttemptAt: 0,
+        lastDecodeSuccessAt: 0,
+        lastDecodeFailureAt: 0,
+        lastDecodeFailureReason: null,
+        ffmpegAvailable: true
+      }
+    },
+    settings: baseSettings(),
+    speakerUserId: "speaker-1",
+    transcript: "can you watch that share"
+  });
+
+  assert.equal(instructions.includes("Native Discord streams live right now:"), true);
+  assert.equal(instructions.includes("bob (screen, h264, 1280x720)"), true);
+  assert.equal(instructions.includes("You do not automatically see those shares just because they are active."), true);
+  assert.equal(instructions.includes("call start_screen_watch to request actual frame context."), true);
+});
+
+test("buildRealtimeInstructions does not invite start_screen_watch when screen watch is unavailable", () => {
+  const manager = createManager();
+  manager.getVoiceScreenWatchCapability = () => ({
+    supported: true,
+    enabled: true,
+    available: false,
+    status: "disabled",
+    publicUrl: "",
+    reason: "ffmpeg_not_installed"
+  });
+  manager.resolveVoiceSpeakerName = (_session, userId) => {
+    if (String(userId || "") === "speaker-2") return "bob";
+    return "unknown";
+  };
+
+  const instructions = manager.instructionManager.buildRealtimeInstructions({
+    session: {
+      id: "session-native-screen-share-2",
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      startedAt: Date.now() - 5_000,
+      membershipEvents: [],
+      voiceChannelEffects: [],
+      nativeScreenShare: {
+        sharers: new Map([[
+          "speaker-2",
+          {
+            userId: "speaker-2",
+            codec: "h264",
+            updatedAt: Date.now(),
+            lastFrameAt: 0,
+            lastFrameCodec: null,
+            lastFrameKeyframeAt: 0,
+            audioSsrc: null,
+            videoSsrc: 123,
+            streams: [
+              {
+                ssrc: 123,
+                rtxSsrc: null,
+                rid: null,
+                quality: 100,
+                streamType: "screen",
+                active: true,
+                maxBitrate: null,
+                maxFramerate: 30,
+                width: 1280,
+                height: 720,
+                resolutionType: "fixed",
+                pixelCount: 921600
+              }
+            ]
+          }
+        ]]),
+        subscribedTargetUserId: null,
+        decodeInFlight: false,
+        lastDecodeAttemptAt: 0,
+        lastDecodeSuccessAt: 0,
+        lastDecodeFailureAt: 0,
+        lastDecodeFailureReason: null,
+        ffmpegAvailable: false
+      }
+    },
+    settings: baseSettings(),
+    speakerUserId: "speaker-1",
+    transcript: "can you watch that share"
+  });
+
+  assert.equal(instructions.includes("Screen watch exists but is unavailable right now."), true);
+  assert.equal(instructions.includes("Native Discord streams live right now:"), true);
+  assert.equal(instructions.includes("Screen watch start is unavailable right now, so do not call start_screen_watch yet."), true);
+  assert.equal(instructions.includes("call start_screen_watch to request actual frame context."), false);
 });
 
 test("buildRealtimeInstructions omits native tooling policy for transport-only sessions", () => {

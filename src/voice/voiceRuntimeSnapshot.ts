@@ -8,6 +8,7 @@ import {
   VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT,
   VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS
 } from "./voiceSessionManager.constants.ts";
+import { listActiveNativeDiscordScreenSharers } from "./nativeDiscordScreenShare.ts";
 import { isRealtimeMode, resolveRealtimeProvider } from "./voiceSessionHelpers.ts";
 import type {
   StreamWatchBrainContextEntry,
@@ -527,6 +528,17 @@ export function buildVoiceRuntimeSnapshot(
     const streamWatchLatestFrameApproxBytes = streamWatchLatestFrameDataBase64
       ? Math.max(0, Math.floor((streamWatchLatestFrameDataBase64.length * 3) / 4))
       : 0;
+    const nativeDiscordScreenSharers = listActiveNativeDiscordScreenSharers(session).map((entry) => {
+      const displayName = String(participantDisplayByUserId.get(entry.userId) || "").trim() || null;
+      return {
+        userId: entry.userId,
+        displayName,
+        codec: entry.codec || null,
+        streamCount: entry.streams.length,
+        lastFrameAt: toIsoOrNull(entry.lastFrameAt),
+        updatedAt: toIsoOrNull(entry.updatedAt)
+      };
+    });
 
     return {
       sessionId: session.id,
@@ -700,7 +712,21 @@ export function buildVoiceRuntimeSnapshot(
             provider: streamWatchBrainContext.provider || null,
             model: streamWatchBrainContext.model || null
           }
-          : null
+          : null,
+        nativeDiscord: {
+          activeSharerCount: nativeDiscordScreenSharers.length,
+          subscribedTargetUserId: session.nativeScreenShare?.subscribedTargetUserId || null,
+          decodeInFlight: Boolean(session.nativeScreenShare?.decodeInFlight),
+          lastDecodeAttemptAt: toIsoOrNull(session.nativeScreenShare?.lastDecodeAttemptAt),
+          lastDecodeSuccessAt: toIsoOrNull(session.nativeScreenShare?.lastDecodeSuccessAt),
+          lastDecodeFailureAt: toIsoOrNull(session.nativeScreenShare?.lastDecodeFailureAt),
+          lastDecodeFailureReason: session.nativeScreenShare?.lastDecodeFailureReason || null,
+          ffmpegAvailable:
+            typeof session.nativeScreenShare?.ffmpegAvailable === "boolean"
+              ? session.nativeScreenShare.ffmpegAvailable
+              : null,
+          activeSharers: nativeDiscordScreenSharers
+        }
       },
       asrSessions: buildAsrSessionsSnapshot(session, {
         now,

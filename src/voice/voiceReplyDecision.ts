@@ -104,6 +104,10 @@ export interface ReplyDecisionHost {
   ensureVoiceCommandState?: (
     session: ReplyDecisionSessionLike | null | undefined
   ) => VoiceCommandState | null;
+  hasPendingMusicDisambiguationForUser?: (
+    session: ReplyDecisionSessionLike | null | undefined,
+    userId?: string | null
+  ) => boolean;
   getVoiceChannelParticipants: (
     session: ReplyDecisionSessionLike | null | undefined
   ) => Array<{ userId: string; displayName: string }>;
@@ -467,12 +471,20 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     0,
     100
   );
+  const activeVoiceCommandState =
+    typeof manager.ensureVoiceCommandState === "function"
+      ? manager.ensureVoiceCommandState(session)
+      : null;
   const sameSpeakerPendingCommandFollowup =
     normalizedInputKind === "event"
       ? false
-      :
-      typeof manager.isMusicDisambiguationResolutionTurn === "function" &&
-      manager.isMusicDisambiguationResolutionTurn(session, normalizedUserId, normalizedTranscript);
+      : Boolean(
+        normalizedUserId &&
+        activeVoiceCommandState?.userId === normalizedUserId &&
+        activeVoiceCommandState?.domain === "music" &&
+        typeof manager.hasPendingMusicDisambiguationForUser === "function" &&
+        manager.hasPendingMusicDisambiguationForUser(session, normalizedUserId)
+      );
   const musicActive = typeof manager.isMusicPlaybackActive === "function" && manager.isMusicPlaybackActive(session);
   if (!musicActive) {
     clearMusicWakeLatch(session);
@@ -970,7 +982,7 @@ function buildClassifierPrompt(input: ClassifierPromptInput): {
     } else if (membershipEvent?.eventType === "leave") {
       parts.push("Someone left the voice channel. Only say YES if a quick acknowledgement would feel natural.");
     } else if (screenShareEvent) {
-      parts.push("This is a screen-share state cue, not spoken text.");
+      parts.push("This is a screen-watch state cue, not spoken text.");
       if (screenShareEvent.hasVisibleFrame) {
         parts.push("A visible frame is attached, so a short reaction can be appropriate.");
       }

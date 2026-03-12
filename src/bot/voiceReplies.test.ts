@@ -194,7 +194,7 @@ function createVoiceBot({
   },
   activeVoiceSession = null,
   musicDisambiguation = null,
-  offerScreenShare = async () => ({ offered: true }),
+  offerScreenShare = async () => ({ started: true }),
   runWebSearch = async ({ webSearch, query }) => ({
     ...(webSearch || {}),
     requested: true,
@@ -329,10 +329,10 @@ function createVoiceBot({
       webSearchCalls.push(payload);
       return await runWebSearch(payload);
     },
-    getVoiceScreenShareCapability() {
+    getVoiceScreenWatchCapability() {
       return screenShareCapability;
     },
-    async offerVoiceScreenShareLink(payload) {
+    async startVoiceScreenWatch(payload) {
       screenShareCalls.push(payload);
       return await offerScreenShare(payload);
     },
@@ -2301,7 +2301,7 @@ test("generateVoiceTurnReply fetches fresh memory context each turn", async () =
   assert.equal(secondPrompt.toLowerCase().includes("likes ramen"), false);
 });
 
-test("generateVoiceTurnReply triggers voice screen-share link offer from tool-call field", async () => {
+test("generateVoiceTurnReply triggers voice screen watch start from tool-call field", async () => {
   const { bot, generationPayloads, screenShareCalls } = createVoiceBot({
     generationSequence: [
       {
@@ -2309,13 +2309,13 @@ test("generateVoiceTurnReply triggers voice screen-share link offer from tool-ca
         toolCalls: [
           {
             id: "tc_1",
-            name: "offer_screen_share_link",
-            input: {}
+            name: "start_screen_watch",
+            input: { target: "casey" }
           }
         ],
         rawContent: [
           { type: "text", text: "" },
-          { type: "tool_use", id: "tc_1", name: "offer_screen_share_link", input: {} }
+          { type: "tool_use", id: "tc_1", name: "start_screen_watch", input: { target: "casey" } }
         ]
       },
       {
@@ -2330,7 +2330,7 @@ test("generateVoiceTurnReply triggers voice screen-share link offer from tool-ca
       status: "ready",
       publicUrl: "https://fancy-cat.trycloudflare.com"
     },
-    offerScreenShare: async () => ({ offered: true })
+    offerScreenShare: async () => ({ started: true, transport: "native", targetUserId: "user-3" })
   });
 
   const reply = await generateVoiceTurnReply(bot, {
@@ -2345,11 +2345,12 @@ test("generateVoiceTurnReply triggers voice screen-share link offer from tool-ca
   assert.equal(reply.usedScreenShareOffer, true);
   const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
   const toolNames = firstTools.map((entry) => String(entry?.name || ""));
-  assert.ok(toolNames.includes("offer_screen_share_link"));
+  assert.ok(toolNames.includes("start_screen_watch"));
   assert.equal(screenShareCalls.length, 1);
   assert.equal(screenShareCalls[0]?.guildId, "guild-1");
   assert.equal(screenShareCalls[0]?.channelId, "text-1");
   assert.equal(screenShareCalls[0]?.requesterUserId, "user-1");
+  assert.equal(screenShareCalls[0]?.target, "casey");
 });
 
 test("generateVoiceTurnReply describes supported-but-unavailable screen-share capability in prompt", async () => {
@@ -2378,8 +2379,8 @@ test("generateVoiceTurnReply describes supported-but-unavailable screen-share ca
   assert.equal(reply.text, "can't pull it up rn");
   assert.equal(screenShareCalls.length, 0);
   const userPrompt = String(generationPayloads[0]?.userPrompt || "");
-  assert.equal(userPrompt.includes("offer_screen_share_link"), false);
-  assert.equal(userPrompt.includes("screenShareIntent.action"), false);
+  assert.equal(userPrompt.includes("start_screen_watch"), false);
+  assert.equal(userPrompt.includes("screenWatchIntent.action"), false);
 });
 
 test("generateVoiceTurnReply returns leave request when model calls leave_voice_channel", async () => {

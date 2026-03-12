@@ -1,21 +1,24 @@
 flowchart TD
-    A["User asks to share screen"] --> B["Voice tool / reply pipeline<br/>offer_screen_share_link"]
-    B --> C["ScreenShareSessionManager.createSession()<br/>token + share URL"]
-    C --> D["Share page /share/:token<br/>capture loop every keyframeIntervalMs"]
-    D --> E["POST /api/voice/share-session/:token/frame"]
+    A["User asks to share screen"] --> B["Voice tool / reply pipeline<br/>start_screen_watch"]
+    B --> C{"Native Discord watch available?"}
+    C -->|yes| D["clankvox native stream watch<br/>subscribe + decrypt + decode"]
+    C -->|no / fallback| E["ScreenShareSessionManager.createSession()<br/>token + share URL"]
+    E --> F["Share page /share/:token<br/>capture loop every keyframeIntervalMs"]
+    F --> G["POST /api/voice/share-session/:token/frame"]
 
-    E --> F["Latest frame buffer"]
-    E --> G{"brainContextEnabled?"}
-    G -->|yes| H["Background scanner<br/>note + sceneChanged"]
-    H --> I["Rolling temporal notes"]
+    D --> H["Latest frame buffer"]
+    G --> H
+    H --> I{"brainContextEnabled?"}
+    I -->|yes| J["Background scanner<br/>note + sceneChanged"]
+    J --> K["Rolling temporal notes"]
 
-    F --> J["Normal voice brain turn"]
-    I --> J
-    J --> K["Speak or [SKIP]"]
+    H --> L["Normal voice brain turn"]
+    K --> L
+    L --> M["Speak or [SKIP]"]
 
-    F --> L{"Autonomous commentary enabled?"}
-    H --> L
-    L -->|first frame / silence /\nscene change when scanner runs| J
+    H --> N{"Autonomous commentary enabled?"}
+    J --> N
+    N -->|first frame / silence /\nscene change when scanner runs| L
 
-    I --> M["Session recap on share end"]
-    M --> N["One-line memory fact"]
+    K --> O["Session recap on watch end"]
+    O --> P["One-line memory fact"]

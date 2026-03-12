@@ -1,12 +1,12 @@
-# Screen Share System
+# Screen Watch System
 
-Complete documentation of the screen share pipeline: session lifecycle, frame processing, and how the agent sees and reasons about what's on screen.
+Complete documentation of the screen watch pipeline: session lifecycle, transport selection, frame processing, and how the agent sees and reasons about what's on screen.
 
 See also: [`docs/public-https-entrypoint-spec.md`](../public-https-entrypoint-spec.md) (public URL gating).
 Native Discord receive status: [`../native-discord-screen-share.md`](../native-discord-screen-share.md)
 Cross-cutting settings contract: [`../settings.md`](../settings.md)
 
-Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document covers the screen-share pipeline and the stream-watch settings that shape voice-local visual context.
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document covers the screen-watch pipeline and the stream-watch settings that shape voice-local visual context.
 
 ## Design Philosophy
 
@@ -25,7 +25,7 @@ Every frame → Scanner (cheap/fast model) → rolling temporal notes
                                                     ↓
                                              always in voice prompt
 
-Every voice turn during active screenshare:
+Every voice turn during active screen watch:
     brain sees = latest raw frame + rolling notes + conversation
     brain decides what to say (or [SKIP])
 
@@ -41,7 +41,7 @@ These are **orthogonal, not mutually exclusive.** The scanner always runs to bui
 
 ## Architecture Overview
 
-![Screen Share System Diagram](../diagrams/screen-share-system.png)
+![Screen Watch System Diagram](../diagrams/screen-share-system.png)
 
 <!-- source: docs/diagrams/screen-share-system.mmd -->
 
@@ -50,32 +50,21 @@ Discord VC user says "share my screen"
          │
          ▼
   Reply pipeline / voice tool
-  (offer_screen_share_link)
+  (start_screen_watch)
          │
          ▼
-  ScreenShareSessionManager.createSession()
-  ├─ Validate VC presence (requester + target in same channel)
-  ├─ Generate 18-byte base64url token
-  ├─ Enable stream-watch for target user
-  └─ Return share URL
-         │
-         ▼
-  Bot sends link to Discord text channel
-         │
-         ▼
-  User clicks link → browser opens /share/:token
-         │
-         ▼
-  Share page capture loop (every keyframeIntervalMs):
-  ├─ getDisplayMedia() → canvas → JPEG encode
-  ├─ POST /api/voice/share-session/:token/frame
-  └─ Adaptive bitrate (downscale on error, upscale after 20 success)
-         │
-         ▼
-  ScreenShareSessionManager.ingestFrameByToken()
-  ├─ Validate token + voice presence on every frame
-  ├─ Rearm stream-watch if needed
-  └─ Feed to frame processing pipeline
+  Runtime chooses watch transport
+  ├─ Native Discord watch (preferred)
+  │  ├─ validate requester + target context in VC
+  │  ├─ subscribe to the target's active Discord stream in clankvox
+  │  ├─ clankvox decrypts and forwards encoded video frames
+  │  ├─ Bun decodes sampled keyframes into JPEG
+  │  └─ feed frames to the processing pipeline
+  └─ Share-link fallback
+     ├─ ScreenShareSessionManager.createSession()
+     ├─ bot sends /share/:token link
+     ├─ browser getDisplayMedia() capture loop
+     └─ POST /api/voice/share-session/:token/frame
 ```
 
 ## Frame Processing Pipeline
@@ -138,7 +127,7 @@ Scanner provider and model are independently configurable (`brainContextProvider
 
 ### Brain frame access
 
-During any voice turn while screenshare is active, the generation model receives:
+During any voice turn while screen watch is active, the generation model receives:
 - **Current raw frame** as an image input (the latest captured JPEG)
 - **Rolling scanner notes** in the prompt context (timestamped observations)
 - **Normal conversation context** (transcript, memory, tools, etc.)
@@ -162,18 +151,38 @@ Autonomous commentary is treated as optional speech, not as a normal conversatio
 
 ### Session recap
 
-When a share session ends, the default text model summarizes the accumulated keyframe notes into a one-line memory fact for long-term context.
+When a watch session ends, the default text model summarizes the accumulated keyframe notes into a one-line memory fact for long-term context.
 
 ## Session Lifecycle
 
 ### Creation
 
-- Triggered by: explicit user request (regex match on "share screen" etc.), model intent (confidence >= 0.66), or voice tool `offer_screen_share_link`
-- `ScreenShareSessionManager.createSession()` generates a token and URL
-- Reuses existing sessions for same requester+target pair
-- Auto-enables stream-watch for the target user
+- Triggered by: explicit user request (regex match on "share screen" etc.), model intent (confidence >= 0.66), or voice tool `start_screen_watch`
+- `start_screen_watch` is the only model-facing action
+- `start_screen_watch` can optionally include `{ target: "display name or user id" }` when the agent wants a specific Discord sharer
+- Realtime instructions can already list active Discord sharers before a watch starts
+- Runtime tries native Discord watch first through the active voice session
+- Native watch binds an explicit target first when one is provided and resolves cleanly
+- Without an explicit target, native watch auto-binds only when runtime can identify a safe target:
+  - requester is actively sharing, or
+  - exactly one user is actively sharing
+- If an explicit target resolves to someone in voice who is not actively sharing, link fallback can still target that user
+- If native watch is unavailable, the runtime falls back to `ScreenShareSessionManager.createSession()`
+- Fallback sessions reuse existing requester+target links when possible
 
-### Share page
+### Native Discord watch
+
+- `clankvox` subscribes to the target user's active Discord stream
+- `clankvox` emits encoded H264/VP8 frame payloads through Bun IPC
+- Bun decodes sampled keyframes to JPEG with `ffmpeg`
+- Decoded JPEGs are forwarded into the existing stream-watch pipeline
+- The latest decoded frame becomes normal voice-brain context on active turns
+- If multiple unrelated Discord sharers are active, the agent can pick one with `start_screen_watch({ target: "name" })`
+- If multiple unrelated Discord sharers are active and no explicit target is provided, runtime does not guess a native target
+- The same rolling-note scanner and commentary triggers apply regardless of transport
+- Active native sharer metadata is prompt context, but image visibility still requires an active watch session
+
+### Share page fallback
 
 - Route: `GET /share/:token`
 - Browser-rendered HTML with embedded JS (no framework)
@@ -201,31 +210,45 @@ All under `voice.streamWatch`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `enabled` | `true` | Master toggle for stream frame ingest |
+| `enabled` | `true` | Master toggle for screen watch, including native Discord receive and fallback capture |
 | `brainContextEnabled` | `true` | Run scanner and inject rolling notes into voice prompt |
 | `brainContextProvider` | `"claude-oauth"` | LLM provider for background frame scanner |
 | `brainContextModel` | `"claude-opus-4-6"` | Model for background frame scanner |
 | `brainContextMinIntervalSeconds` | `4` | Min seconds between scanner updates |
 | `brainContextMaxEntries` | `8` | Max rolling notes kept in brain context |
+| `nativeDiscordMaxFramesPerSecond` | `2` | Max native Discord frames requested while a native watch is active |
+| `nativeDiscordPreferredQuality` | `100` | Preferred Discord stream quality hint for native subscriptions |
+| `nativeDiscordPreferredPixelCount` | `921600` | Preferred native target resolution hint (`1280x720`) |
+| `nativeDiscordPreferredStreamType` | `"screen"` | Preferred native Discord stream type hint |
 | `autonomousCommentaryEnabled` | `true` | Fire proactive brain turns on scene change / silence |
 | `minCommentaryIntervalSeconds` | `8` | Min seconds between autonomous commentary triggers |
-| `maxFramesPerMinute` | `180` | Rate limit on ingested frames |
-| `maxFrameBytes` | `350000` | Max JPEG payload size per frame |
-| `keyframeIntervalMs` | `1200` | Capture interval for share page (500-2000) |
-| `sharePageMaxWidthPx` | `960` | Max capture width (640-1920) |
-| `sharePageJpegQuality` | `0.6` | JPEG quality (0.5-0.75) |
+| `maxFramesPerMinute` | `180` | Rate limit on frames admitted into the inference pipeline |
+| `maxFrameBytes` | `350000` | Max frame payload size admitted into the inference pipeline |
+| `keyframeIntervalMs` | `1200` | Fallback browser capture interval (500-2000) |
+| `sharePageMaxWidthPx` | `960` | Fallback browser capture max width (640-1920) |
+| `sharePageJpegQuality` | `0.6` | Fallback browser capture JPEG quality (0.5-0.75) |
 
 Both layers are always active — there is no routing decision between "direct to brain" and "scanner generated." The brain always sees the frame; the scanner always builds temporal notes.
 
+The native Discord tuning fields above are canonical `voice.streamWatch` settings. They are currently used by runtime and persisted through the settings model, but they are not yet surfaced as dedicated dashboard controls.
+
+If those native fields are absent, runtime uses these defaults:
+
+- 2 fps max
+- prefer `screen` streams
+- prefer roughly 1280x720 target pixel count
+
+Native Discord decode remains keyframe-only today. That is a fixed runtime behavior, not a stream-watch setting.
+
 ## Dashboard visibility
 
-The Voice tab mirrors the screen-share pipeline as live state, not just action logs:
+The Voice tab mirrors the screen-watch pipeline as live state, not just action logs:
 
 - **Keyframe Analyses** shows the per-frame scanner outputs that were saved into `brainContextEntries`.
 - **Voice Context Builder** shows the configured scanner guidance prompt plus the accumulated notes currently eligible for injection into voice prompts.
 - **Saved Screen Moments** shows durable screen moments the main voice brain decided to keep during the session.
 
-This separates "what the scanner saw" from "what context the VC brain currently has available," which makes it easier to debug whether a bad screen-share comment came from frame analysis, prompt compaction, or the main brain turn itself.
+This separates "what the scanner saw" from "what context the VC brain currently has available," which makes it easier to debug whether a bad screen-watch comment came from frame analysis, prompt compaction, or the main brain turn itself.
 
 ## API Endpoints
 
@@ -238,10 +261,15 @@ This separates "what the scanner saw" from "what context the VC brain currently 
 
 ## Voice Tool
 
-**Name:** `offer_screen_share_link`
-- No parameters
+**Name:** `start_screen_watch`
+- Optional parameter: `{ target?: string }`
+- `target` can be a display name, username, Discord mention, or Discord user id
+- If `target` resolves to one active sharer, runtime watches that share
+- If `target` resolves to a voice participant who is not actively sharing, runtime can still open the share-link fallback for that user
+- If no `target` is provided, runtime only auto-picks when the requester is sharing or exactly one sharer is active
+- If multiple sharers are active and no `target` is provided, runtime refuses instead of guessing
 - Only available when `screenShareAvailable = true`
-- Returns `{ ok, offered, reused, reason, linkUrl, expiresInMinutes }`
+- Returns `{ ok, started, reused, reason, transport, targetUserId, linkUrl, expiresInMinutes }`
 
 ## Security Model
 
@@ -257,8 +285,8 @@ This separates "what the scanner saw" from "what context the VC brain currently 
 | File | Purpose |
 |------|---------|
 | `src/voice/voiceStreamWatch.ts` | Frame processing, scanner, commentary triggers |
-| `src/services/screenShareSessionManager.ts` | Session manager, share page HTML |
-| `src/bot/screenShare.ts` | Bot integration, intent detection, link offering |
+| `src/services/screenShareSessionManager.ts` | Fallback share-link manager and share page HTML |
+| `src/bot/screenShare.ts` | Bot integration, native-first transport selection, and fallback start |
 | `src/voice/voiceReplyPipeline.ts` | Frame + notes passed to brain generation |
 | `src/prompts/promptVoice.ts` | Screen context in voice prompts |
 | `src/dashboard/routesVoice.ts` | API endpoints |

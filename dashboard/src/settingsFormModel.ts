@@ -683,6 +683,18 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.streamWatch?.brainContextModel ?? defaultVoiceStreamWatch.brainContextModel ?? "",
     voiceStreamWatchBrainContextPrompt:
       resolved?.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt,
+    voiceStreamWatchNativeDiscordMaxFramesPerSecond:
+      resolved?.voice?.streamWatch?.nativeDiscordMaxFramesPerSecond ??
+      defaultVoiceStreamWatch.nativeDiscordMaxFramesPerSecond,
+    voiceStreamWatchNativeDiscordPreferredQuality:
+      resolved?.voice?.streamWatch?.nativeDiscordPreferredQuality ??
+      defaultVoiceStreamWatch.nativeDiscordPreferredQuality,
+    voiceStreamWatchNativeDiscordPreferredPixelCount:
+      resolved?.voice?.streamWatch?.nativeDiscordPreferredPixelCount ??
+      defaultVoiceStreamWatch.nativeDiscordPreferredPixelCount,
+    voiceStreamWatchNativeDiscordPreferredStreamType:
+      resolved?.voice?.streamWatch?.nativeDiscordPreferredStreamType ??
+      defaultVoiceStreamWatch.nativeDiscordPreferredStreamType,
     voiceStreamWatchSharePageMaxWidthPx:
       resolved?.voice?.streamWatch?.sharePageMaxWidthPx ?? defaultVoiceStreamWatch.sharePageMaxWidthPx,
     voiceStreamWatchSharePageJpegQuality:
@@ -1609,6 +1621,10 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         brainContextMinIntervalSeconds: Number(form.voiceStreamWatchBrainContextMinIntervalSeconds),
         brainContextMaxEntries: Number(form.voiceStreamWatchBrainContextMaxEntries),
         brainContextPrompt: String(form.voiceStreamWatchBrainContextPrompt || "").trim(),
+        nativeDiscordMaxFramesPerSecond: Number(form.voiceStreamWatchNativeDiscordMaxFramesPerSecond),
+        nativeDiscordPreferredQuality: Number(form.voiceStreamWatchNativeDiscordPreferredQuality),
+        nativeDiscordPreferredPixelCount: Number(form.voiceStreamWatchNativeDiscordPreferredPixelCount),
+        nativeDiscordPreferredStreamType: String(form.voiceStreamWatchNativeDiscordPreferredStreamType || "").trim(),
         sharePageMaxWidthPx: Number(form.voiceStreamWatchSharePageMaxWidthPx),
         sharePageJpegQuality: Number(form.voiceStreamWatchSharePageJpegQuality)
       },

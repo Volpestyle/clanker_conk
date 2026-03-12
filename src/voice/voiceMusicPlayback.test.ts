@@ -120,6 +120,12 @@ function createPlaybackHost({
     composeOperationalMessage: async () => "",
     transcribePcmTurn: async () => "",
     hasBotNameCueForTranscript: () => false,
+    hasPendingMusicDisambiguationForUser: (session, userId = null) => {
+      const pendingResults = Array.isArray(session?.music?.pendingResults) ? session.music.pendingResults : [];
+      const requestedByUserId = String(session?.music?.pendingRequestedByUserId || "").trim();
+      const normalizedUserId = String(userId || "").trim();
+      return Boolean(pendingResults.length && requestedByUserId && normalizedUserId === requestedByUserId);
+    },
     isMusicDisambiguationResolutionTurn: () => false,
     maybeHandlePendingMusicDisambiguationTurn: async () => false,
     playVoiceQueueTrackByIndex: async () => {},
@@ -570,6 +576,75 @@ test("maybeHandleMusicPlaybackTurn routes eligible music turns to the main brain
   assert.equal(stopCheckEvent?.metadata?.musicBrainEnabled, false);
 });
 
+test("maybeHandleMusicPlaybackTurn routes pending music disambiguation followups to the main brain even when the music brain is enabled", async () => {
+  const { manager, musicBrainPrompts, loggedEvents } = createPlaybackHost({
+    musicBrainResponses: [
+      {
+        content: [{ type: "text", text: "[PASS]" }]
+      }
+    ]
+  });
+  const now = Date.now();
+  const session = {
+    id: "session-main-brain-disambiguation-handoff",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    ending: false,
+    voiceCommandState: {
+      userId: "user-1",
+      domain: "music",
+      intent: "music_disambiguation",
+      startedAt: now - 1_000,
+      expiresAt: now + 10_000
+    },
+    music: {
+      active: true,
+      pendingQuery: "minecraft music",
+      pendingPlatform: "auto",
+      pendingAction: "play_now",
+      pendingRequestedByUserId: "user-1",
+      pendingRequestedAt: now,
+      pendingResults: [
+        {
+          id: "youtube:track-1",
+          title: "Minecraft Calm Music by C418",
+          artist: "CozyCraft",
+          platform: "youtube",
+          externalUrl: null,
+          durationSeconds: 600
+        },
+        {
+          id: "youtube:track-2",
+          title: "Minecraft Cliffside Waterfall Ambience",
+          artist: "CozyCraft",
+          platform: "youtube",
+          externalUrl: null,
+          durationSeconds: 600
+        }
+      ]
+    }
+  };
+  ensureSessionMusicState(manager, session);
+  setMusicPhase(manager, session, "playing");
+
+  const handled = await maybeHandleMusicPlaybackTurn(manager, {
+    session,
+    settings: createDedicatedMusicBrainSettings(),
+    userId: "user-1",
+    pcmBuffer: Buffer.alloc(0),
+    source: "realtime",
+    transcript: "yeah, the cabin vibe one"
+  });
+
+  assert.equal(handled, false);
+  assert.equal(musicBrainPrompts.length, 0);
+  const stopCheckEvent = loggedEvents.find((entry) => entry.content === "voice_music_stop_check");
+  assert.equal(stopCheckEvent?.metadata?.decisionReason, "main_brain_decides");
+  assert.equal(stopCheckEvent?.metadata?.gateDecisionReason, "pending_command_followup");
+  assert.equal(stopCheckEvent?.metadata?.pendingMusicDisambiguationFollowup, true);
+});
+
 test("maybeHandleMusicPlaybackTurn still swallows non-command chatter after the wake latch closes", async () => {
   const { manager, loggedEvents } = createPlaybackHost();
   const session = {
@@ -904,6 +979,12 @@ function createSlashPlaybackHost(searchResults: MusicSelectionResult[], sessionO
     composeOperationalMessage: async () => "",
     transcribePcmTurn: async () => "",
     hasBotNameCueForTranscript: () => false,
+    hasPendingMusicDisambiguationForUser: (session, userId = null) => {
+      const pendingResults = Array.isArray(session?.music?.pendingResults) ? session.music.pendingResults : [];
+      const requestedByUserId = String(session?.music?.pendingRequestedByUserId || "").trim();
+      const normalizedUserId = String(userId || "").trim();
+      return Boolean(pendingResults.length && requestedByUserId && normalizedUserId === requestedByUserId);
+    },
     isMusicDisambiguationResolutionTurn: () => false,
     maybeHandlePendingMusicDisambiguationTurn: async () => false,
     playVoiceQueueTrackByIndex: async ({ session, index }) => {

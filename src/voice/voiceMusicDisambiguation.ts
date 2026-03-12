@@ -5,7 +5,7 @@ import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { isCancelIntent } from "../tools/cancelDetection.ts";
 import {
   applyOrchestratorOverrideSettings,
-  getResolvedVoiceMusicBrainBinding
+  getResolvedVoiceGenerationBinding
 } from "../settings/agentStack.ts";
 import type {
   MusicSelectionResult,
@@ -351,7 +351,7 @@ async function resolvePendingMusicDisambiguationSelectionWithLlm(
     session.settingsSnapshot ||
     host.store.getSettings() ||
     null;
-  const binding = getResolvedVoiceMusicBrainBinding(resolvedSettings);
+  const binding = getResolvedVoiceGenerationBinding(resolvedSettings);
   const llmSettings = applyOrchestratorOverrideSettings(resolvedSettings, {
     provider: binding.provider,
     model: binding.model,

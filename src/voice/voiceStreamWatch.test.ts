@@ -80,6 +80,16 @@ function createSession(overrides = {}) {
       latestFrameDataBase64: "",
       latestFrameAt: 0
     },
+    nativeScreenShare: {
+      sharers: new Map(),
+      subscribedTargetUserId: null,
+      decodeInFlight: false,
+      lastDecodeAttemptAt: 0,
+      lastDecodeSuccessAt: 0,
+      lastDecodeFailureAt: 0,
+      lastDecodeFailureReason: null,
+      ffmpegAvailable: null
+    },
     userCaptures: new Map(),
     pendingResponse: false,
     lastInboundAudioAt: 0,
@@ -374,6 +384,65 @@ test("enableWatchStreamForUser enforces same-voice-channel requirement and suppo
   assert.equal(allowedResult.targetUserId, "user-2");
   assert.equal(allowed.manager.sessions.get("guild-1")?.streamWatch?.active, true);
   assert.equal(allowed.actions.some((entry) => entry.kind === "voice_runtime"), true);
+});
+
+test("enableWatchStreamForUser subscribes native Discord video and stopWatchStreamForUser clears it", async () => {
+  const nativeVideoCalls: Array<Record<string, unknown>> = [];
+  const session = createSession({
+    voxClient: {
+      subscribeUserVideo(payload) {
+        nativeVideoCalls.push({
+          type: "subscribe",
+          ...payload
+        });
+      },
+      unsubscribeUserVideo(userId) {
+        nativeVideoCalls.push({
+          type: "unsubscribe",
+          userId
+        });
+      }
+    }
+  });
+  const { manager } = createManager({ session });
+
+  const startResult = await enableWatchStreamForUser(manager, {
+    guildId: "guild-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-2",
+    settings: createSettings()
+  });
+  assert.equal(startResult.ok, true);
+  assert.equal(session.nativeScreenShare.subscribedTargetUserId, "user-2");
+
+  const stopResult = await stopWatchStreamForUser(manager, {
+    guildId: "guild-1",
+    targetUserId: "user-2",
+    settings: createSettings({
+      voice: {
+        streamWatch: {
+          brainContextEnabled: false
+        }
+      }
+    }),
+    reason: "native_discord_screen_share_ended"
+  });
+  assert.equal(stopResult.ok, true);
+  assert.equal(session.nativeScreenShare.subscribedTargetUserId, null);
+  assert.deepEqual(nativeVideoCalls, [
+    {
+      type: "subscribe",
+      userId: "user-2",
+      maxFramesPerSecond: 2,
+      preferredQuality: 100,
+      preferredPixelCount: 921600,
+      preferredStreamType: "screen"
+    },
+    {
+      type: "unsubscribe",
+      userId: "user-2"
+    }
+  ]);
 });
 
 test("ingestStreamFrame validates mime, frame size, and frame-rate limits", async () => {

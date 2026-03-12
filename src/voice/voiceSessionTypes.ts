@@ -740,6 +740,44 @@ export interface VoiceSessionStreamWatchState {
     latestFrameAt: number;
 }
 
+export interface VoiceSessionNativeScreenShareStreamState {
+    ssrc: number;
+    rtxSsrc: number | null;
+    rid: string | null;
+    quality: number | null;
+    streamType: string | null;
+    active: boolean | null;
+    maxBitrate: number | null;
+    maxFramerate: number | null;
+    width: number | null;
+    height: number | null;
+    resolutionType: string | null;
+    pixelCount: number | null;
+}
+
+export interface VoiceSessionNativeScreenShareSharerState {
+    userId: string;
+    audioSsrc: number | null;
+    videoSsrc: number | null;
+    codec: string | null;
+    streams: VoiceSessionNativeScreenShareStreamState[];
+    updatedAt: number;
+    lastFrameAt: number;
+    lastFrameCodec: string | null;
+    lastFrameKeyframeAt: number;
+}
+
+export interface VoiceSessionNativeScreenShareState {
+    sharers: Map<string, VoiceSessionNativeScreenShareSharerState>;
+    subscribedTargetUserId: string | null;
+    decodeInFlight: boolean;
+    lastDecodeAttemptAt: number;
+    lastDecodeSuccessAt: number;
+    lastDecodeFailureAt: number;
+    lastDecodeFailureReason: string | null;
+    ffmpegAvailable: boolean | null;
+}
+
 export interface VoiceSessionSoundboardState {
     playCount: number;
     lastPlayedAt: number;
@@ -1079,6 +1117,7 @@ export interface VoiceSession {
     pendingAmbientThought?: VoicePendingAmbientThought | null;
     userCaptures: Map<string, CaptureState>;
     streamWatch: VoiceSessionStreamWatchState;
+    nativeScreenShare: VoiceSessionNativeScreenShareState;
     music: VoiceSessionMusicState;
     soundboard: VoiceSessionSoundboardState;
     latencyStages: VoiceLatencyStageEntry[];

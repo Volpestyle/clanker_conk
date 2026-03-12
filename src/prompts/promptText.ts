@@ -360,7 +360,7 @@ export function buildReplyPrompt({
     parts.push("If asked to join VC or play music, say voice mode is currently disabled.");
   }
 
-  parts.push("=== SCREEN SHARE ===");
+  parts.push("=== SCREEN WATCH ===");
 
   const screenShareStatus = String(screenShare?.status || "disabled").trim().toLowerCase() || "disabled";
   const screenShareEnabled = Boolean(screenShare?.enabled);
@@ -376,23 +376,24 @@ export function buildReplyPrompt({
   const screenShareReason =
     String(screenShare?.reason || "").trim().toLowerCase() || screenShareStatus || "unavailable";
   if (screenShareAvailable) {
-    parts.push("You can offer a secure temporary screen-share link when useful.");
+    parts.push("You can start screen watch when useful.");
+    parts.push("The runtime will use native Discord screen watch when available and fall back automatically if needed.");
     parts.push(
-      "If the user asks you to see/watch their screen or stream, set screenShareIntent.action to offer_link."
+      "If the user asks you to see/watch their screen or stream, set screenWatchIntent.action to start_watch."
     );
     parts.push(
-      "If visual context would materially improve troubleshooting/help, you may proactively set screenShareIntent.action to offer_link."
+      "If visual context would materially improve troubleshooting/help, you may proactively set screenWatchIntent.action to start_watch."
     );
     parts.push(
-      "Set screenShareIntent.confidence from 0 to 1. Use high confidence only when a share link is clearly useful."
+      "Set screenWatchIntent.confidence from 0 to 1. Use high confidence only when live visual context is clearly useful."
     );
   } else if (screenShareSupported) {
-    parts.push(`Screen-share link capability exists but is currently unavailable (reason: ${screenShareReason}).`);
-    parts.push("If asked, explain it can work when available, but do not claim you can watch a screen right now.");
-    parts.push("Set screenShareIntent.action to none.");
+    parts.push(`Screen watch exists but is currently unavailable (reason: ${screenShareReason}).`);
+    parts.push("If asked, explain it can work when available, but do not claim you can watch the screen right now.");
+    parts.push("Set screenWatchIntent.action to none.");
   } else {
-    parts.push("Screen-share links are not available in this runtime.");
-    parts.push("Set screenShareIntent.action to none.");
+    parts.push("Screen watch is not available in this runtime.");
+    parts.push("Set screenWatchIntent.action to none.");
   }
 
   parts.push("=== AUTOMATION ===");
@@ -584,8 +585,8 @@ export function buildReplyPrompt({
   parts.push("Use tool calls for web search, browser browsing, durable memory search, image lookup, voice control, and other supported capabilities.");
   parts.push("Do not encode tool requests inside the JSON reply body.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
-  parts.push("Set screenShareIntent.action to one of offer_link|none.");
-  parts.push("When not offering a share link, set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
+  parts.push("Set screenWatchIntent.action to one of start_watch|none.");
+  parts.push("When not starting screen watch, set screenWatchIntent.action=none, screenWatchIntent.confidence=0, screenWatchIntent.reason=null.");
 
   return parts.join("\n\n");
 }
@@ -925,7 +926,7 @@ export function buildAutomationPrompt({
   parts.push("Use tool calls for durable memory search and other supported capabilities.");
   parts.push("Do not encode tool requests inside the JSON reply body.");
   parts.push("Set automationAction.operation=none.");
-  parts.push("Set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
+  parts.push("Set screenWatchIntent.action=none, screenWatchIntent.confidence=0, screenWatchIntent.reason=null.");
   parts.push("Use [SKIP] only when sending nothing is clearly best.");
 
   return parts.join("\n\n");

@@ -136,17 +136,17 @@ test("parseStructuredReplyOutput accepts screen share offer intent", () => {
       reactionEmoji: null,
       media: null,
       memoryLine: null,
-      screenShareIntent: {
-        action: "offer_link",
+      screenWatchIntent: {
+        action: "start_watch",
         confidence: 0.88,
         reason: "needs visual context"
       }
     })
   );
 
-  assert.equal(parsed.screenShareIntent.action, "offer_link");
-  assert.equal(parsed.screenShareIntent.confidence, 0.88);
-  assert.equal(parsed.screenShareIntent.reason, "needs visual context");
+  assert.equal(parsed.screenWatchIntent.action, "start_watch");
+  assert.equal(parsed.screenWatchIntent.confidence, 0.88);
+  assert.equal(parsed.screenWatchIntent.reason, "needs visual context");
 });
 
 test("parseStructuredReplyOutput ignores deprecated screen share aliases", () => {
@@ -155,7 +155,7 @@ test("parseStructuredReplyOutput ignores deprecated screen share aliases", () =>
       text: "old payload",
       skip: false,
       screenShare: {
-        action: "offer_link",
+        action: "start_watch",
         confidence: 1,
         reason: "deprecated alias"
       },
@@ -163,9 +163,9 @@ test("parseStructuredReplyOutput ignores deprecated screen share aliases", () =>
     })
   );
 
-  assert.equal(parsed.screenShareIntent.action, null);
-  assert.equal(parsed.screenShareIntent.confidence, 0);
-  assert.equal(parsed.screenShareIntent.reason, null);
+  assert.equal(parsed.screenWatchIntent.action, null);
+  assert.equal(parsed.screenWatchIntent.confidence, 0);
+  assert.equal(parsed.screenWatchIntent.reason, null);
 });
 
 test("parseStructuredReplyOutput normalizes automation create payload", () => {

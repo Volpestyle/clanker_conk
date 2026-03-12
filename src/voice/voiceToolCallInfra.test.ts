@@ -7,7 +7,7 @@ import { createVoiceTestManager, createVoiceTestSettings } from "./voiceTestHarn
 
 test("refreshRealtimeTools registers local and MCP tool definitions", async () => {
   const manager = createVoiceTestManager();
-  manager.getVoiceScreenShareCapability = () => ({
+  manager.getVoiceScreenWatchCapability = () => ({
     supported: true,
     enabled: true,
     available: true,
@@ -15,9 +15,10 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
     publicUrl: "https://screen.example",
     reason: null
   });
-  manager.offerVoiceScreenShareLink = async () => ({
-    offered: true,
-    reason: "offered"
+  manager.startVoiceScreenWatch = async () => ({
+    started: true,
+    reason: "watching_started",
+    transport: "native"
   });
   manager.appConfig.voiceMcpServers = [
     {
@@ -84,7 +85,7 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   assert.equal(toolNames.includes("memory_write"), true);
   assert.equal(toolNames.includes("music_search"), true);
   assert.equal(toolNames.includes("music_play"), true);
-  assert.equal(toolNames.includes("offer_screen_share_link"), true);
+  assert.equal(toolNames.includes("start_screen_watch"), true);
   assert.equal(toolNames.includes("server_status"), true);
   const descriptorRows = Array.isArray(session.realtimeToolDefinitions) ? session.realtimeToolDefinitions : [];
   const mcpDescriptor = descriptorRows.find((entry) => entry?.name === "server_status");
@@ -94,6 +95,45 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "anyOf"), false);
   assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "oneOf"), false);
   assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "allOf"), false);
+});
+
+test("refreshRealtimeTools keeps start_screen_watch available for native watch sessions without a text channel", async () => {
+  const manager = createVoiceTestManager();
+  manager.getVoiceScreenWatchCapability = () => ({
+    supported: true,
+    enabled: true,
+    available: true,
+    status: "ready",
+    reason: null,
+    nativeAvailable: true,
+    linkFallbackAvailable: false
+  });
+
+  let updatedToolsPayload = null;
+  const session = {
+    id: "session-openai-tools-native-screen-watch",
+    guildId: "guild-1",
+    textChannelId: null,
+    mode: "openai_realtime",
+    ending: false,
+    realtimeToolOwnership: "provider_native",
+    realtimeClient: {
+      updateTools(payload) {
+        updatedToolsPayload = payload;
+      }
+    }
+  };
+
+  await refreshRealtimeTools(manager, {
+    session,
+    settings: createVoiceTestSettings(),
+    reason: "test"
+  });
+
+  const toolNames = Array.isArray(updatedToolsPayload?.tools)
+    ? updatedToolsPayload.tools.map((entry) => entry?.name)
+    : [];
+  assert.equal(toolNames.includes("start_screen_watch"), true);
 });
 
 test("buildRealtimeFunctionTools rewrites music_play for provider-native realtime compatibility", () => {
@@ -416,11 +456,11 @@ test("handleRealtimeFunctionCallEvent ignores provider function calls in brain s
   assert.equal(Array.isArray(session.toolCallEvents) ? session.toolCallEvents.length : 0, 0);
 });
 
-test("handleRealtimeFunctionCallEvent executes offer_screen_share_link and sends function output", async () => {
+test("handleRealtimeFunctionCallEvent executes start_screen_watch and sends function output", async () => {
   const manager = createVoiceTestManager();
   manager.scheduleRealtimeToolFollowupResponse = () => {};
   const offerCalls = [];
-  manager.getVoiceScreenShareCapability = () => ({
+  manager.getVoiceScreenWatchCapability = () => ({
     supported: true,
     enabled: true,
     available: true,
@@ -428,11 +468,13 @@ test("handleRealtimeFunctionCallEvent executes offer_screen_share_link and sends
     publicUrl: "https://screen.example",
     reason: null
   });
-  manager.offerVoiceScreenShareLink = async (payload) => {
+  manager.startVoiceScreenWatch = async (payload) => {
     offerCalls.push(payload);
     return {
-      offered: true,
-      reason: "offered",
+      started: true,
+      reason: "started",
+      transport: "link",
+      targetUserId: "speaker-2",
       linkUrl: "https://screen.example/session/abc",
       expiresInMinutes: 12
     };
@@ -475,8 +517,8 @@ test("handleRealtimeFunctionCallEvent executes offer_screen_share_link and sends
       item: {
         type: "function_call",
         call_id: "call_screen_1",
-        name: "offer_screen_share_link",
-        arguments: "{}"
+        name: "start_screen_watch",
+        arguments: "{\"target\":\"casey\"}"
       }
     }
   });
@@ -485,12 +527,15 @@ test("handleRealtimeFunctionCallEvent executes offer_screen_share_link and sends
   assert.equal(offerCalls[0]?.guildId, "guild-1");
   assert.equal(offerCalls[0]?.channelId, "chan-1");
   assert.equal(offerCalls[0]?.requesterUserId, "speaker-1");
+  assert.equal(offerCalls[0]?.target, "casey");
   assert.equal(offerCalls[0]?.transcript, "can i show you my screen?");
   assert.equal(offerCalls[0]?.source, "voice_realtime_tool_call");
   assert.equal(sentFunctionOutputs.length, 1);
   const outputPayload = JSON.parse(String(sentFunctionOutputs[0]?.output || "{}"));
   assert.equal(outputPayload?.ok, true);
-  assert.equal(outputPayload?.offered, true);
+  assert.equal(outputPayload?.started, true);
+  assert.equal(outputPayload?.transport, "link");
+  assert.equal(outputPayload?.targetUserId, "speaker-2");
   assert.equal(outputPayload?.linkUrl, "https://screen.example/session/abc");
 });
 

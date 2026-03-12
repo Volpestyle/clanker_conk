@@ -24,7 +24,7 @@ function ScreenShareMentalModel({
 }) {
   return (
     <div className="ssm-card">
-      <div className="ssm-title">How screen share works</div>
+      <div className="ssm-title">How screen watch works</div>
       <div className="ssm-list">
         <div className="ssm-row">
           <span className="ssm-label">Current frame</span>
@@ -1341,9 +1341,9 @@ export function VoiceModeSettingsSection({
 
         </VoiceSubpanel>
 
-        <VoiceSubpanel label="Screen Share">
+        <VoiceSubpanel label="Screen Watch">
           {/* ── Stream Watch ── */}
-          <h4>Stream Watch</h4>
+          <h4>Screen Watch</h4>
           <div className="toggles">
             <label>
               <input
@@ -1351,14 +1351,14 @@ export function VoiceModeSettingsSection({
                 checked={form.voiceStreamWatchEnabled}
                 onChange={set("voiceStreamWatchEnabled")}
               />
-              Enable stream frame ingest + commentary
+              Enable screen watch + commentary
             </label>
           </div>
 
           {form.voiceStreamWatchEnabled && (
             <p className="vps-runtime-summary-note">
-              Screen share is layered context. The current frame always goes to the normal voice brain on active turns.
-              These controls only affect proactive commentary and the optional rolling notes layer.
+              Screen watch is layered context. Native Discord receive is preferred, with browser capture as fallback when needed. The current frame always goes to the normal voice brain on active turns.
+              These controls tune proactive commentary, rolling notes, and fallback capture behavior when a non-native path is used.
             </p>
           )}
 
@@ -1380,7 +1380,7 @@ export function VoiceModeSettingsSection({
                   checked={Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled)}
                   onChange={set("voiceStreamWatchAutonomousCommentaryEnabled")}
                 />
-                Allow spontaneous screen-share commentary
+                Allow spontaneous screen-watch commentary
               </label>
               <label>
                 <input
@@ -1397,8 +1397,8 @@ export function VoiceModeSettingsSection({
             <details className="vps-advanced-card">
               <summary className="vps-advanced-summary">
                 <span className="vps-advanced-arrow">&#x25B8;</span>
-                <span>Advanced stream watch settings</span>
-                <span className="vps-advanced-summary-copy">Transport, rate limits, and scanner tuning</span>
+                <span>Advanced screen watch settings</span>
+                <span className="vps-advanced-summary-copy">Native receive limits, fallback transport, and scanner tuning</span>
               </summary>
               <div className="vps-advanced-body">
                 <div className="split">
@@ -1441,7 +1441,7 @@ export function VoiceModeSettingsSection({
                     />
                   </div>
                   <div>
-                    <label htmlFor="voice-stream-watch-keyframe-interval-ms">Share-page keyframe interval (ms)</label>
+                      <label htmlFor="voice-stream-watch-keyframe-interval-ms">Fallback browser capture interval (ms)</label>
                     <input
                       id="voice-stream-watch-keyframe-interval-ms"
                       type="number"
@@ -1453,7 +1453,7 @@ export function VoiceModeSettingsSection({
                     />
                   </div>
                   <div>
-                    <label htmlFor="voice-stream-watch-share-page-max-width-px">Share-page max width (px)</label>
+                    <label htmlFor="voice-stream-watch-share-page-max-width-px">Fallback browser capture max width (px)</label>
                     <input
                       id="voice-stream-watch-share-page-max-width-px"
                       type="number"
@@ -1465,7 +1465,7 @@ export function VoiceModeSettingsSection({
                     />
                   </div>
                   <div>
-                    <label htmlFor="voice-stream-watch-share-page-jpeg-quality">Share-page JPEG quality</label>
+                    <label htmlFor="voice-stream-watch-share-page-jpeg-quality">Fallback browser capture JPEG quality</label>
                     <input
                       id="voice-stream-watch-share-page-jpeg-quality"
                       type="number"

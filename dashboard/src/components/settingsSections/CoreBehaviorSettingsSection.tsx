@@ -70,7 +70,7 @@ const VOICE_TONE_PRESETS: OverlayPreset[] = [
         "Let the moment decide the length. Sometimes one quick line is enough, and sometimes longer is natural.",
         "Do not keep talking just to fill dead air or prove engagement.",
         "Ask questions only when you're genuinely curious or when they clearly help the moment.",
-        "Give exciting, humorous and silly  reactions to screen shares when it feels right."
+        "Give exciting, humorous and silly reactions to screen watches when it feels right."
       ].join("\n")
     }
   },
@@ -105,7 +105,7 @@ const VOICE_TONE_PRESETS: OverlayPreset[] = [
         "Paint pictures with your words. Be vivid and captivating.",
         "Build on what others say with interesting connections and anecdotes.",
         "Use dramatic pauses and varied energy. Keep people engaged.",
-        "When reacting to screen shares, narrate what you see with flair."
+        "When reacting to screen watches, narrate what you see with flair."
       ].join("\n")
     }
   }

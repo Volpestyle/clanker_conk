@@ -936,7 +936,7 @@ export class TurnProcessor {
     return true;
   }
 
-  private async maybeConsumePendingMusicDisambiguationTurn({
+  private async maybeConsumePendingMusicDisambiguationCancel({
     session,
     settings = null,
     userId = null,
@@ -950,7 +950,7 @@ export class TurnProcessor {
     source?: "realtime" | "file_asr";
   }) {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return false;
+    if (!normalizedTranscript || !isCancelIntent(normalizedTranscript)) return false;
     return await this.host.maybeHandlePendingMusicDisambiguationTurn({
       session,
       settings,
@@ -1825,7 +1825,7 @@ export class TurnProcessor {
 
       if (
         turnTranscript &&
-        await this.maybeConsumePendingMusicDisambiguationTurn({
+        await this.maybeConsumePendingMusicDisambiguationCancel({
           session,
           settings,
           userId,
@@ -1835,7 +1835,7 @@ export class TurnProcessor {
       ) {
         this.host.discardSupersededPrePlaybackReply({
           session,
-          reason: "music_disambiguation_consumed",
+          reason: "music_disambiguation_cancelled",
           userId
         });
         return;
@@ -2367,7 +2367,7 @@ export class TurnProcessor {
       });
       return;
     }
-    if (await this.maybeConsumePendingMusicDisambiguationTurn({
+    if (await this.maybeConsumePendingMusicDisambiguationCancel({
       session,
       settings,
       userId,

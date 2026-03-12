@@ -218,6 +218,29 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         DEFAULT_SETTINGS.voice.streamWatch.brainContextPrompt,
         420
       ),
+      nativeDiscordMaxFramesPerSecond: normalizeInt(
+        streamWatch.nativeDiscordMaxFramesPerSecond,
+        DEFAULT_SETTINGS.voice.streamWatch.nativeDiscordMaxFramesPerSecond,
+        1,
+        10
+      ),
+      nativeDiscordPreferredQuality: normalizeInt(
+        streamWatch.nativeDiscordPreferredQuality,
+        DEFAULT_SETTINGS.voice.streamWatch.nativeDiscordPreferredQuality,
+        0,
+        100
+      ),
+      nativeDiscordPreferredPixelCount: normalizeInt(
+        streamWatch.nativeDiscordPreferredPixelCount,
+        DEFAULT_SETTINGS.voice.streamWatch.nativeDiscordPreferredPixelCount,
+        64 * 64,
+        3840 * 2160
+      ),
+      nativeDiscordPreferredStreamType: normalizeString(
+        streamWatch.nativeDiscordPreferredStreamType,
+        DEFAULT_SETTINGS.voice.streamWatch.nativeDiscordPreferredStreamType,
+        32
+      ),
       sharePageMaxWidthPx: normalizeInt(
         streamWatch.sharePageMaxWidthPx,
         DEFAULT_SETTINGS.voice.streamWatch.sharePageMaxWidthPx,

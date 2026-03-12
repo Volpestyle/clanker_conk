@@ -1,198 +1,158 @@
-# Native Discord Screen Share
+# Native Discord Screen Watch
 
-> **Scope:** What "native Discord screen-share watching" means, what Discord exposes today, what `clankvox` already implements, and what is still missing before Clanker Conk can receive Discord screen shares directly.
-> Existing share-link system: [`voice/screen-share-system.md`](voice/screen-share-system.md)
-> Voice transport stack: [`voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
-> Cross-cutting settings contract: [`settings.md`](settings.md)
+> Scope: what "native Discord screen watch" means in this repo, how it works in the Bun runtime, and where the share-link path still fits.
+> Product surface: [`voice/screen-share-system.md`](voice/screen-share-system.md)
+> Transport stack: [`voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
 
-This document separates two different products that are easy to blur together:
+This repo supports two transports behind one product capability:
 
-- **Native Discord screen-share receive**: the bot joins a voice channel and directly subscribes to a user's Discord Go Live / video stream through Discord's voice/media protocol.
-- **Link-based screen watch**: the bot sends a share link, the user opens a browser page, `getDisplayMedia()` captures the screen, and frames are POSTed into Clanker Conk.
+- Native Discord screen watch: subscribe to an active Discord Go Live / video stream through Discord voice media.
+- Share-link fallback: send `/share/:token`, capture with `getDisplayMedia()`, and POST JPEG frames back into the bot.
 
-Clanker Conk currently supports the second product. It does not yet support the first one.
+The model only sees `start_screen_watch`. Runtime chooses the transport.
 
-## Status Summary
+## Current Status
 
-Status validated on **March 12, 2026**.
+Native Discord screen watch is now wired through the Bun runtime end to end.
 
-Discord's public developer documentation now clearly acknowledges video-related voice protocol surface:
+That means:
 
-- the voice state object includes `self_stream` and `self_video`
-- the voice connections protocol history mentions video support
-- the voice protocol documentation covers DAVE end-to-end encryption for voice and video media
+- the voice brain can see who is actively sharing in Discord prompt context
+- `start_screen_watch` can bind to an actual active Discord sharer, including an explicitly named target
+- native Discord video can flow into the existing stream-watch frame pipeline
 
-Official references:
+That does not mean:
 
-- [Discord Voice Resource docs](https://docs.discord.com/developers/resources/voice)
-- [Discord Voice Connections docs](https://docs.discord.com/developers/topics/voice-connections)
+- the model automatically sees a live share just because someone started sharing
+- the runtime can safely guess among multiple active Discord sharers
+- the native path replaces the share-link fallback
 
-However, Discord still does **not** document a simple high-level bot API that looks like "subscribe to user X's active screen share and receive decoded frames." The protocol surface exists; the bot-ready product surface still appears to be low-level and custom.
+## Runtime Flow
 
-That means native screen-share receive should be treated as:
+### 1. `clankvox` discovers and forwards native video state
 
-- **possible in principle**
-- **high-effort in implementation**
-- **higher-risk than normal Discord voice audio receive**
+The Rust subprocess emits:
 
-## Current Product In This Repo
+- `user_video_state`
+- `user_video_frame`
+- `user_video_end`
 
-The current screen-share feature is intentionally **not** native Discord video subscription.
+Those events include active stream metadata plus encoded frame payloads for subscribed users.
 
-Canonical flow:
+### 2. Bun tracks active sharers per voice session
 
-1. The bot offers a screen-share link.
-2. The user opens `/share/:token`.
-3. The browser captures the screen with `getDisplayMedia()`.
-4. JPEG keyframes are POSTed to `/api/voice/share-session/:token/frame`.
-5. The voice brain receives the latest frame plus rolling visual notes.
+The Bun voice session stores native Discord sharer state:
 
-See [`voice/screen-share-system.md`](voice/screen-share-system.md) for the full architecture.
+- active sharers
+- stream metadata like codec / type / resolution
+- last frame activity
+- current native subscription target
+- decode telemetry
 
-This design avoids depending on undocumented or lightly-documented Discord-native video receive behavior while still giving the agent visual context.
+That state is part of the normal voice session object, so it shows up in runtime inspection and prompt building.
 
-## What `clankvox` Already Has
+### 3. The prompt can see who is sharing
 
-`clankvox` already implements a meaningful part of the substrate a native solution would need:
+Realtime instructions now include a section listing active Discord sharers when present.
 
-- Discord voice WebSocket and UDP transport
-- SSRC mapping for speaking users
-- DAVE session setup, transition handling, and decrypt recovery
-- inbound RTP parsing
-- outbound RTP send for bot audio
-- Rust-side capture/playback supervision
+Important prompt rule:
 
-Important local code paths:
+- active Discord stream availability is not the same thing as current visual frame context
 
-- `src/voice/clankvox/src/voice_conn.rs`
-- `src/voice/clankvox/src/dave.rs`
-- `src/voice/clankvox/src/capture_supervisor.rs`
-- `src/voice/clankvox/src/ipc.rs`
-- `src/voice/clankvox/src/ipc_protocol.rs`
+So the brain can know that someone is sharing, without claiming it can already see that share.
 
-In other words: `clankvox` is not missing the entire transport layer. It already owns a substantial amount of the low-level Discord voice stack.
+### 4. `start_screen_watch` resolves a native target
 
-## What `clankvox` Does Not Yet Implement
+When the model calls `start_screen_watch`, runtime tries native first.
 
-Despite that substrate, the current implementation is still **audio-only** at the receive boundary.
+The tool can optionally include a `target` string:
 
-### 1. Receive events are audio-only
+- display name
+- username
+- Discord mention
+- Discord user id
 
-The core receive event enum only exposes:
+Native watch is considered usable only when:
 
-- `Ready`
-- `SsrcUpdate`
-- `ClientDisconnect`
-- `OpusReceived`
-- `DaveReady`
-- `Disconnected`
+- screen watch is enabled
+- the requester is in the same active voice session
+- the current voice provider supports stream-watch commentary
+- `ffmpeg` is available in the Bun runtime environment
+- runtime can resolve a target sharer
 
-There is no `VideoReceived`, `StreamFrameReceived`, or equivalent event in the Rust transport.
+Target resolution policy is intentionally conservative:
 
-### 2. Non-Opus RTP payloads are dropped
+- if `target` resolves cleanly to one active Discord sharer, watch that sharer
+- if `target` resolves to a voice participant who is not actively sharing, keep that user as the share-link fallback target
+- if no `target` is provided and the requester is actively sharing, watch that requester
+- if no `target` is provided and exactly one Discord sharer is active, watch that sharer
+- if multiple unrelated sharers are active and no `target` is provided, do not guess
+- if `target` is ambiguous or not in the voice session, fail clearly instead of binding the wrong person
 
-The UDP receive loop explicitly accepts only payload type `120` and drops anything else as non-Opus RTP.
+If native watch cannot start, runtime falls back to the share-link path.
 
-That is the strongest signal that native Discord video frames are not yet being handled in the live transport.
+### 5. Bun decodes native keyframes into the existing frame pipeline
 
-### 3. DAVE decrypt is hard-coded to audio media
+The native path does not currently hand decoded images directly out of Rust.
 
-`DaveManager::decrypt()` currently decrypts with `MediaType::AUDIO`.
+Current shape:
 
-There is no parallel video-media decrypt path today.
+1. `clankvox` decrypts and forwards encoded video frame payloads
+2. Bun receives `user_video_frame`
+3. Bun only attempts decode for the currently watched target
+4. Bun only decodes keyframes
+5. Bun uses `ffmpeg` to decode H264 / VP8 into JPEG
+6. Bun feeds that JPEG into `voiceStreamWatch`
 
-### 4. Stream metadata is not consumed
+After that point, native Discord watch and share-link fallback use the same downstream pipeline:
 
-The handshake tests show that `clankvox` can buffer an `op: 18` payload with a `streams` field while waiting for the normal voice handshake messages.
+- latest frame storage
+- rolling visual notes
+- autonomous commentary triggers
+- durable screen notes
+- prompt injection
 
-That is useful, but it is not the same thing as implementing stream subscription. Today, that stream metadata is buffered/replayed and then falls through the normal opcode handling path because there is no stream-management implementation attached to it.
+## Current Constraints
 
-### 5. IPC to the parent process is audio-only
+The native path is best-effort infrastructure, not a guaranteed transport.
 
-The Rust subprocess emits and accepts audio-oriented IPC messages such as:
+- `ffmpeg` is required for Bun-side decode.
+- The current Bun path decodes keyframes only.
+- Frame delivery is still rate-limited by the existing stream-watch admission controls.
+- If multiple Discord sharers are active and the requester is not the obvious target, runtime will not guess.
+- When multiple Discord sharers are active, the intended path is for the brain to choose one by calling `start_screen_watch({ target: "name" })`.
+- Share-link fallback remains the recovery path when native watch is unavailable or ambiguous.
 
-- `UserAudio`
-- `UserAudioEnd`
-- playback `Audio`
+## Settings
 
-There is no IPC contract for video frames, stream subscriptions, video keyframes, codec metadata, or decoded image output.
+Native subscription tuning now lives under `voice.streamWatch`:
 
-### 6. No video decode pipeline exists
+- `nativeDiscordMaxFramesPerSecond`
+- `nativeDiscordPreferredQuality`
+- `nativeDiscordPreferredPixelCount`
+- `nativeDiscordPreferredStreamType`
 
-Even if encrypted video packets were successfully received, the repo does not yet contain a native Discord video pipeline for:
+These are canonical config fields in the settings schema and runtime, but they are not currently surfaced as dedicated dashboard controls.
 
-- stream selection / quality negotiation
-- RTP depacketization for video
-- codec-specific reassembly
-- frame decode into image data
-- backpressure and frame-dropping policy for inference use
+Defaults favor low-friction screen watch when those fields are unset:
 
-## Practical Conclusion
+- 2 fps
+- preferred stream type `screen`
+- preferred pixel count `1280x720`
 
-The correct statement is:
-
-> `clankvox` already has much of the low-level Discord voice transport and DAVE foundation that a native screen-share receiver would need, but it does not yet implement native Discord video subscription or frame receive.
-
-That is materially different from saying either:
-
-- "we have nothing"
-- "we already support native Discord screen shares"
-
-Both extremes are inaccurate.
-
-## Why The Repo Still Uses The Share-Link Path
-
-The share-link path is still the canonical product for Clanker Conk because it is:
-
-- explicit and understandable for users
-- provider-agnostic
-- stable across Discord client/protocol changes
-- easy to convert into vision-model inputs
-- easy to rate-limit and inspect
-- much cheaper to debug than a custom Discord-native video stack
-
-This is aligned with the broader product principle in this repo: give the agent rich context without hardcoding brittle behaviors around a vendor-specific media path.
-
-## What Native Support Would Require
-
-If we decide to pursue native Discord screen-share receive in `clankvox`, the missing work is roughly:
-
-1. **Stream discovery and subscription**
-   Handle Discord's video/stream metadata and whatever sink/subscription messages are required to request a specific user's active stream.
-2. **Video media receive path**
-   Accept non-Opus RTP payloads instead of dropping them immediately.
-3. **Video DAVE decrypt**
-   Add decrypt paths for the appropriate non-audio media type.
-4. **Depacketization and decode**
-   Reassemble codec payloads into frames that can be decoded into images.
-5. **Frame selection policy**
-   Decide whether the bot wants full-rate video, keyframes only, or a sampled watch stream.
-6. **Rust-to-parent IPC**
-   Add a video frame/event contract to move decoded images or compressed frames into the Node process.
-7. **Inference-facing adaptation**
-   Rate-limit, resize, summarize, and persist frames in a way that fits the existing stream-watch pipeline.
-
-This is feasible engineering work, but it is a new subsystem, not a small patch.
-
-## Recommendation
-
-The current recommendation is:
-
-- keep the existing link-based screen-share system as the canonical shipping feature
-- treat native Discord screen-share receive as an experimental transport project inside `clankvox`
-- only rename the product to imply "native Discord stream watching" after the transport, decrypt, decode, and frame-ingest path actually exist end to end
+Native Discord decode remains keyframe-only today. That is a fixed runtime constraint, not a user-facing setting.
 
 ## Product Language
 
-Until native receive exists, prefer product language like:
+Prefer:
 
-- "share your screen with me"
-- "open a screen-share link"
-- "let me watch your screen"
+- "start screen watch"
+- "watch your screen"
+- "I can start watching that share"
 
-Avoid claiming:
+Avoid:
 
-- "I joined your Discord stream"
-- "I can watch Discord screen shares natively"
+- "I can already see your screen" unless frame context is actually active
+- "native Discord watch always works" because it is still transport-dependent
 
-Those claims overstate the current implementation.
+Product language: native Discord screen watch is now a real Bun-runtime transport path, with share-link capture retained as the fallback path when native watch is unavailable or ambiguous.

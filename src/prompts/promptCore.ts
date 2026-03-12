@@ -287,8 +287,8 @@ export const REPLY_JSON_SCHEMA = `{
     "runImmediately": false,
     "targetChannelId": "string or null"
   },
-  "screenShareIntent": {
-    "action": "offer_link|none",
+  "screenWatchIntent": {
+    "action": "start_watch|none",
     "confidence": 0,
     "reason": "string or null"
   }

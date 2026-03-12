@@ -192,11 +192,12 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
       settings: opts.settings,
       args: opts.args
     }),
-  offer_screen_share_link: async (manager, opts) => {
+  start_screen_watch: async (manager, opts) => {
     throwIfAborted(opts.signal, "Voice tool cancelled");
-    return await executeOfferScreenShareLinkTool(manager, {
+    return await executeStartScreenWatchTool(manager, {
       session: opts.session,
-      settings: opts.settings
+      settings: opts.settings,
+      args: opts.args
     });
   },
   web_search: async (manager, opts) =>
@@ -236,14 +237,23 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
   }
 };
 
-async function executeOfferScreenShareLinkTool(
+async function executeStartScreenWatchTool(
   manager: VoiceToolCallManager,
-  { session, settings }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null }
+  {
+    session,
+    settings,
+    args
+  }: {
+    session?: ToolRuntimeSession | null;
+    settings?: VoiceRealtimeToolSettings | null;
+    args?: VoiceToolCallArgs | null;
+  }
 ) {
   const requesterUserId = normalizeInlineText(session?.lastRealtimeToolCallerUserId, 80) || null;
-  if (!requesterUserId || !session?.guildId || !session?.textChannelId) {
-    return { ok: false, offered: false, error: "screen_share_context_unavailable" };
+  if (!requesterUserId || !session?.guildId) {
+    return { ok: false, started: false, error: "screen_watch_context_unavailable" };
   }
+  const target = normalizeInlineText(args?.target, 120) || null;
 
   let transcript = "";
   const recentVoiceTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
@@ -255,19 +265,25 @@ async function executeOfferScreenShareLinkTool(
     break;
   }
 
-  const result = await manager.offerVoiceScreenShareLink({
+  const result = await manager.startVoiceScreenWatch({
     settings,
     guildId: session.guildId,
-    channelId: session.textChannelId,
+    channelId: session.textChannelId || null,
     requesterUserId,
+    target,
     transcript,
     source: "voice_realtime_tool_call"
   });
   return {
-    ok: Boolean(result?.offered || result?.reused),
-    offered: Boolean(result?.offered),
+    ok: Boolean(result?.started || result?.reused),
+    started: Boolean(result?.started || result?.reused),
     reused: Boolean(result?.reused),
+    transport:
+      result?.transport === "native" || result?.transport === "link"
+        ? result.transport
+        : null,
     reason: normalizeInlineText(result?.reason, 120) || null,
+    targetUserId: normalizeInlineText(result?.targetUserId, 80) || null,
     linkUrl: normalizeInlineText(result?.linkUrl, 320) || null,
     expiresInMinutes: Number.isFinite(Number(result?.expiresInMinutes))
       ? Math.max(0, Math.round(Number(result.expiresInMinutes)))

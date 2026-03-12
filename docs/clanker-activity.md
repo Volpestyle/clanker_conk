@@ -359,7 +359,7 @@ Reply-loop conditional tools include:
 
 - `memory_search`
 - `image_lookup`
-- `offer_screen_share_link`
+- `start_screen_watch`
 
 Voice-only or voice-centric tools include:
 

@@ -107,6 +107,118 @@ function getLatestStreamWatchBrainContextEntry(session) {
   return entries[entries.length - 1] || null;
 }
 
+function resolveNativeDiscordVideoSubscriptionSettings(settings = null) {
+  const streamWatchSettings = getVoiceStreamWatchSettings(settings);
+  const preferredPixelCountRaw = Number(streamWatchSettings.nativeDiscordPreferredPixelCount) || 0;
+  return {
+    maxFramesPerSecond: clamp(
+      Number(streamWatchSettings.nativeDiscordMaxFramesPerSecond) || 2,
+      1,
+      10
+    ),
+    preferredQuality: clamp(
+      Number(streamWatchSettings.nativeDiscordPreferredQuality) || 100,
+      0,
+      100
+    ),
+    preferredPixelCount:
+      preferredPixelCountRaw > 0
+        ? clamp(preferredPixelCountRaw, 64 * 64, 3840 * 2160)
+        : 1280 * 720,
+    preferredStreamType:
+      String(streamWatchSettings.nativeDiscordPreferredStreamType || "screen")
+        .trim()
+        .toLowerCase() || null
+  };
+}
+
+function clearNativeDiscordSubscriptionState(session, targetUserId = null) {
+  if (
+    session?.nativeScreenShare &&
+    typeof session.nativeScreenShare === "object" &&
+    (!targetUserId || session.nativeScreenShare.subscribedTargetUserId === targetUserId)
+  ) {
+    session.nativeScreenShare.subscribedTargetUserId = null;
+  }
+}
+
+function unsubscribeNativeDiscordVideo(manager: StreamWatchManager, session, targetUserId, reason) {
+  const normalizedTargetUserId = String(targetUserId || "").trim();
+  if (!session || !normalizedTargetUserId) {
+    clearNativeDiscordSubscriptionState(session, normalizedTargetUserId);
+    return;
+  }
+
+  try {
+    if (typeof session.voxClient?.unsubscribeUserVideo === "function") {
+      session.voxClient.unsubscribeUserVideo(normalizedTargetUserId);
+    }
+  } catch (error) {
+    manager.store.logAction({
+      kind: "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: normalizedTargetUserId,
+      content: `native_discord_video_unsubscribe_failed: ${String((error as Error)?.message || error)}`,
+      metadata: {
+        sessionId: session.id,
+        targetUserId: normalizedTargetUserId,
+        reason: String(reason || "stream_watch_stop")
+      }
+    });
+  } finally {
+    clearNativeDiscordSubscriptionState(session, normalizedTargetUserId);
+  }
+}
+
+function subscribeNativeDiscordVideo(
+  manager: StreamWatchManager,
+  session,
+  settings,
+  targetUserId,
+  source
+) {
+  const normalizedTargetUserId = String(targetUserId || "").trim();
+  if (!session || !normalizedTargetUserId || typeof session.voxClient?.subscribeUserVideo !== "function") {
+    return;
+  }
+
+  const currentTargetUserId =
+    session.nativeScreenShare && typeof session.nativeScreenShare === "object"
+      ? String(session.nativeScreenShare.subscribedTargetUserId || "").trim() || null
+      : null;
+  if (currentTargetUserId && currentTargetUserId !== normalizedTargetUserId) {
+    unsubscribeNativeDiscordVideo(manager, session, currentTargetUserId, "stream_watch_retarget");
+  }
+
+  const subscription = resolveNativeDiscordVideoSubscriptionSettings(settings);
+  try {
+    session.voxClient.subscribeUserVideo({
+      userId: normalizedTargetUserId,
+      maxFramesPerSecond: subscription.maxFramesPerSecond,
+      preferredQuality: subscription.preferredQuality,
+      preferredPixelCount: subscription.preferredPixelCount,
+      preferredStreamType: subscription.preferredStreamType
+    });
+    if (session.nativeScreenShare && typeof session.nativeScreenShare === "object") {
+      session.nativeScreenShare.subscribedTargetUserId = normalizedTargetUserId;
+    }
+  } catch (error) {
+    manager.store.logAction({
+      kind: "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: normalizedTargetUserId,
+      content: `native_discord_video_subscribe_failed: ${String((error as Error)?.message || error)}`,
+      metadata: {
+        sessionId: session.id,
+        targetUserId: normalizedTargetUserId,
+        source: String(source || "screen_share_link")
+      }
+    });
+  }
+}
+
 function buildStreamWatchNotesText(session, maxEntries = 6) {
   return getStreamWatchBrainContextEntries(session, maxEntries)
     .slice(-Math.max(1, Number(maxEntries) || 6))
@@ -583,8 +695,8 @@ async function generateStreamWatchMemoryRecap(manager: StreamWatchManager, {
   if (!notesText && !durableNotes.length) return null;
   const speakerName = manager.resolveVoiceSpeakerName(session, session.streamWatch?.targetUserId) || "the streamer";
   const systemPrompt = [
-    `You are ${getPromptBotName(settings)} summarizing an ended screen share for memory.`,
-    "You will receive recent observations and key moments captured during one screen-share session.",
+    `You are ${getPromptBotName(settings)} summarizing an ended screen-watch session for memory.`,
+    "You will receive recent observations and key moments captured during one screen-watch session.",
     "Return strict JSON only.",
     "recap must be one concise grounded sentence, max 22 words.",
     "shouldStore should be true if the recap is useful future continuity for this conversation or likely relevant later.",
@@ -738,6 +850,9 @@ async function finalizeStreamWatchState(manager: StreamWatchManager, {
         reason
       })
     : null;
+  const previousTargetUserId = String(session.streamWatch?.targetUserId || "").trim() || null;
+
+  unsubscribeNativeDiscordVideo(manager, session, previousTargetUserId, reason);
 
   session.streamWatch.active = false;
   session.streamWatch.targetUserId = null;
@@ -821,6 +936,7 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
     requesterUserId: normalizedRequesterId,
     targetUserId: resolvedTarget
   });
+  subscribeNativeDiscordVideo(manager, session, resolvedSettings, resolvedTarget, source);
   manager.store.logAction({
     kind: "voice_runtime",
     guildId: session.guildId,

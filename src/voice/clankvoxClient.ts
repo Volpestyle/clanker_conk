@@ -21,6 +21,43 @@ type VoiceStateUpdatePayload = JsonRecord & {
   channel_id?: string | null;
   user_id?: string | null;
 };
+export type ClankvoxVideoResolution = {
+  width: number | null;
+  height: number | null;
+  type: string | null;
+};
+export type ClankvoxVideoStreamDescriptor = {
+  ssrc: number;
+  rtxSsrc: number | null;
+  rid: string | null;
+  quality: number | null;
+  streamType: string | null;
+  active: boolean | null;
+  maxBitrate: number | null;
+  maxFramerate: number | null;
+  maxResolution: ClankvoxVideoResolution | null;
+};
+export type ClankvoxUserVideoState = {
+  userId: string;
+  audioSsrc: number | null;
+  videoSsrc: number | null;
+  codec: string | null;
+  streams: ClankvoxVideoStreamDescriptor[];
+};
+export type ClankvoxUserVideoFrame = {
+  userId: string;
+  ssrc: number;
+  codec: string;
+  keyframe: boolean;
+  frameBase64: string;
+  rtpTimestamp: number;
+  streamType: string | null;
+  rid: string | null;
+};
+export type ClankvoxUserVideoEnd = {
+  userId: string;
+  ssrc: number | null;
+};
 type ClankvoxGuildLike = {
   shard?: {
     send(payload: JsonRecord): void;
@@ -67,6 +104,15 @@ type ClankvoxCommand =
       sampleRate: number;
     }
   | { type: "unsubscribe_user"; userId: string }
+  | {
+      type: "subscribe_user_video";
+      userId: string;
+      maxFramesPerSecond: number;
+      preferredQuality: number;
+      preferredPixelCount: number | null;
+      preferredStreamType: string | null;
+    }
+  | { type: "unsubscribe_user_video"; userId: string }
   | { type: "music_play"; url: string; resolvedDirectUrl: boolean }
   | { type: "music_stop" }
   | { type: "music_pause" }
@@ -96,6 +142,10 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 function asClankvoxIpcErrorCode(value: unknown): ClankvoxIpcErrorCode | null {
@@ -142,6 +192,70 @@ function estimatePcmBytesForDurationMs(durationMs: number, sampleRate: number): 
   if (normalizedDurationMs <= 0) return 0;
   const inputSamples = Math.max(1, Math.floor((normalizedRate * normalizedDurationMs) / 1000));
   return clampEvenPcmByteLength(inputSamples * 2);
+}
+
+function parseVideoResolution(value: unknown): ClankvoxVideoResolution | null {
+  if (!isRecord(value)) return null;
+  return {
+    width: asNumber(value.width),
+    height: asNumber(value.height),
+    type: asString(value.type)
+  };
+}
+
+function parseVideoStreamDescriptor(value: unknown): ClankvoxVideoStreamDescriptor | null {
+  if (!isRecord(value)) return null;
+  const ssrc = asNumber(value.ssrc);
+  if (ssrc === null) return null;
+  return {
+    ssrc,
+    rtxSsrc: asNumber(value.rtxSsrc),
+    rid: asString(value.rid),
+    quality: asNumber(value.quality),
+    streamType: asString(value.streamType),
+    active: asBoolean(value.active),
+    maxBitrate: asNumber(value.maxBitrate),
+    maxFramerate: asNumber(value.maxFramerate),
+    maxResolution: parseVideoResolution(value.maxResolution)
+  };
+}
+
+function parseUserVideoState(msg: JsonRecord): ClankvoxUserVideoState | null {
+  const userId = asString(msg.userId);
+  if (!userId) return null;
+  return {
+    userId,
+    audioSsrc: asNumber(msg.audioSsrc),
+    videoSsrc: asNumber(msg.videoSsrc),
+    codec: asString(msg.codec),
+    streams: Array.isArray(msg.streams)
+      ? msg.streams
+        .map((entry) => parseVideoStreamDescriptor(entry))
+        .filter((entry): entry is ClankvoxVideoStreamDescriptor => Boolean(entry))
+      : []
+  };
+}
+
+function parseUserVideoFrame(msg: JsonRecord): ClankvoxUserVideoFrame | null {
+  const userId = asString(msg.userId);
+  const ssrc = asNumber(msg.ssrc);
+  const codec = asString(msg.codec);
+  const frameBase64 = asString(msg.frameBase64);
+  const rtpTimestamp = asNumber(msg.rtpTimestamp);
+  const keyframe = asBoolean(msg.keyframe);
+  if (!userId || ssrc === null || !codec || !frameBase64 || rtpTimestamp === null || keyframe === null) {
+    return null;
+  }
+  return {
+    userId,
+    ssrc,
+    codec,
+    keyframe,
+    frameBase64,
+    rtpTimestamp,
+    streamType: asString(msg.streamType),
+    rid: asString(msg.rid)
+  };
 }
 
 export class ClankvoxClient extends EventEmitter {
@@ -508,6 +622,30 @@ export class ClankvoxClient extends EventEmitter {
         }
         break;
       }
+      case "user_video_state": {
+        const state = parseUserVideoState(msg);
+        if (state) {
+          this.emit("userVideoState", state);
+        }
+        break;
+      }
+      case "user_video_frame": {
+        const frame = parseUserVideoFrame(msg);
+        if (frame) {
+          this.emit("userVideoFrame", frame);
+        }
+        break;
+      }
+      case "user_video_end": {
+        const userId = asString(msg.userId);
+        if (userId) {
+          this.emit("userVideoEnd", {
+            userId,
+            ssrc: asNumber(msg.ssrc)
+          } satisfies ClankvoxUserVideoEnd);
+        }
+        break;
+      }
       case "client_disconnect": {
         const userId = asString(msg.userId);
         if (userId) {
@@ -833,6 +971,36 @@ export class ClankvoxClient extends EventEmitter {
 
   unsubscribeUser(userId: string) {
     this._send({ type: "unsubscribe_user", userId });
+  }
+
+  subscribeUserVideo({
+    userId,
+    maxFramesPerSecond = 2,
+    preferredQuality = 100,
+    preferredPixelCount = 1280 * 720,
+    preferredStreamType = "screen"
+  }: {
+    userId: string;
+    maxFramesPerSecond?: number;
+    preferredQuality?: number;
+    preferredPixelCount?: number | null;
+    preferredStreamType?: string | null;
+  }) {
+    this._send({
+      type: "subscribe_user_video",
+      userId,
+      maxFramesPerSecond: Math.max(1, Math.floor(Number(maxFramesPerSecond) || 2)),
+      preferredQuality: Math.max(0, Math.min(100, Math.floor(Number(preferredQuality) || 100))),
+      preferredPixelCount:
+        preferredPixelCount === null || preferredPixelCount === undefined
+          ? null
+          : Math.max(1, Math.floor(Number(preferredPixelCount) || 0)),
+      preferredStreamType: String(preferredStreamType || "").trim() || null
+    });
+  }
+
+  unsubscribeUserVideo(userId: string) {
+    this._send({ type: "unsubscribe_user_video", userId });
   }
 
   musicPlay(url: string, resolvedDirectUrl = false) {

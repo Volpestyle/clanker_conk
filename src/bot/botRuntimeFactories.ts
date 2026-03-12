@@ -57,9 +57,9 @@ import {
   shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission
 } from "./replyAdmission.ts";
 import {
-  getVoiceScreenShareCapability as getVoiceScreenShareCapabilityForScreenShare,
-  maybeHandleScreenShareOfferIntent as maybeHandleScreenShareOfferIntentForScreenShare,
-  offerVoiceScreenShareLink as offerVoiceScreenShareLinkForScreenShare,
+  getVoiceScreenWatchCapability as getVoiceScreenWatchCapabilityForScreenShare,
+  maybeHandleScreenWatchIntent as maybeHandleScreenWatchIntentForScreenShare,
+  startVoiceScreenWatch as startVoiceScreenWatchForScreenShare,
 } from "./screenShare.ts";
 import type { ScreenShareRuntime } from "./screenShare.ts";
 import type { VoiceCoordinationRuntime } from "./voiceCoordination.ts";
@@ -141,6 +141,7 @@ export function buildMediaAttachmentContext(bot: ClankerBot): MediaAttachmentCon
 export function buildScreenShareRuntime(bot: ClankerBot): ScreenShareRuntime {
   return {
     ...createBotContext(bot),
+    voiceSessionManager: bot.voiceSessionManager,
     screenShareSessionManager: bot.screenShareSessionManager,
     composeVoiceOperationalMessage: (payload) =>
       composeVoiceOperationalMessageForVoiceCoordination(buildVoiceCoordinationRuntime(bot), {
@@ -480,8 +481,8 @@ export function buildReplyPipelineRuntime(
         settings: payload.settings || null,
         trace: payload.trace || null
       }),
-    getVoiceScreenShareCapability: (payload) =>
-      getVoiceScreenShareCapabilityForScreenShare(buildScreenShareRuntime(bot), payload),
+    getVoiceScreenWatchCapability: (payload) =>
+      getVoiceScreenWatchCapabilityForScreenShare(buildScreenShareRuntime(bot), payload),
     getEmojiHints: (guild) => bot.getEmojiHints(guild),
     runModelRequestedBrowserBrowse: (payload) =>
       runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
@@ -497,8 +498,8 @@ export function buildReplyPipelineRuntime(
       bot.maybeHandleStructuredAutomationIntent(payload),
     maybeApplyReplyReaction: (payload) => bot.maybeApplyReplyReaction(payload),
     logSkippedReply: (payload) => bot.logSkippedReply(payload),
-    maybeHandleScreenShareOfferIntent: (payload) =>
-      maybeHandleScreenShareOfferIntentForScreenShare(buildScreenShareRuntime(bot), {
+    maybeHandleScreenWatchIntent: (payload) =>
+      maybeHandleScreenWatchIntentForScreenShare(buildScreenShareRuntime(bot), {
         ...payload,
         settings: bot.store.getSettings()
       }),
@@ -537,10 +538,10 @@ export function buildVoiceReplyRuntime(bot: ClankerBot): VoiceReplyRuntime {
       buildWebSearchContextForBudgetTracking(budgetContext, settings, messageText),
     loadRecentConversationHistory: (payload) =>
       getConversationHistoryForPromptForMessageHistory(botContext, payload),
-    getVoiceScreenShareCapability: (payload) =>
-      getVoiceScreenShareCapabilityForScreenShare(buildScreenShareRuntime(bot), payload),
-    offerVoiceScreenShareLink: (payload) =>
-      offerVoiceScreenShareLinkForScreenShare(buildScreenShareRuntime(bot), payload),
+    getVoiceScreenWatchCapability: (payload) =>
+      getVoiceScreenWatchCapabilityForScreenShare(buildScreenShareRuntime(bot), payload),
+    startVoiceScreenWatch: (payload) =>
+      startVoiceScreenWatchForScreenShare(buildScreenShareRuntime(bot), payload),
     runModelRequestedBrowserBrowse: (payload) =>
       runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
     buildBrowserBrowseContext: (settings) =>

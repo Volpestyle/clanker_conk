@@ -402,31 +402,19 @@ test("queueRealtimeTurn replays a same-utterance late revision after aborting th
   );
 });
 
-test("runRealtimeTurn resolves pending music disambiguation before reply planning when playback is idle", async () => {
-  const requestPlayCalls: Array<Record<string, unknown>> = [];
+test("runRealtimeTurn routes pending music disambiguation through main reply planning when playback is idle", async () => {
+  const decisions: Array<Record<string, unknown>> = [];
+  const brainPayloads: Array<Record<string, unknown>> = [];
   const manager = createVoiceTestManager();
-  manager.llm = {
-    ...manager.llm,
-    generate: async () => ({
-      text: JSON.stringify({
-        selection_id: "youtube:track-2"
-      }),
-      provider: "anthropic",
-      model: "claude-3-5-haiku-latest"
-    })
+  const evaluateVoiceReplyDecision = manager.evaluateVoiceReplyDecision.bind(manager);
+  manager.evaluateVoiceReplyDecision = async (args) => {
+    const decision = await evaluateVoiceReplyDecision(args);
+    decisions.push(decision as Record<string, unknown>);
+    return decision;
   };
-  manager.requestPlayMusic = async (args) => {
-    requestPlayCalls.push(args);
-    return { ok: true };
-  };
-  manager.evaluateVoiceReplyDecision = async () => {
-    throw new Error("pending music disambiguation should bypass reply decision");
-  };
-  manager.runRealtimeBrainReply = async () => {
-    throw new Error("pending music disambiguation should bypass brain reply");
-  };
-  manager.forwardRealtimeTextTurnToBrain = async () => {
-    throw new Error("pending music disambiguation should bypass transcript bridge forwarding");
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainPayloads.push(payload as Record<string, unknown>);
+    return true;
   };
 
   const settings = createVoiceTestSettings();
@@ -443,7 +431,7 @@ test("runRealtimeTurn resolves pending music disambiguation before reply plannin
     session,
     userId: "speaker-1",
     domain: "music",
-    intent: "tool_followup"
+    intent: "music_disambiguation"
   });
   manager.setMusicDisambiguationState({
     session,
@@ -460,37 +448,31 @@ test("runRealtimeTurn resolves pending music disambiguation before reply plannin
     captureReason: "stream_end"
   });
 
-  assert.equal(requestPlayCalls.length, 1);
-  assert.equal(requestPlayCalls[0]?.requestedByUserId, "speaker-1");
-  assert.equal(requestPlayCalls[0]?.query, "minecraft music");
-  assert.equal(requestPlayCalls[0]?.trackId, "youtube:track-2");
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0]?.reason, "pending_command_followup");
+  assert.equal(brainPayloads.length, 1);
+  assert.equal(brainPayloads[0]?.transcript, "the cliff side water fall one");
 });
 
-test("runFileAsrTurn resolves pending music disambiguation before reply planning when playback is idle", async () => {
-  const requestPlayCalls: Array<Record<string, unknown>> = [];
+test("runFileAsrTurn routes pending music disambiguation through main reply planning when playback is idle", async () => {
+  const decisions: Array<Record<string, unknown>> = [];
+  const brainPayloads: Array<Record<string, unknown>> = [];
   const manager = createVoiceTestManager();
   manager.llm = {
     ...manager.llm,
-    transcribeAudio: async () => ({ text: "unused" }),
-    generate: async () => ({
-      text: JSON.stringify({
-        selection_id: "youtube:track-2"
-      }),
-      provider: "anthropic",
-      model: "claude-3-5-haiku-latest"
-    })
+    transcribeAudio: async () => ({ text: "unused" })
+  };
+  const evaluateVoiceReplyDecision = manager.evaluateVoiceReplyDecision.bind(manager);
+  manager.evaluateVoiceReplyDecision = async (args) => {
+    const decision = await evaluateVoiceReplyDecision(args);
+    decisions.push(decision as Record<string, unknown>);
+    return decision;
+  };
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainPayloads.push(payload as Record<string, unknown>);
+    return true;
   };
   manager.transcribePcmTurn = async () => "the cliff side water fall one";
-  manager.requestPlayMusic = async (args) => {
-    requestPlayCalls.push(args);
-    return { ok: true };
-  };
-  manager.evaluateVoiceReplyDecision = async () => {
-    throw new Error("pending music disambiguation should bypass reply decision");
-  };
-  manager.runRealtimeBrainReply = async () => {
-    throw new Error("pending music disambiguation should bypass brain reply");
-  };
 
   const settings = createVoiceTestSettings();
   const session = {
@@ -506,7 +488,7 @@ test("runFileAsrTurn resolves pending music disambiguation before reply planning
     session,
     userId: "speaker-1",
     domain: "music",
-    intent: "tool_followup"
+    intent: "music_disambiguation"
   });
   manager.setMusicDisambiguationState({
     session,
@@ -523,10 +505,10 @@ test("runFileAsrTurn resolves pending music disambiguation before reply planning
     captureReason: "stream_end"
   });
 
-  assert.equal(requestPlayCalls.length, 1);
-  assert.equal(requestPlayCalls[0]?.requestedByUserId, "speaker-1");
-  assert.equal(requestPlayCalls[0]?.query, "minecraft music");
-  assert.equal(requestPlayCalls[0]?.trackId, "youtube:track-2");
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0]?.reason, "pending_command_followup");
+  assert.equal(brainPayloads.length, 1);
+  assert.equal(brainPayloads[0]?.transcript, "the cliff side water fall one");
 });
 
 test("forwardRealtimeTextTurnToBrain waits for turn-context refresh before sending the utterance", async () => {

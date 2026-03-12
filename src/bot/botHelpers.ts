@@ -40,7 +40,7 @@ export function resolveMaxMediaPromptLen(settings) {
 const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gif"]);
 const INITIATIVE_MEDIA_TYPES = new Set(["none", "image", "video", "gif"]);
 const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
-const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["offer_link", "none"]);
+const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["start_watch", "none"]);
 const MAX_SCREEN_SHARE_REASON_LEN = 180;
 export const MAX_VIDEO_TARGET_SCAN = 8;
 export const MAX_VIDEO_FALLBACK_MESSAGES = 18;
@@ -136,11 +136,11 @@ export const REPLY_OUTPUT_SCHEMA = {
         "targetChannelId"
       ]
     },
-    screenShareIntent: {
+    screenWatchIntent: {
       type: "object",
       additionalProperties: false,
       properties: {
-        action: { type: "string", enum: ["offer_link", "none"] },
+        action: { type: "string", enum: ["start_watch", "none"] },
         confidence: { type: "number" },
         reason: { type: ["string", "null"] }
       },
@@ -155,7 +155,7 @@ export const REPLY_OUTPUT_SCHEMA = {
     "reactionEmoji",
     "media",
     "automationAction",
-    "screenShareIntent",
+    "screenWatchIntent",
     "screenNote",
     "screenMoment"
   ]
@@ -618,7 +618,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
         reactionEmoji: null,
         automationAction: emptyStructuredAutomationAction(),
 
-        screenShareIntent: emptyStructuredScreenShareIntent(),
+        screenWatchIntent: emptyStructuredScreenShareIntent(),
         parseState: "recovered_json" as ParseState
       };
     }
@@ -632,7 +632,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       mediaDirective: null,
       reactionEmoji: null,
       automationAction: emptyStructuredAutomationAction(),
-      screenShareIntent: emptyStructuredScreenShareIntent(),
+      screenWatchIntent: emptyStructuredScreenShareIntent(),
       parseState: "unstructured" as ParseState
     };
   }
@@ -643,7 +643,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const reactionEmoji = normalizeDirectiveText(parsed?.reactionEmoji, 64) || null;
   const automationAction = normalizeStructuredAutomationAction(parsed?.automationAction);
   const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
-  const screenShareIntent = normalizeStructuredScreenShareIntent(parsed?.screenShareIntent);
+  const screenWatchIntent = normalizeStructuredScreenShareIntent(parsed?.screenWatchIntent);
 
   return {
     text: text || "",
@@ -654,7 +654,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     mediaDirective,
     reactionEmoji,
     automationAction,
-    screenShareIntent,
+    screenWatchIntent,
     parseState: "json" as ParseState
   };
 }

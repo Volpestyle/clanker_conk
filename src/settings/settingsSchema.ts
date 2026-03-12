@@ -168,7 +168,8 @@ export const DEFAULT_SETTINGS = {
       "plinker",
       "plinky",
       "planky",
-      "plonka"
+      "plonka",
+      "quaker"
     ]
   },
   persona: {
@@ -200,7 +201,7 @@ export const DEFAULT_SETTINGS = {
         "Let the moment decide the length. Sometimes one quick line is enough, and sometimes longer is natural.",
         "Do not keep talking just to fill dead air or prove engagement.",
         "Ask questions only when you're genuinely curious or when they clearly help the moment.",
-        "Give exciting, humorous and silly  reactions to screen shares when it feels right."
+        "Give exciting, humorous and silly reactions to screen watches when it feels right."
       ],
       operationalGuidance: [
         "Keep it clear and simple. No overexplaining.",
@@ -551,6 +552,10 @@ export const DEFAULT_SETTINGS = {
       brainContextModel: "claude-opus-4-6",
       brainContextPrompt:
         "Write one short factual private note about the most salient visible state or change in this frame. Prioritize gameplay actions, objectives, outcomes, menus, or unusual/funny moments that could support a natural later comment. If the frame is mostly idle UI, lobby, desktop, or other non-gameplay context, say that plainly. Prefer what is newly different from the previous frame.",
+      nativeDiscordMaxFramesPerSecond: 2,
+      nativeDiscordPreferredQuality: 100,
+      nativeDiscordPreferredPixelCount: 1280 * 720,
+      nativeDiscordPreferredStreamType: "screen",
       sharePageMaxWidthPx: 960,
       sharePageJpegQuality: 0.6
     },

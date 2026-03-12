@@ -233,6 +233,10 @@ export interface MusicPlaybackHost {
     transcript?: string;
     settings?: MusicPlaybackSettings;
   }) => boolean;
+  hasPendingMusicDisambiguationForUser?: (
+    session: MusicRuntimeSessionLike,
+    userId?: string | null
+  ) => boolean;
   isMusicDisambiguationResolutionTurn: (
     session: MusicRuntimeSessionLike,
     userId?: string | null,
@@ -867,6 +871,7 @@ async function executeCompactVoiceMusicControlCommand(
     userId,
     transcript,
     command,
+    currentPhase,
     source
   }: {
     session: VoiceSession;
@@ -874,6 +879,7 @@ async function executeCompactVoiceMusicControlCommand(
     userId: string | null;
     transcript: string;
     command: VoiceMusicControlCommand;
+    currentPhase: MusicPlaybackPhase;
     source: string;
   }
 ) {
@@ -2540,6 +2546,18 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     wakeFollowupState.passiveWakeFollowupAllowed ||
     Boolean(musicWakeFollowupEligibleAtCapture);
   const interruptedReplyOwnerFollowup = hasRecentInterruptedReplyFollowup(session, normalizedUserId);
+  const pendingMusicDisambiguation =
+    getMusicDisambiguationPromptContext(manager, session);
+  const pendingMusicDisambiguationFollowup =
+    Boolean(normalizedUserId) &&
+    (
+      manager.hasPendingMusicDisambiguationForUser?.(session, normalizedUserId) ??
+      Boolean(
+        pendingMusicDisambiguation?.active &&
+        String(pendingMusicDisambiguation.requestedByUserId || "").trim() ===
+        normalizedUserId
+      )
+    );
   const musicWakeLatched =
     currentWakeLatched ||
     Boolean(musicWakeFollowupEligibleAtCapture);
@@ -2547,24 +2565,13 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     directAddressedToBot ||
     nameCueDetected ||
     passiveWakeFollowupAllowed ||
-    interruptedReplyOwnerFollowup;
+    interruptedReplyOwnerFollowup ||
+    pendingMusicDisambiguationFollowup;
   const disambiguationResolutionTurn = manager.isMusicDisambiguationResolutionTurn(
     session,
     userId,
     normalizedTranscript
   );
-  const handledPendingDisambiguation = await manager.maybeHandlePendingMusicDisambiguationTurn({
-    session,
-    settings: resolvedSettings,
-    userId,
-    transcript: normalizedTranscript,
-    source: `voice_${String(source || "voice_turn")}`,
-    channelId: session.textChannelId || null,
-    mustNotify: false
-  });
-  if (handledPendingDisambiguation) {
-    return true;
-  }
   const musicBrainEnabled = isVoiceMusicBrainEnabled(resolvedSettings);
   const compactControlCommand =
     musicBrainEnabled && !directAddressedToBot && !nameCueDetected
@@ -2580,13 +2587,13 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
   const shouldConsultMusicBrain =
     musicBrainEnabled &&
     !compactControlCommand &&
-    (disambiguationResolutionTurn || controlCommandCandidate);
+    controlCommandCandidate;
   const gateDecisionReason = directAddressedToBot
     ? "direct_address"
     : nameCueDetected
       ? "name_cue"
-    : disambiguationResolutionTurn
-      ? "disambiguation"
+    : pendingMusicDisambiguationFollowup
+      ? "pending_command_followup"
       : compactControlCommand
         ? `fast_path_${compactControlCommand}`
       : controlCommandCandidate
@@ -2632,11 +2639,12 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
       userId: normalizedUserId,
       transcript: normalizedTranscript,
       command: compactControlCommand,
+      currentPhase,
       source: `voice_fast_path:${String(source || "voice_turn")}`
     });
   }
 
-  if (mainBrainEligible && !disambiguationResolutionTurn && !controlCommandCandidate) {
+  if (mainBrainEligible && !controlCommandCandidate) {
     clearPendingMusicReplyHandoff(manager, session);
     logMusicAction(manager, {
       kind: "voice_runtime",
@@ -2658,6 +2666,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
         pausedWakeWordOwnerFollowup,
         directAddressedToBot,
         nameCueDetected,
+        pendingMusicDisambiguationFollowup,
         disambiguationResolutionTurn,
         gateDecisionReason,
         musicBrainEnabled,
@@ -2667,7 +2676,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     return false;
   }
 
-  if (!musicBrainEnabled && (disambiguationResolutionTurn || controlCommandCandidate)) {
+  if (!musicBrainEnabled && controlCommandCandidate) {
     clearPendingMusicReplyHandoff(manager, session);
     logMusicAction(manager, {
       kind: "voice_runtime",
@@ -2689,6 +2698,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
         pausedWakeWordOwnerFollowup,
         directAddressedToBot,
         nameCueDetected,
+        pendingMusicDisambiguationFollowup,
         disambiguationResolutionTurn,
         gateDecisionReason,
         musicBrainEnabled: false,
@@ -2720,6 +2730,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
         pausedWakeWordOwnerFollowup,
         directAddressedToBot,
         nameCueDetected,
+        pendingMusicDisambiguationFollowup,
         disambiguationResolutionTurn,
         gateDecisionReason,
         decisionReason: gateDecisionReason
@@ -2765,6 +2776,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
       pausedWakeWordOwnerFollowup,
       directAddressedToBot,
       nameCueDetected,
+      pendingMusicDisambiguationFollowup,
       disambiguationResolutionTurn,
       gateDecisionReason,
       musicBrainDecision: resolvedBrainDecision,

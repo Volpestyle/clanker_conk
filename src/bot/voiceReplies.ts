@@ -679,7 +679,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     typeof runtime.runModelRequestedBrowserBrowse === "function" &&
     typeof runtime.buildBrowserBrowseContext === "function"
   );
-  const screenShare = resolveVoiceScreenShareCapability(runtime, {
+  const screenShare = resolveVoiceScreenWatchCapability(runtime, {
     settings,
     guildId,
     channelId,
@@ -687,10 +687,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   });
   const allowScreenShareToolCall = Boolean(
     screenShare.available &&
-    typeof runtime.offerVoiceScreenShareLink === "function" &&
+    typeof runtime.startVoiceScreenWatch === "function" &&
     guildId &&
-    channelId &&
-    userId
+    userId &&
+    (screenShare.nativeAvailable || channelId)
   );
   const activeVoiceSession =
     sessionId && typeof runtime.voiceSessionManager?.getSessionById === "function"
@@ -1166,24 +1166,27 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           })
       },
       screenShare:
-        typeof runtime.offerVoiceScreenShareLink === "function"
+        typeof runtime.startVoiceScreenWatch === "function"
           ? {
-              offerLink: async ({
+              startWatch: async ({
                 settings: toolSettings,
                 guildId,
                 channelId,
                 requesterUserId,
+                target,
                 transcript,
                 source,
                 signal: toolSignal
               }) =>
-                await runtime.offerVoiceScreenShareLink({
+                await runtime.startVoiceScreenWatch({
                   settings: toolSettings,
                   guildId,
                   channelId,
                   requesterUserId,
+                  target,
                   transcript,
-                  source
+                  source,
+                  signal: toolSignal
                 })
             }
           : undefined,
@@ -1545,9 +1548,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           const moment = String(toolPayload?.moment || "").replace(/\s+/g, " ").trim().slice(0, 220);
           screenMoment = moment || screenMoment;
         }
-        if (toolCall.name === "offer_screen_share_link" && !result.isError) {
+        if (toolCall.name === "start_screen_watch" && !result.isError) {
           const toolPayload = parseReplyToolResultPayload(result.content);
-          usedScreenShareOffer = usedScreenShareOffer || Boolean(toolPayload?.offered);
+          usedScreenShareOffer = usedScreenShareOffer || Boolean(toolPayload?.started);
         }
         if (toolCall.name === "leave_voice_channel" && !result.isError) {
           const toolPayload = parseReplyToolResultPayload(result.content);
@@ -1816,19 +1819,19 @@ function classifyVoiceToolPrePlaybackRecovery(
   }
 }
 
-function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channelId, userId }) {
-  if (typeof runtime?.getVoiceScreenShareCapability !== "function") {
+function resolveVoiceScreenWatchCapability(runtime, { settings, guildId, channelId, userId }) {
+  if (typeof runtime?.getVoiceScreenWatchCapability !== "function") {
     return {
       supported: false,
       enabled: false,
       available: false,
       status: "disabled",
       publicUrl: "",
-      reason: "screen_share_capability_unavailable"
+      reason: "screen_watch_capability_unavailable"
     };
   }
 
-  const capability = runtime.getVoiceScreenShareCapability({
+  const capability = runtime.getVoiceScreenWatchCapability({
     settings,
     guildId,
     channelId,
@@ -1840,7 +1843,7 @@ function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channel
   const rawReason = String(capability?.reason || "").trim().toLowerCase();
   const supported =
     capability?.supported === undefined
-      ? rawReason !== "screen_share_manager_unavailable"
+      ? rawReason !== "screen_watch_unavailable"
       : Boolean(capability.supported);
   return {
     supported,
@@ -1848,6 +1851,8 @@ function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channel
     available,
     status,
     publicUrl: String(capability?.publicUrl || "").trim(),
-    reason: available ? null : rawReason || status || "unavailable"
+    reason: available ? null : rawReason || status || "unavailable",
+    nativeAvailable: Boolean(capability?.nativeAvailable),
+    linkFallbackAvailable: Boolean(capability?.linkFallbackAvailable)
   };
 }

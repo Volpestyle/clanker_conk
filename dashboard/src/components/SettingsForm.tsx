@@ -91,7 +91,7 @@ const SEARCH_INDEX: SearchEntry[] = [
   { label: "Voice Reply Policy", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "admission gate classifier reply decision eagerness command only interrupts music brain" },
   { label: "Voice Output", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "generation tts temperature tokens voice output brain" },
   { label: "Voice Limits", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "session minutes inactivity max sessions concurrent" },
-  { label: "Screen Share", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "screen share stream watch frames vision" },
+  { label: "Screen Watch", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "screen watch screen share stream watch frames vision native discord" },
   { label: "Soundboard", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "soundboard sounds external" },
   { label: "Research & Browsing", scrollTo: "sec-research", navSection: "sec-research", keywords: "web search scrape browse browser tools" },
   { label: "Vision", scrollTo: "sec-vision", navSection: "sec-media", keywords: "vision caption image" },

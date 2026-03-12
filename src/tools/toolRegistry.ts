@@ -5,7 +5,7 @@ import {
   IMAGE_LOOKUP_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
-  OFFER_SCREEN_SHARE_LINK_SCHEMA,
+  START_SCREEN_WATCH_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,
   VOICE_TOOL_SCHEMAS,
   WEB_SCRAPE_SCHEMA,
@@ -69,7 +69,7 @@ const TOOL_SCHEMA_BY_NAME = new Map(
     CONVERSATION_SEARCH_SCHEMA,
     IMAGE_LOOKUP_SCHEMA,
     CODE_TASK_SCHEMA,
-    OFFER_SCREEN_SHARE_LINK_SCHEMA,
+    START_SCREEN_WATCH_SCHEMA,
     PLAY_SOUNDBOARD_SCHEMA,
     ...VOICE_TOOL_SCHEMAS
   ].map((schema) => [schema.name, schema] as const)
@@ -136,7 +136,7 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.imageLookupAvailable)
   },
   {
-    name: "offer_screen_share_link",
+    name: "start_screen_watch",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.screenShareAvailable),
     isVoiceRealtimeAvailable: ({ capabilities }) => capabilities.screenShareAvailable

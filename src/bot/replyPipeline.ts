@@ -205,7 +205,7 @@ type ReplyDirective = ReturnType<typeof parseStructuredReplyOutput>;
 type ReplyMediaDirective = ReturnType<typeof pickReplyMediaDirective>;
 type ReplyMentionResolution = Awaited<ReturnType<typeof resolveDeterministicMentionsForMentions>>;
 type ReplyReactionResult = Awaited<ReturnType<ReplyPipelineRuntime["maybeApplyReplyReaction"]>>;
-type ReplyScreenShareOffer = Awaited<ReturnType<ReplyPipelineRuntime["maybeHandleScreenShareOfferIntent"]>>;
+type ReplyScreenShareOffer = Awaited<ReturnType<ReplyPipelineRuntime["maybeHandleScreenWatchIntent"]>>;
 type ReplyWebSearchState = ReturnType<ReplyPipelineRuntime["buildWebSearchContext"]> & {
   summaryText?: string | null;
 };
@@ -245,7 +245,7 @@ type ReplyPipelineContext = {
   modelImageInputs: ReplyImageInput[];
   imageLookup: ReturnType<ReplyPipelineRuntime["buildImageLookupContext"]>;
   replyTrace: ReplyTrace;
-  screenShareCapability: ReturnType<ReplyPipelineRuntime["getVoiceScreenShareCapability"]>;
+  screenShareCapability: ReturnType<ReplyPipelineRuntime["getVoiceScreenWatchCapability"]>;
   activeVoiceSession: ReturnType<ReplyPipelineRuntime["voiceSessionManager"]["getSession"]> | null;
   inVoiceChannelNow: boolean;
   activeVoiceParticipantRoster: string[];
@@ -741,7 +741,7 @@ async function buildReplyContext(
     reason: null,
     messageId: message.id
   };
-  const screenShareCapability = bot.getVoiceScreenShareCapability({
+  const screenShareCapability = bot.getVoiceScreenWatchCapability({
     settings,
     guildId: message.guildId,
     channelId: message.channelId,
@@ -1325,7 +1325,7 @@ async function dispatchReplyActions(
   let finalText = sanitizeBotText(replyDirective.text || "");
   let mentionResolution = emptyMentionResolution();
   finalText = normalizeSkipSentinel(finalText);
-  const screenShareOffer = await bot.maybeHandleScreenShareOfferIntent({
+  const screenShareOffer = await bot.maybeHandleScreenWatchIntent({
     message,
     replyDirective,
     source

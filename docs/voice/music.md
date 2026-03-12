@@ -120,7 +120,7 @@ Deterministic layer responsibilities:
 - enforce the simple open/closed wake latch while music is back to `playing`
 - keep acoustic safety and barge-in safety separate from conversational decisions
 
-When `agentStack.runtimeConfig.voice.musicBrain.mode` is `dedicated_model`, only compact music-control/disambiguation turns go to a small music brain first. That model sees:
+When `agentStack.runtimeConfig.voice.musicBrain.mode` is `dedicated_model`, only compact music-control turns go to a small music brain first. That model sees:
 
 - the heard transcript
 - a tiny slice of recent spoken context: the last assistant reply and the previous turn from the same speaker when available
@@ -136,6 +136,7 @@ The dedicated music brain then returns one of two outcomes:
 - `pass`: this was not really a music-side command; let the main reply path decide whether to answer
 
 The dedicated music brain does not choose `pause` or `duck` handoffs anymore. Those are main-brain floor-control decisions.
+Pending music-choice followups also stay out of the dedicated music brain. The ordinary reply brain sees the active option list in prompt context and decides the follow-up tool call itself.
 
 The dedicated model binding lives under `agentStack.runtimeConfig.voice.musicBrain`. It stays separate from the reply admission/classifier model and still applies when reply admission is set to `generation_decides`. Presets still expose a small fallback model when this mode is turned on, but the default runtime mode is `disabled`, so the main reply brain owns music handoff unless the user explicitly enables the dedicated music brain.
 
@@ -201,11 +202,13 @@ During active music:
 - a recent same-speaker follow-up immediately after a successful barge-in also stays eligible even if no wake latch is open; both the music prefilter and the final reply admission layer honor that follow-up so interrupted speech is not reclassified as background chatter
 - fresh wake-word/direct-address turns go straight to the main reply brain
 - exact compact control words like `pause`, `stop`, `skip`, and `resume` use an immediate fast path when the dedicated music brain is enabled
-- fuzzy control/disambiguation turns use the dedicated music brain only to decide whether they should be consumed as music-side commands
-- with the dedicated music brain disabled, even those control/disambiguation turns go straight to the main reply brain
+- fuzzy control turns use the dedicated music brain only to decide whether they should be consumed as music-side commands
+- pending music disambiguation followups always go straight to the main reply brain for ordinary reply planning, even if music is still active
+- with the dedicated music brain disabled, even those control turns go straight to the main reply brain
 - once music-mode handling returns `pass`, or when the dedicated music brain is disabled, the turn continues through the normal reply admission/reply-generation path
-- pending music disambiguation followups resolve against the active option set before ordinary reply planning, even if playback has not started yet and music is still effectively idle
-- pending music disambiguation first uses cheap exact/ordinal/title matching, then may use a bounded model resolver over the active option list for fuzzy or ASR-noisy references; it never invents a new option id or starts a fresh search from that followup alone
+- the main reply brain sees the active pending query and option list during ordinary reply planning, even if playback has not started yet and music is still effectively idle
+- requester-only cancellation of an active music choice prompt still clears that pending state locally for commands like `never mind`
+- explicit text-side disambiguation fallback still uses cheap exact/ordinal/title matching, then may use a bounded resolver over the active option list; it never invents a new option id or starts a fresh search from that followup alone
 - `music_play` treats `selection_id` as advisory when a query is also present; if the selection id is stale or malformed, the tool logs the bad id and falls back to query search instead of failing the whole play request
 - `music_queue_next` and `music_queue_add` can resolve ordinary queue requests directly from query text, or reuse an exact `selection_id`/track id when one is already known
 - for "play X, then queue Y" turns, the intended tool order is `music_play` first and `music_queue_next` second in the same tool turn; this avoids stranding the queue intent behind async playback startup

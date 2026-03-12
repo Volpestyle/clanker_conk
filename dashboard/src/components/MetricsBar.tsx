@@ -56,7 +56,7 @@ export default function MetricsBar({ stats }) {
     extraTiles.push({ label: "Public HTTPS", value: publicHttpsValue });
   }
   if (screenShareActive > 0) {
-    extraTiles.push({ label: "Screen Shares", value: String(screenShareActive) });
+    extraTiles.push({ label: "Screen Watch", value: String(screenShareActive) });
   }
 
   return (

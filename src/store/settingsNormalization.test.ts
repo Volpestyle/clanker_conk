@@ -171,7 +171,11 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
         brainContextEnabled: "yes",
         brainContextMinIntervalSeconds: -4,
         brainContextMaxEntries: 999,
-        brainContextPrompt: `${"x".repeat(520)}   `
+        brainContextPrompt: `${"x".repeat(520)}   `,
+        nativeDiscordMaxFramesPerSecond: 999,
+        nativeDiscordPreferredQuality: -20,
+        nativeDiscordPreferredPixelCount: 99999999,
+        nativeDiscordPreferredStreamType: "   CAMERA_FEED_WITH_EXTRA_TEXT   "
       },
       soundboard: {
         eagerness: 999,
@@ -304,6 +308,13 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
   assert.equal(normalized.voice.streamWatch.brainContextMinIntervalSeconds, 1);
   assert.equal(normalized.voice.streamWatch.brainContextMaxEntries, 24);
   assert.equal(normalized.voice.streamWatch.brainContextPrompt.length, 420);
+  assert.equal(normalized.voice.streamWatch.nativeDiscordMaxFramesPerSecond, 10);
+  assert.equal(normalized.voice.streamWatch.nativeDiscordPreferredQuality, 0);
+  assert.equal(normalized.voice.streamWatch.nativeDiscordPreferredPixelCount, 3840 * 2160);
+  assert.equal(
+    normalized.voice.streamWatch.nativeDiscordPreferredStreamType,
+    "CAMERA_FEED_WITH_EXTRA_TEXT"
+  );
   assert.equal(normalized.interaction.activity.ambientReplyEagerness, 100);
   assert.equal(normalized.interaction.activity.responseWindowEagerness, 100);
   assert.equal(normalized.interaction.activity.reactivity, 100);

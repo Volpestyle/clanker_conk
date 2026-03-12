@@ -219,6 +219,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import { providerSupports } from "./voiceModes.ts";
 import { executeRealtimeFunctionCall } from "./voiceToolCallInfra.ts";
+import { hasNativeDiscordVideoDecoderSupport as hasNativeDiscordVideoDecoderSupportRuntime } from "./nativeDiscordVideoDecoder.ts";
 import {
   executeVoiceMusicPlayTool,
   executeVoiceMusicQueueAddTool,
@@ -579,8 +580,8 @@ export class VoiceSessionManager {
   activeReplies;
   composeOperationalMessage;
   generateVoiceTurn;
-  getVoiceScreenShareCapabilityHook;
-  offerVoiceScreenShareLinkHook;
+  getVoiceScreenWatchCapabilityHook;
+  startVoiceScreenWatchHook;
   sessions;
   pendingSessionGuildIds;
   joinLocks;
@@ -610,8 +611,8 @@ export class VoiceSessionManager {
     activeReplies = null,
     composeOperationalMessage = null,
     generateVoiceTurn = null,
-    getVoiceScreenShareCapability = null,
-    offerVoiceScreenShareLink = null
+    getVoiceScreenWatchCapability = null,
+    startVoiceScreenWatch = null
   }) {
     this.client = client;
     this.store = store;
@@ -624,10 +625,10 @@ export class VoiceSessionManager {
     this.composeOperationalMessage =
       typeof composeOperationalMessage === "function" ? composeOperationalMessage : null;
     this.generateVoiceTurn = typeof generateVoiceTurn === "function" ? generateVoiceTurn : null;
-    this.getVoiceScreenShareCapabilityHook =
-      typeof getVoiceScreenShareCapability === "function" ? getVoiceScreenShareCapability : null;
-    this.offerVoiceScreenShareLinkHook =
-      typeof offerVoiceScreenShareLink === "function" ? offerVoiceScreenShareLink : null;
+    this.getVoiceScreenWatchCapabilityHook =
+      typeof getVoiceScreenWatchCapability === "function" ? getVoiceScreenWatchCapability : null;
+    this.startVoiceScreenWatchHook =
+      typeof startVoiceScreenWatch === "function" ? startVoiceScreenWatch : null;
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
@@ -755,15 +756,15 @@ export class VoiceSessionManager {
     };
   }
 
-  getVoiceScreenShareCapability({
+  getVoiceScreenWatchCapability({
     settings = null,
     guildId = null,
     channelId = null,
     requesterUserId = null
   } = {}) {
-    if (typeof this.getVoiceScreenShareCapabilityHook === "function") {
+    if (typeof this.getVoiceScreenWatchCapabilityHook === "function") {
       return (
-        this.getVoiceScreenShareCapabilityHook({
+        this.getVoiceScreenWatchCapabilityHook({
           settings,
           guildId,
           channelId,
@@ -774,7 +775,7 @@ export class VoiceSessionManager {
           available: false,
           status: "disabled",
           publicUrl: "",
-          reason: "screen_share_manager_unavailable"
+          reason: "screen_watch_unavailable"
         }
       );
     }
@@ -784,36 +785,38 @@ export class VoiceSessionManager {
       available: false,
       status: "disabled",
       publicUrl: "",
-      reason: "screen_share_manager_unavailable"
+      reason: "screen_watch_unavailable"
     };
   }
 
-  async offerVoiceScreenShareLink({
+  async startVoiceScreenWatch({
     settings = null,
     guildId = null,
     channelId = null,
     requesterUserId = null,
+    target = null,
     transcript = "",
     source = "voice_realtime_tool_call"
   } = {}) {
-    if (typeof this.offerVoiceScreenShareLinkHook !== "function") {
+    if (typeof this.startVoiceScreenWatchHook !== "function") {
       return {
-        offered: false,
-        reason: "screen_share_manager_unavailable"
+        started: false,
+        reason: "screen_watch_unavailable"
       };
     }
     return (
-      await this.offerVoiceScreenShareLinkHook({
+      await this.startVoiceScreenWatchHook({
         settings,
         guildId,
         channelId,
         requesterUserId,
+        target,
         transcript,
         source
       })
     ) || {
-      offered: false,
-      reason: "screen_share_manager_unavailable"
+      started: false,
+      reason: "screen_watch_unavailable"
     };
   }
 
@@ -1445,6 +1448,10 @@ export class VoiceSessionManager {
 
   isUserInSessionVoiceChannel({ session, userId }) {
     return isUserInSessionVoiceChannel(this, { session, userId });
+  }
+
+  hasNativeDiscordVideoDecoderSupport() {
+    return hasNativeDiscordVideoDecoderSupportRuntime();
   }
 
   async enableWatchStreamForUser({

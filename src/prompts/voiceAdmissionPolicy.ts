@@ -115,11 +115,11 @@ export function buildVoiceAdmissionPolicyLines({
     ) {
       lines.push("If a brief goodbye or acknowledgement of the leave would feel natural, you may reply briefly. Otherwise use [SKIP].");
     } else if (normalizedRuntimeEventContext?.category === "screen_share") {
-      lines.push("This is a screen-share state cue, not a spoken request.");
+      lines.push("This is a screen-watch state cue, not a spoken request.");
       if (normalizedRuntimeEventContext.hasVisibleFrame) {
         lines.push("A visible screen frame is attached, so you may react to what is on-screen if there is a natural short comment.");
       }
-      lines.push("If the screen-share moment gives you a real reaction or observation, reply briefly. Otherwise use [SKIP].");
+      lines.push("If the screen-watch moment gives you a real reaction or observation, reply briefly. Otherwise use [SKIP].");
     } else {
       lines.push("If a brief acknowledgement of the join/leave would feel natural, you may reply briefly. Otherwise use [SKIP].");
     }

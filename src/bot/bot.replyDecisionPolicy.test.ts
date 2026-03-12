@@ -283,7 +283,7 @@ test("same-author active follow-up turn can still post when model contributes va
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -378,7 +378,7 @@ test("same-author active follow-up turn is skipped when the model declines", asy
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -476,7 +476,7 @@ test("smoke: text followup-window turn addressed to another user is llm-skipped"
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -585,7 +585,7 @@ test("non-addressed initiative turn can still contribute when model responds", a
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -693,7 +693,7 @@ test("reply channels can evaluate cold ambient turns when the eagerness gate adm
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -819,7 +819,7 @@ test("non-addressed turn is dropped before llm when unsolicited gate is closed",
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -909,7 +909,7 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -1025,7 +1025,7 @@ test("text reply follow-up can run web search and append cited sources", async (
               media: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -1181,7 +1181,7 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
               media: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -1303,7 +1303,7 @@ test("reply follow-up regeneration can add history images when model requests im
               media: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -1423,7 +1423,7 @@ test("image lookup tool accepts direct IMG refs from chat history", async () => 
               media: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -1569,7 +1569,7 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
               media: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -1693,7 +1693,7 @@ test("reply generation passes a structured JSON schema contract for voice intent
               selfMemoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -1745,7 +1745,7 @@ test("reply generation passes a structured JSON schema contract for voice intent
     assert.equal(sent, true);
     assert.equal(llmCalls.length >= 1, true);
     assert.equal(typeof llmCalls[0]?.jsonSchema, "string");
-    assert.match(String(llmCalls[0]?.jsonSchema || ""), /"screenShareIntent"/);
+    assert.match(String(llmCalls[0]?.jsonSchema || ""), /"screenWatchIntent"/);
     assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
   });
 });
@@ -1784,7 +1784,7 @@ test("voice intent below confidence threshold falls back to normal text reply pa
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "join", confidence: 0.5, reason: "weak intent guess" },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -1844,7 +1844,7 @@ test("voice intent below confidence threshold falls back to normal text reply pa
   });
 });
 
-test("smoke: 'clanka look at my screen' initiates a screen-share link message", async () => {
+test("smoke: 'clanka look at my screen' initiates a screen watch fallback link message", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
@@ -1882,7 +1882,7 @@ test("smoke: 'clanka look at my screen' initiates a screen-share link message", 
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -1988,7 +1988,7 @@ test("initiative-channel direct turns can be routed to thread replies when polic
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
@@ -2075,7 +2075,7 @@ test("initiative-channel direct turns can be routed to standalone channel messag
               memoryLine: null,
               automationAction: { operation: "none" },
               voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
             }),
             provider: "test",
             model: "test-model",
