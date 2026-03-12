@@ -64,6 +64,8 @@ Important implications:
 - output lock for music is tied to active playback intent, including the `loading` phase before audio becomes audible
 - ducking is relevant only while music is `playing`
 - `paused_wake_word` is a handoff state, not just a generic pause
+- a resume request does not flip phase back to `playing` until `clankvox` confirms actual playback via `playerState=playing`
+- if a paused phase has no known resumable track state, resume is rejected and the stale music phase collapses back to `idle`
 
 ## 4. Wake-Word Handoff
 
@@ -78,6 +80,7 @@ Wake-word-paused music resume:
 - music does **not** resume at `response.done`
 - it resumes only after the assistant reply has actually drained from `clankvox`
 - the short `botTurnOpen` guard must also clear before resume happens
+- phase stays `paused_wake_word` until `clankvox` confirms that music is really playing again
 - if the user barges in with a new live capture while music is `paused_wake_word`, auto-resume waits until that interrupting capture clears instead of restarting music into the user's next turn
 
 This means audible UX is anchored to real playback completion, not model completion.
@@ -92,7 +95,7 @@ Public control:
 
 Canonical behavior:
 
-- a fresh direct address during active music arms the latch
+- a fresh direct address or bot-name cue during active music arms the latch
 - while music is still `paused_wake_word`, ordinary follow-ups stay owned by the wake-word speaker who opened that pause
 - for ordinary replies spoken over still-playing music, the passive follow-up window refreshes after assistant speech actually settles, not while buffered reply audio is still draining
 - when wake-word-paused music resumes after assistant playback drains, the latch renews from that real resume moment
@@ -146,7 +149,7 @@ When `agentStack.runtimeConfig.voice.musicBrain.mode` is `disabled`, the determi
 Persistent playback tools stay separate:
 
 - `music_pause` means leave playback paused beyond the current reply
-- `music_resume` means restore paused playback now
+- `music_resume` means request paused playback now; the phase only returns to `playing` after transport confirmation
 - `music_stop` means stop playback
 
 ## 7. Pause Versus Duck
@@ -219,6 +222,7 @@ When debugging music conversation behavior, start with:
 - `voice_music_stop_check`
 - `voice_music_paused_for_wake_word`
 - `voice_music_resumed`
+- `voice_music_resume_unavailable`
 - `voice_music_output_halted`
 - `voice_turn_addressing`
 - `openai_realtime_response_done`
@@ -231,6 +235,7 @@ Interpretation rules:
 - `decisionReason=music_brain_consumed`: the music brain handled the turn itself, usually with music tools
 - `decisionReason=music_brain_pass`: the music brain decided this was not really a music-side command and let the ordinary reply path continue
 - `decisionReason=main_brain_decides`: the turn was forwarded straight to the main reply brain; inspect `gateDecisionReason` to see whether it came from direct address, wake-latch followup, interrupted-reply followup, or disabled music-brain routing
+- `voice_music_resume_unavailable`: the session believed music was paused, but no resumable queue/current-track state remained; JS clears the stale paused phase instead of pretending playback restarted
 - interrupted assistant speech should clear any queued realtime assistant utterances from the abandoned reply before new playback begins
 - `paused_wake_word` followed by resume after playback drain and capture clear is the expected clean handoff path
 

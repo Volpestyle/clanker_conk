@@ -275,7 +275,7 @@ test("clearStaleRealtimeResponse skips clear when a fresh response replaced the 
   assert.equal(activeResponseId, "fresh_resp_2");
 });
 
-test("handleResponseDone waits for buffered assistant playback before resuming wake-word-paused music", async () => {
+test("handleResponseDone waits for buffered assistant playback before requesting wake-word music resume", async () => {
   const { replyManager, resumeCalls, haltCalls } = createReplyManagerHarness();
   const requestedAt = Date.now() - 10;
   const initialLatchUntil = Date.now() + 1_000;
@@ -295,7 +295,10 @@ test("handleResponseDone waits for buffered assistant playback before resuming w
       phase: "paused_wake_word",
       active: true,
       ducked: false,
-      pauseReason: "wake_word"
+      pauseReason: "wake_word",
+      lastTrackId: "youtube:track-1",
+      lastTrackTitle: "Simple and Clean",
+      lastTrackUrl: "https://example.com/track"
     },
     voxClient: {
       ttsBufferDepthSamples: 24_000,
@@ -332,10 +335,11 @@ test("handleResponseDone waits for buffered assistant playback before resuming w
 
   await new Promise((resolve) => setTimeout(resolve, 600));
   assert.equal(resumeCalls.length, 1);
-  assert.deepEqual(haltCalls, ["music_resumed_after_wake_word"]);
-  assert.equal(session.music.phase, "playing");
-  assert.equal(Number(session.musicWakeLatchedUntil || 0) > initialLatchUntil, true);
-  assert.equal(session.musicWakeLatchedByUserId, null);
+  assert.deepEqual(haltCalls, []);
+  assert.equal(session.music.phase, "paused_wake_word");
+  assert.equal(session.music.lastCommandReason, "music_resumed_after_wake_word");
+  assert.equal(Number(session.musicWakeLatchedUntil || 0), initialLatchUntil);
+  assert.equal(session.musicWakeLatchedByUserId, "user-1");
 });
 
 test("markBotTurnOut refreshes passive music wake latch only after buffered reply playback settles", async () => {
@@ -416,7 +420,10 @@ test("handleResponseDone keeps wake-word-paused music paused while an interrupti
       phase: "paused_wake_word",
       active: true,
       ducked: false,
-      pauseReason: "wake_word"
+      pauseReason: "wake_word",
+      lastTrackId: "youtube:track-1",
+      lastTrackTitle: "Simple and Clean",
+      lastTrackUrl: "https://example.com/track"
     },
     voxClient: {
       ttsBufferDepthSamples: 0,
@@ -452,8 +459,9 @@ test("handleResponseDone keeps wake-word-paused music paused while an interrupti
 
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(resumeCalls.length, 1);
-  assert.deepEqual(haltCalls, ["music_resumed_after_wake_word"]);
-  assert.equal(session.music.phase, "playing");
+  assert.deepEqual(haltCalls, []);
+  assert.equal(session.music.phase, "paused_wake_word");
+  assert.equal(session.music.lastCommandReason, "music_resumed_after_wake_word");
 });
 
 test("handleResponseDone keeps wake-word-paused music paused while a followup turn is still processing", async () => {
@@ -473,7 +481,10 @@ test("handleResponseDone keeps wake-word-paused music paused while a followup tu
       phase: "paused_wake_word",
       active: true,
       ducked: false,
-      pauseReason: "wake_word"
+      pauseReason: "wake_word",
+      lastTrackId: "youtube:track-1",
+      lastTrackTitle: "Simple and Clean",
+      lastTrackUrl: "https://example.com/track"
     },
     activeRealtimeTurn: {
       userId: "user-1",
@@ -517,8 +528,9 @@ test("handleResponseDone keeps wake-word-paused music paused while a followup tu
 
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(resumeCalls.length, 1);
-  assert.deepEqual(haltCalls, ["music_resumed_after_wake_word"]);
-  assert.equal(session.music.phase, "playing");
+  assert.deepEqual(haltCalls, []);
+  assert.equal(session.music.phase, "paused_wake_word");
+  assert.equal(session.music.lastCommandReason, "music_resumed_after_wake_word");
 });
 
 test("schedulePausedReplyMusicResume waits for an in-flight accepted brain turn to finish", async () => {
@@ -529,7 +541,10 @@ test("schedulePausedReplyMusicResume waits for an in-flight accepted brain turn 
       phase: "paused_wake_word",
       active: true,
       ducked: false,
-      pauseReason: "wake_word"
+      pauseReason: "wake_word",
+      lastTrackId: "youtube:track-1",
+      lastTrackTitle: "Simple and Clean",
+      lastTrackUrl: "https://example.com/track"
     },
     inFlightAcceptedBrainTurn: {
       transcript: "say something",
@@ -566,6 +581,55 @@ test("schedulePausedReplyMusicResume waits for an in-flight accepted brain turn 
 
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(resumeCalls.length, 1);
-  assert.deepEqual(haltCalls, ["music_resumed_after_wake_word"]);
-  assert.equal(session.music.phase, "playing");
+  assert.deepEqual(haltCalls, []);
+  assert.equal(session.music.phase, "paused_wake_word");
+  assert.equal(session.music.lastCommandReason, "music_resumed_after_wake_word");
+});
+
+test("schedulePausedReplyMusicResume clears stale paused_wake_word state when no resumable music exists", async () => {
+  const { replyManager, resumeCalls, haltCalls, logs } = createReplyManagerHarness();
+  const session = createSession({
+    botTurnOpen: false,
+    musicQueueState: {
+      guildId: "guild-1",
+      voiceChannelId: "voice-1",
+      tracks: [],
+      nowPlayingIndex: null,
+      isPaused: true,
+      volume: 1
+    },
+    music: {
+      phase: "paused_wake_word",
+      active: true,
+      ducked: false,
+      pauseReason: "wake_word",
+      lastTrackId: null,
+      lastTrackTitle: null,
+      lastTrackUrl: null
+    },
+    voxClient: {
+      ttsBufferDepthSamples: 0,
+      getTtsBufferDepthSamples() {
+        return this.ttsBufferDepthSamples;
+      },
+      getTtsPlaybackState() {
+        return "idle";
+      },
+      getTtsTelemetryUpdatedAt() {
+        return Date.now();
+      }
+    }
+  });
+
+  replyManager.schedulePausedReplyMusicResume(session, 25);
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(resumeCalls.length, 0);
+  assert.deepEqual(haltCalls, []);
+  assert.equal(session.music.phase, "idle");
+  assert.equal(session.musicQueueState?.isPaused, false);
+  assert.equal(
+    logs.some((entry) => entry.content === "voice_music_resume_unavailable"),
+    true
+  );
 });

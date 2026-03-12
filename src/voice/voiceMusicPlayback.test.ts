@@ -287,6 +287,33 @@ test("maybeHandleMusicPlaybackTurn fast-paths exact compact playback commands be
   assert.equal(stopCheckEvent?.metadata?.decisionReason, "fast_path_pause");
 });
 
+test("maybeHandleMusicPlaybackTurn requests fast-path resume without forcing playing state", async () => {
+  const { manager, resumeCalls, loggedEvents, musicBrainPrompts } = createPlaybackHost();
+  const session = createPausedSession(manager);
+
+  const handled = await maybeHandleMusicPlaybackTurn(manager, {
+    session,
+    settings: createDedicatedMusicBrainSettings(),
+    userId: "user-1",
+    pcmBuffer: Buffer.alloc(0),
+    source: "realtime",
+    transcript: "resume"
+  });
+
+  assert.equal(handled, true);
+  assert.equal(session.music?.phase, "paused");
+  assert.equal(session.music?.lastCommandReason, "music_resumed_fast_path");
+  assert.equal(session.musicQueueState?.isPaused, true);
+  assert.equal(resumeCalls.length, 1);
+  assert.equal(musicBrainPrompts.length, 0);
+  assert.equal(
+    loggedEvents.some((entry) => entry.content === "voice_music_output_halted"),
+    false
+  );
+  const stopCheckEvent = loggedEvents.find((entry) => entry.content === "voice_music_stop_check");
+  assert.equal(stopCheckEvent?.metadata?.decisionReason, "fast_path_resume");
+});
+
 test("maybeHandleMusicPlaybackTurn fast-paths compact playback commands that include a music cue word", async () => {
   const { manager, stopCalls, loggedEvents, musicBrainPrompts } = createPlaybackHost();
   const session = {
@@ -815,6 +842,7 @@ function createSlashPlaybackHost(searchResults: MusicSelectionResult[], sessionO
   const searchCalls: string[] = [];
   const discordPlayCalls: string[] = [];
   const queuePlayCalls: number[] = [];
+  const resumeCalls: number[] = [];
   const logs: Array<{ content: string; metadata?: Record<string, unknown> }> = [];
 
   const manager: MusicPlaybackHost = {
@@ -861,7 +889,9 @@ function createSlashPlaybackHost(searchResults: MusicSelectionResult[], sessionO
       },
       stop: () => {},
       pause: () => {},
-      resume: () => {}
+      resume: () => {
+        resumeCalls.push(1);
+      }
     },
     musicPlayback: null,
     musicSearch: {
@@ -920,6 +950,7 @@ function createSlashPlaybackHost(searchResults: MusicSelectionResult[], sessionO
     searchCalls,
     discordPlayCalls,
     queuePlayCalls,
+    resumeCalls,
     logs
   };
 }
@@ -1170,6 +1201,116 @@ test("music slash queue shows now-playing and queued tracks", async () => {
   await handleMusicSlashCommand(manager, slash.interaction as ChatInputCommandInteraction, null);
 
   assert.equal(slash.replies.length > 0, true);
+});
+
+test("music slash resume requests playback without forcing phase to playing", async () => {
+  const { manager, session, resumeCalls, logs } = createSlashPlaybackHost([], {
+    music: {
+      phase: "paused",
+      ducked: false,
+      pauseReason: "user_pause",
+      startedAt: 0,
+      stoppedAt: 0,
+      provider: "youtube",
+      source: "slash_command",
+      lastTrackId: "youtube:track-1",
+      lastTrackTitle: "Simple and Clean",
+      lastTrackArtists: ["Utada Hikaru"],
+      lastTrackUrl: "https://example.com/track",
+      lastQuery: "simple and clean",
+      lastRequestedByUserId: "user-1",
+      lastRequestText: "resume music",
+      lastCommandAt: 0,
+      lastCommandReason: null,
+      pendingQuery: null,
+      pendingPlatform: "auto",
+      pendingAction: "play_now",
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
+    },
+    musicQueueState: {
+      guildId: "guild-1",
+      voiceChannelId: "voice-1",
+      tracks: [
+        {
+          id: "youtube:track-1",
+          title: "Simple and Clean",
+          artist: "Utada Hikaru",
+          durationMs: 240000,
+          source: "yt",
+          streamUrl: "https://example.com/track",
+          platform: "youtube",
+          externalUrl: "https://example.com/track"
+        }
+      ],
+      nowPlayingIndex: 0,
+      isPaused: true,
+      volume: 1
+    }
+  });
+  const slash = createSlashInteraction("resume");
+
+  await handleMusicSlashCommand(manager, slash.interaction as ChatInputCommandInteraction, null);
+
+  assert.deepEqual(slash.replies, ["Resuming music."]);
+  assert.equal(session.music?.phase, "paused");
+  assert.equal(session.music?.lastCommandReason, "music_resumed_slash_command");
+  assert.equal(session.musicQueueState?.isPaused, true);
+  assert.equal(resumeCalls.length, 1);
+  assert.equal(
+    logs.some((entry) => entry.content === "voice_music_output_halted"),
+    false
+  );
+});
+
+test("music slash resume clears stale paused state when no track can be resumed", async () => {
+  const { manager, session, resumeCalls, logs } = createSlashPlaybackHost([], {
+    music: {
+      phase: "paused",
+      ducked: false,
+      pauseReason: "user_pause",
+      startedAt: 0,
+      stoppedAt: 0,
+      provider: null,
+      source: null,
+      lastTrackId: null,
+      lastTrackTitle: null,
+      lastTrackArtists: [],
+      lastTrackUrl: null,
+      lastQuery: null,
+      lastRequestedByUserId: null,
+      lastRequestText: null,
+      lastCommandAt: 0,
+      lastCommandReason: null,
+      pendingQuery: null,
+      pendingPlatform: "auto",
+      pendingAction: "play_now",
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
+    },
+    musicQueueState: {
+      guildId: "guild-1",
+      voiceChannelId: "voice-1",
+      tracks: [],
+      nowPlayingIndex: null,
+      isPaused: true,
+      volume: 1
+    }
+  });
+  const slash = createSlashInteraction("resume");
+
+  await handleMusicSlashCommand(manager, slash.interaction as ChatInputCommandInteraction, null);
+
+  assert.deepEqual(slash.replies, ["No paused track can be resumed."]);
+  assert.equal(session.music?.phase, "idle");
+  assert.equal(session.musicQueueState?.isPaused, false);
+  assert.equal(resumeCalls.length, 0);
+  assert.equal(
+    logs.some((entry) => entry.content === "voice_music_resume_unavailable"),
+    true
+  );
 });
 
 test("music slash add keeps queue disambiguation state when search is ambiguous", async () => {

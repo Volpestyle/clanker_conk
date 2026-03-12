@@ -262,6 +262,295 @@ test("executeLocalVoiceToolCall applies a temporary pause reply handoff for the 
   assert.deepEqual(scheduledResumeCalls, [200]);
 });
 
+test("executeLocalVoiceToolCall requests music resume without forcing playing state", async () => {
+  const logs: Array<{ content: string; metadata?: Record<string, unknown> }> = [];
+  const resumeCalls: number[] = [];
+  const haltCalls: string[] = [];
+  const queueState = {
+    guildId: "guild-1",
+    voiceChannelId: "voice-1",
+    tracks: [
+      {
+        id: "youtube:track-1",
+        title: "Simple and Clean",
+        artist: "Utada Hikaru",
+        durationMs: 240000,
+        source: "yt" as const,
+        streamUrl: "https://example.com/track",
+        platform: "youtube" as const,
+        externalUrl: "https://example.com/track"
+      }
+    ],
+    nowPlayingIndex: 0,
+    isPaused: true
+  };
+  const session = {
+    id: "voice-session-resume-1",
+    guildId: "guild-1",
+    textChannelId: "channel-1",
+    voiceChannelId: "voice-1",
+    ending: false,
+    lastRealtimeToolCallerUserId: "user-1",
+    music: {
+      phase: "paused" as const,
+      ducked: false,
+      pauseReason: "user_pause" as const,
+      replyHandoffMode: null,
+      replyHandoffRequestedByUserId: null,
+      replyHandoffSource: null,
+      replyHandoffAt: 0,
+      startedAt: 0,
+      stoppedAt: 0,
+      provider: "youtube",
+      source: "voice_tool_call",
+      lastTrackId: "youtube:track-1",
+      lastTrackTitle: "Simple and Clean",
+      lastTrackArtists: ["Utada Hikaru"],
+      lastTrackUrl: "https://example.com/track",
+      lastQuery: "simple and clean",
+      lastRequestedByUserId: "user-1",
+      lastRequestText: "resume the music",
+      lastCommandAt: 0,
+      lastCommandReason: null,
+      pendingQuery: null,
+      pendingPlatform: "auto" as const,
+      pendingAction: "play_now" as const,
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
+    },
+    musicQueueState: queueState
+  };
+
+  const result = await executeLocalVoiceToolCall({
+    ensureSessionMusicState: () => session.music,
+    ensureToolMusicQueueState: () => queueState,
+    buildVoiceQueueStatePayload: () => ({ ...queueState }),
+    setMusicPhase(_session: unknown, phase: string) {
+      session.music.phase = phase as "idle" | "paused" | "paused_wake_word" | "playing" | "loading" | "stopping";
+    },
+    haltSessionOutputForMusicPlayback(_session: unknown, reason?: string) {
+      haltCalls.push(String(reason || ""));
+    },
+    musicPlayer: {
+      resume() {
+        resumeCalls.push(1);
+      }
+    },
+    store: {
+      getSettings: () => createTestSettings({}),
+      logAction(entry: { content: string; metadata?: Record<string, unknown> }) {
+        logs.push(entry);
+      }
+    }
+  }, {
+    session,
+    settings: createTestSettings({}),
+    toolName: "music_resume",
+    args: {}
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "resume_requested");
+  assert.equal(result.phase, "paused");
+  assert.equal(session.music.phase, "paused");
+  assert.equal(session.music.lastCommandReason, "voice_tool_music_resume");
+  assert.equal(queueState.isPaused, true);
+  assert.equal(resumeCalls.length, 1);
+  assert.deepEqual(haltCalls, []);
+  assert.equal(
+    logs.some((entry) => entry.content === "voice_music_resume_unavailable"),
+    false
+  );
+});
+
+test("executeLocalVoiceToolCall clears stale paused music state when resume is unavailable", async () => {
+  const logs: Array<{ content: string; metadata?: Record<string, unknown> }> = [];
+  const resumeCalls: number[] = [];
+  const queueState = {
+    guildId: "guild-1",
+    voiceChannelId: "voice-1",
+    tracks: [],
+    nowPlayingIndex: null,
+    isPaused: true
+  };
+  const session = {
+    id: "voice-session-resume-2",
+    guildId: "guild-1",
+    textChannelId: "channel-1",
+    voiceChannelId: "voice-1",
+    ending: false,
+    lastRealtimeToolCallerUserId: "user-1",
+    music: {
+      phase: "paused" as const,
+      ducked: false,
+      pauseReason: "user_pause" as const,
+      replyHandoffMode: null,
+      replyHandoffRequestedByUserId: null,
+      replyHandoffSource: null,
+      replyHandoffAt: 0,
+      startedAt: 0,
+      stoppedAt: 0,
+      provider: null,
+      source: null,
+      lastTrackId: null,
+      lastTrackTitle: null,
+      lastTrackArtists: [],
+      lastTrackUrl: null,
+      lastQuery: null,
+      lastRequestedByUserId: null,
+      lastRequestText: null,
+      lastCommandAt: 0,
+      lastCommandReason: null,
+      pendingQuery: null,
+      pendingPlatform: "auto" as const,
+      pendingAction: "play_now" as const,
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
+    },
+    musicQueueState: queueState
+  };
+
+  const result = await executeLocalVoiceToolCall({
+    ensureSessionMusicState: () => session.music,
+    ensureToolMusicQueueState: () => queueState,
+    buildVoiceQueueStatePayload: () => ({ ...queueState }),
+    setMusicPhase(_session: unknown, phase: string) {
+      session.music.phase = phase as "idle" | "paused" | "paused_wake_word" | "playing" | "loading" | "stopping";
+    },
+    haltSessionOutputForMusicPlayback() {
+      throw new Error("halt should not run for unavailable resume");
+    },
+    musicPlayer: {
+      resume() {
+        resumeCalls.push(1);
+      }
+    },
+    store: {
+      getSettings: () => createTestSettings({}),
+      logAction(entry: { content: string; metadata?: Record<string, unknown> }) {
+        logs.push(entry);
+      }
+    }
+  }, {
+    session,
+    settings: createTestSettings({}),
+    toolName: "music_resume",
+    args: {}
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "music_resume_unavailable");
+  assert.equal(result.phase, "idle");
+  assert.equal(session.music.phase, "idle");
+  assert.equal(queueState.isPaused, false);
+  assert.equal(resumeCalls.length, 0);
+  assert.equal(
+    logs.some((entry) => entry.content === "voice_music_resume_unavailable"),
+    true
+  );
+});
+
+test("executeLocalVoiceToolCall keeps paused_wake_word until duck handoff playback is confirmed", async () => {
+  const resumeCalls: number[] = [];
+  const queueState = {
+    guildId: "guild-1",
+    voiceChannelId: "voice-1",
+    tracks: [
+      {
+        id: "youtube:track-1",
+        title: "Simple and Clean",
+        artist: "Utada Hikaru",
+        durationMs: 240000,
+        source: "yt" as const,
+        streamUrl: "https://example.com/track",
+        platform: "youtube" as const,
+        externalUrl: "https://example.com/track"
+      }
+    ],
+    nowPlayingIndex: 0,
+    isPaused: true
+  };
+  const session = {
+    id: "voice-session-handoff-2",
+    guildId: "guild-1",
+    textChannelId: "channel-1",
+    voiceChannelId: "voice-1",
+    ending: false,
+    lastRealtimeToolCallerUserId: "user-1",
+    music: {
+      phase: "paused_wake_word" as const,
+      ducked: false,
+      pauseReason: "wake_word" as const,
+      replyHandoffMode: "pause" as const,
+      replyHandoffRequestedByUserId: "user-1",
+      replyHandoffSource: "voice_tool_music_reply_handoff",
+      replyHandoffAt: Date.now(),
+      startedAt: 0,
+      stoppedAt: 0,
+      provider: "youtube",
+      source: "voice_tool_call",
+      lastTrackId: "youtube:track-1",
+      lastTrackTitle: "Simple and Clean",
+      lastTrackArtists: ["Utada Hikaru"],
+      lastTrackUrl: "https://example.com/track",
+      lastQuery: "simple and clean",
+      lastRequestedByUserId: "user-1",
+      lastRequestText: "keep it under me",
+      lastCommandAt: 0,
+      lastCommandReason: null,
+      pendingQuery: null,
+      pendingPlatform: "auto" as const,
+      pendingAction: "play_now" as const,
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
+    },
+    musicQueueState: queueState
+  };
+
+  const result = await executeLocalVoiceToolCall({
+    ensureSessionMusicState: () => session.music,
+    ensureToolMusicQueueState: () => queueState,
+    buildVoiceQueueStatePayload: () => ({ ...queueState }),
+    musicPlayer: {
+      resume() {
+        resumeCalls.push(1);
+      }
+    },
+    replyManager: {
+      schedulePausedReplyMusicResume() {
+        throw new Error("duck handoff should not schedule pause resume");
+      },
+      hasBufferedTtsPlayback: () => false
+    },
+    store: {
+      getSettings: () => createTestSettings({}),
+      logAction() {
+        return undefined;
+      }
+    }
+  }, {
+    session,
+    settings: createTestSettings({}),
+    toolName: "music_reply_handoff",
+    args: {
+      mode: "duck"
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.applied, true);
+  assert.equal(result.mode, "duck");
+  assert.equal(result.phase, "paused_wake_word");
+  assert.equal(session.music?.phase, "paused_wake_word");
+  assert.equal(session.music?.replyHandoffMode, "duck");
+  assert.equal(session.music?.lastCommandReason, "music_resumed_reply_handoff_duck");
+  assert.equal(queueState.isPaused, true);
+  assert.equal(resumeCalls.length, 1);
+});
+
 // ---------------------------------------------------------------------------
 // music_play non-blocking tests
 // ---------------------------------------------------------------------------

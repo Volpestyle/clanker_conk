@@ -599,7 +599,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   }
 
   if (manager.isCommandOnlyActive(session, settings)) {
-    if (directAddressed) {
+    if (directAddressSignal.addressedOrNamed) {
       if (musicActive) {
         touchMusicWakeLatch(session, settings, normalizedUserId, now);
         musicWakeLatchState = getMusicWakeLatchState(session, now);
@@ -609,9 +609,9 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       }
       return {
         allow: true,
-        reason: "command_only_direct_address",
+        reason: directAddressed ? "command_only_direct_address" : "command_only_name_cue",
         participantCount,
-        directAddressed: true,
+        directAddressed,
         directAddressConfidence,
         directAddressThreshold,
         transcript: normalizedTranscript,

@@ -1,4 +1,10 @@
 import { clamp } from "../utils.ts";
+import {
+  getMusicResumeStateSnapshot,
+  hasKnownMusicResumeState,
+  noteMusicResumeRequest,
+  setKnownMusicQueuePausedState
+} from "./musicResumeState.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import {
@@ -46,6 +52,7 @@ type MusicQueueTrack = {
   platform: MusicSelectionResult["platform"];
   externalUrl: string | null;
 };
+
 function isMusicSelectionResult(value: unknown): value is MusicSelectionResult {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
@@ -80,6 +87,53 @@ function resolveMusicCatalogTracks(catalog: Map<string, unknown>, trackIds: stri
       return isMusicSelectionResult(track) ? toMusicQueueTrack(track) : null;
     })
     .filter((entry): entry is MusicQueueTrack => Boolean(entry));
+}
+
+function logMusicResumeUnavailable(
+  manager: VoiceToolCallManager,
+  session: ToolRuntimeSession | null | undefined,
+  source: string,
+  phase: string
+) {
+  const snapshot = getMusicResumeStateSnapshot(session);
+  manager.store.logAction({
+    kind: "voice_runtime",
+    guildId: session?.guildId,
+    channelId: session?.textChannelId,
+    userId: session?.lastRealtimeToolCallerUserId || manager.client.user?.id || null,
+    content: "voice_music_resume_unavailable",
+    metadata: {
+      sessionId: session?.id || null,
+      source,
+      phase,
+      hasQueuedTrack: snapshot.hasQueuedTrack,
+      hasRememberedTrack: snapshot.hasRememberedTrack,
+      queueNowPlayingIndex: snapshot.queueNowPlayingIndex,
+      queueTrackId: snapshot.queueTrackId,
+      rememberedTrackId: snapshot.rememberedTrackId,
+      rememberedTrackUrl: snapshot.rememberedTrackUrl
+    }
+  });
+}
+
+function clearUnavailableMusicResumeState(
+  manager: VoiceToolCallManager,
+  session: ToolRuntimeSession | null | undefined,
+  source: string,
+  phase: string
+) {
+  if (session) {
+    setMusicPhase(manager, session, "idle");
+    clearPendingMusicReplyHandoff(manager, session);
+    setKnownMusicQueuePausedState(session, false);
+  }
+  logMusicResumeUnavailable(manager, session, source, phase);
+  return {
+    ok: false as const,
+    error: "music_resume_unavailable" as const,
+    phase: session ? getMusicPhase(manager, session) : "idle",
+    queue_state: manager.buildVoiceQueueStatePayload(session)
+  };
 }
 
 function getToolMusicCatalog(manager: VoiceToolCallManager, session: ToolRuntimeSession | null | undefined) {
@@ -744,12 +798,31 @@ export async function executeVoiceMusicResumeTool(
   { session, signal }: VoiceMusicToolOptions
 ) {
   throwIfAborted(signal, "Voice music resume cancelled");
+  const currentPhase = session ? getMusicPhase(manager, session) : "idle";
+  if (!musicPhaseCanResume(currentPhase)) {
+    return {
+      ok: false,
+      error: "music_not_paused",
+      phase: currentPhase,
+      queue_state: manager.buildVoiceQueueStatePayload(session)
+    };
+  }
+  if (!hasKnownMusicResumeState(session)) {
+    return clearUnavailableMusicResumeState(
+      manager,
+      session,
+      "voice_tool_music_resume",
+      currentPhase
+    );
+  }
+  noteMusicResumeRequest(session, "voice_tool_music_resume");
   manager.musicPlayer?.resume?.();
-  manager.setMusicPhase(session, "playing");
-  manager.haltSessionOutputForMusicPlayback(session, "music_resumed");
-  const queueState = manager.ensureToolMusicQueueState(session);
-  if (queueState) queueState.isPaused = false;
-  return { ok: true, queue_state: manager.buildVoiceQueueStatePayload(session) };
+  return {
+    ok: true,
+    status: "resume_requested",
+    phase: session ? getMusicPhase(manager, session) : currentPhase,
+    queue_state: manager.buildVoiceQueueStatePayload(session)
+  };
 }
 
 export async function executeVoiceMusicReplyHandoffTool(
@@ -839,10 +912,22 @@ export async function executeVoiceMusicReplyHandoffTool(
     };
   }
   if (currentPhase === "paused_wake_word" && musicPhaseCanResume(currentPhase)) {
+    if (!hasKnownMusicResumeState(session)) {
+      const unavailable = clearUnavailableMusicResumeState(
+        manager,
+        session,
+        "voice_tool_music_reply_handoff_duck",
+        currentPhase
+      );
+      return {
+        ...unavailable,
+        mode,
+        applied: false,
+        reason: "music_resume_unavailable"
+      };
+    }
+    noteMusicResumeRequest(session, "music_resumed_reply_handoff_duck");
     manager.musicPlayer?.resume?.();
-    setMusicPhase(manager, session, "playing");
-    const queueState = manager.ensureToolMusicQueueState(session);
-    if (queueState) queueState.isPaused = false;
   }
   setPendingMusicReplyHandoff(manager, session, {
     mode: "duck",

@@ -1624,6 +1624,41 @@ test("reply decider opens music wake latch on deterministic wake", async () => {
   assert.equal(session.music.ducked, true);
 });
 
+test("reply decider opens music wake latch on bot-name cue during active music", async () => {
+  const manager = createManager();
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    musicWakeLatchedUntil: 0,
+    musicWakeLatchedByUserId: null,
+    music: {
+      phase: "playing",
+      active: true,
+      ducked: false
+    }
+  };
+  const before = Date.now();
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session,
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        ambientReplyEagerness: 60
+      }
+    }),
+    transcript: "hey clunker play some kingdom hearts music"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "command_only_name_cue");
+  assert.equal(decision.directAddressed, false);
+  assert.equal(Number(session.musicWakeLatchedUntil || 0) > before, true);
+  assert.equal(session.musicWakeLatchedByUserId, "speaker-1");
+});
+
 test("reply decider applies music wake latch across speakers and extends on admitted turn", async () => {
   let callCount = 0;
   const manager = createManager({
@@ -5834,7 +5869,7 @@ test("voice decision history deduplicates consecutive identical turns", () => {
 
 test("buildRealtimeInstructions forbids claiming screen vision before frame context exists", () => {
   const manager = createManager();
-  manager.getVoiceScreenShareCapability = () => ({
+  manager.getVoiceScreenWatchCapability = () => ({
     supported: true,
     enabled: true,
     available: true,
@@ -5876,7 +5911,7 @@ test("buildRealtimeInstructions forbids claiming screen vision before frame cont
 
   assert.equal(instructions.includes("You do not currently see the user's screen."), true);
   assert.equal(instructions.includes("Do not claim to see, watch, or react to on-screen content until actual frame context is provided."), true);
-  assert.equal(instructions.includes("call offer_screen_share_link"), true);
+  assert.equal(instructions.includes("call start_screen_watch"), true);
   assert.equal(instructions.includes("Recent voice effects: bob played soundboard \"rimshot\""), true);
 });
 

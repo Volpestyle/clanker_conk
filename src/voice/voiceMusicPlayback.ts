@@ -1,4 +1,10 @@
 import { ChatInputCommandInteraction } from "discord.js";
+import {
+  getMusicResumeStateSnapshot,
+  hasKnownMusicResumeState,
+  noteMusicResumeRequest,
+  setKnownMusicQueuePausedState
+} from "./musicResumeState.ts";
 import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
 import {
   getResolvedVoiceMusicBrainBinding,
@@ -403,6 +409,33 @@ function clearToolMusicQueueState(
   queueState.nowPlayingIndex = null;
   queueState.isPaused = false;
   return queueState;
+}
+
+function logMusicResumeUnavailable(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined,
+  source: string,
+  phase: string
+) {
+  const snapshot = getMusicResumeStateSnapshot(session);
+  logMusicAction(manager, {
+    kind: "voice_runtime",
+    guildId: session?.guildId,
+    channelId: session?.textChannelId,
+    userId: manager.client.user?.id || null,
+    content: "voice_music_resume_unavailable",
+    metadata: {
+      sessionId: session?.id || null,
+      source,
+      phase,
+      hasQueuedTrack: snapshot.hasQueuedTrack,
+      hasRememberedTrack: snapshot.hasRememberedTrack,
+      queueNowPlayingIndex: snapshot.queueNowPlayingIndex,
+      queueTrackId: snapshot.queueTrackId,
+      rememberedTrackId: snapshot.rememberedTrackId,
+      rememberedTrackUrl: snapshot.rememberedTrackUrl
+    }
+  });
 }
 
 export function ensureSessionMusicState(
@@ -872,12 +905,15 @@ async function executeCompactVoiceMusicControlCommand(
       });
       return true;
     case "resume": {
+      if (!hasKnownMusicResumeState(session)) {
+        setMusicPhase(manager, session, "idle");
+        clearPendingMusicReplyHandoff(manager, session);
+        setKnownMusicQueuePausedState(session, false);
+        logMusicResumeUnavailable(manager, session, "music_resumed_fast_path", currentPhase);
+        return true;
+      }
+      noteMusicResumeRequest(session, "music_resumed_fast_path");
       manager.musicPlayer?.resume?.();
-      setMusicPhase(manager, session, "playing");
-      clearPendingMusicReplyHandoff(manager, session);
-      const queueState = ensureToolMusicQueueState(manager, session);
-      if (queueState) queueState.isPaused = false;
-      haltSessionOutputForMusicPlayback(manager, session, "music_resumed_fast_path");
       return true;
     }
     case "skip": {
@@ -3220,10 +3256,17 @@ export async function handleMusicSlashCommand(
       await interaction.reply(ephemeralReply("No music is currently paused."));
       return;
     }
+    if (!hasKnownMusicResumeState(session)) {
+      setMusicPhase(manager, session, "idle");
+      clearPendingMusicReplyHandoff(manager, session);
+      setKnownMusicQueuePausedState(session, false);
+      logMusicResumeUnavailable(manager, session, "music_resumed_slash_command", phase);
+      await interaction.reply(ephemeralReply("No paused track can be resumed."));
+      return;
+    }
+    noteMusicResumeRequest(session, "music_resumed_slash_command");
     manager.musicPlayer?.resume();
-    setMusicPhase(manager, session, "playing");
-    haltSessionOutputForMusicPlayback(manager, session, "music_resumed_slash_command");
-    await interaction.reply("Music resumed.");
+    await interaction.reply("Resuming music.");
     return;
   }
 

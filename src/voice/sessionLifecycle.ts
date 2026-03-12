@@ -39,6 +39,10 @@ import {
   normalizeSoundboardRefs
 } from "./voiceSoundboard.ts";
 import {
+  setKnownMusicQueuePausedState
+} from "./musicResumeState.ts";
+import { touchMusicWakeLatch } from "./musicWakeLatch.ts";
+import {
   shouldHandleRealtimeFunctionCalls as shouldHandleRealtimeFunctionCallsModule,
   shouldRegisterRealtimeTools as shouldRegisterRealtimeToolsModule
 } from "./voiceConfigResolver.ts";
@@ -528,9 +532,26 @@ export class SessionLifecycle {
     if (!session?.voxClient) return;
 
     const onPlayerState = (status) => {
+      const previousMusicPhase = this.host.getMusicPhase(session);
       session.playerState = status;
       if (status === "playing") {
         session.lastActivityAt = Date.now();
+        if (previousMusicPhase === "paused" || previousMusicPhase === "paused_wake_word") {
+          this.host.setMusicPhase(session, "playing");
+          setKnownMusicQueuePausedState(session, false);
+          const music = this.host.ensureSessionMusicState(session);
+          const resumeReason = String(music?.lastCommandReason || "").trim() || null;
+          if (resumeReason === "music_resumed_after_wake_word") {
+            const settings = session.settingsSnapshot || this.host.store.getSettings();
+            touchMusicWakeLatch(session, settings, null);
+          }
+          if (resumeReason && resumeReason !== "music_resumed_reply_handoff_duck") {
+            this.host.haltSessionOutputForMusicPlayback(
+              session,
+              resumeReason === "voice_tool_music_resume" ? "music_resumed" : resumeReason
+            );
+          }
+        }
       }
       this.host.replyManager.syncAssistantOutputState(session, "vox_player_state");
     };
@@ -558,6 +579,7 @@ export class SessionLifecycle {
 
     const onMusicIdle = () => {
       this.host.setMusicPhase(session, "idle");
+      setKnownMusicQueuePausedState(session, false);
       const music = this.host.ensureSessionMusicState(session);
       if (music) {
         music.stoppedAt = Date.now();
@@ -574,6 +596,7 @@ export class SessionLifecycle {
 
     const onMusicError = () => {
       this.host.setMusicPhase(session, "idle");
+      setKnownMusicQueuePausedState(session, false);
       const music = this.host.ensureSessionMusicState(session);
       if (music) {
         music.stoppedAt = Date.now();

@@ -49,6 +49,12 @@ import {
 } from "./voiceSessionTypes.ts";
 import type { BargeInController, ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
+import {
+  getMusicResumeStateSnapshot,
+  hasKnownMusicResumeState,
+  noteMusicResumeRequest,
+  setKnownMusicQueuePausedState
+} from "./musicResumeState.ts";
 import { touchMusicWakeLatch } from "./musicWakeLatch.ts";
 
 type ReplyManagerSettings = Record<string, unknown> | null;
@@ -173,17 +179,32 @@ export class ReplyManager {
         this.wakeWordMusicResumeTimers.set(session, retryTimer);
         return;
       }
-      const settings = session.settingsSnapshot || this.host.store.getSettings();
-      touchMusicWakeLatch(session, settings, null);
-      if (session.music && typeof session.music === "object") {
-        session.music.replyHandoffMode = null;
-        session.music.replyHandoffRequestedByUserId = null;
-        session.music.replyHandoffSource = null;
-        session.music.replyHandoffAt = 0;
+      if (!hasKnownMusicResumeState(session)) {
+        const snapshot = getMusicResumeStateSnapshot(session);
+        this.host.setMusicPhase(session, "idle");
+        setKnownMusicQueuePausedState(session, false);
+        this.host.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.host.client.user?.id || null,
+          content: "voice_music_resume_unavailable",
+          metadata: {
+            sessionId: session.id,
+            source: "music_resumed_after_wake_word",
+            phase: "paused_wake_word",
+            hasQueuedTrack: snapshot.hasQueuedTrack,
+            hasRememberedTrack: snapshot.hasRememberedTrack,
+            queueNowPlayingIndex: snapshot.queueNowPlayingIndex,
+            queueTrackId: snapshot.queueTrackId,
+            rememberedTrackId: snapshot.rememberedTrackId,
+            rememberedTrackUrl: snapshot.rememberedTrackUrl
+          }
+        });
+        return;
       }
-      this.host.setMusicPhase(session, "playing");
+      noteMusicResumeRequest(session, "music_resumed_after_wake_word");
       this.host.musicPlayer?.resume?.();
-      this.host.haltSessionOutputForMusicPlayback(session, "music_resumed_after_wake_word");
     };
 
     const timer = setTimeout(attemptResume, normalizedDelayMs);
