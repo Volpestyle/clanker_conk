@@ -4,9 +4,9 @@ import { FullPromptPreview } from "../FullPromptPreview";
 
 export function PromptGuidanceSettingsSection({ id, form, set, onResetPromptGuidance }) {
   return (
-    <SettingsSection id={id} title="Prompt Guidance">
+    <SettingsSection id={id} title="Prompt Lab">
       <p>
-        Identity and persona live in Core Behavior. These fields tune reusable prompt guidance and system policy lines.
+        Low-level prompt overrides. Identity and persona live in Behavior. These fields tune reusable system policy lines and are injected directly into the prompt template.
       </p>
       <p>
         Template variable supported in these fields: <code>{"{{botName}}"}</code>.

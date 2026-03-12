@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { api } from "../api";
 import type { VoiceEvent } from "./useVoiceSSE";
 
-export type HistorySession = {
+type HistorySession = {
   sessionId: string;
   guildId: string;
   mode: string;

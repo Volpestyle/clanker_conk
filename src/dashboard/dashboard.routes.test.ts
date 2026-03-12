@@ -1164,11 +1164,11 @@ test("dashboard preset defaults preview settings without mutating saved state", 
     const json = await response.json();
     assert.equal(store.getSettings().agentStack.preset, before.agentStack.preset);
     assert.equal(bot.appliedSettings.length, 0);
-    assert.equal(json._resolved.agentStack.voiceAdmissionPolicy.mode, "generation_decides");
-    assert.equal(json.agentStack.preset, "claude_oauth");
-    assert.equal(json._resolved.voiceAdmissionClassifierBinding, null);
-    assert.equal(json._resolved.voiceGenerationBinding.provider, "claude-oauth");
-    assert.equal(json._resolved.voiceGenerationBinding.model, "claude-sonnet-4-6");
+    assert.equal(json.bindings.agentStack.voiceAdmissionPolicy.mode, "generation_decides");
+    assert.equal(json.effective.agentStack.preset, "claude_oauth");
+    assert.equal(json.bindings.voiceAdmissionClassifierBinding, null);
+    assert.equal(json.bindings.voiceGenerationBinding.provider, "claude-oauth");
+    assert.equal(json.bindings.voiceGenerationBinding.model, "claude-sonnet-4-6");
 
     const openAiApiResponse = await fetch(`${baseUrl}/api/settings/preset-defaults`, {
       method: "POST",
@@ -1182,9 +1182,9 @@ test("dashboard preset defaults preview settings without mutating saved state", 
 
     assert.equal(openAiApiResponse.status, 200);
     const openAiApiJson = await openAiApiResponse.json();
-    assert.equal(openAiApiJson.agentStack.preset, "openai_api");
-    assert.equal(openAiApiJson._resolved.voiceGenerationBinding.provider, "openai");
-    assert.equal(openAiApiJson._resolved.voiceGenerationBinding.model, "gpt-5-mini");
+    assert.equal(openAiApiJson.intent.agentStack.preset, "openai_api");
+    assert.equal(openAiApiJson.bindings.voiceGenerationBinding.provider, "openai");
+    assert.equal(openAiApiJson.bindings.voiceGenerationBinding.model, "gpt-5-mini");
   });
 
   if (result?.skipped) {
@@ -1197,13 +1197,13 @@ test("dashboard fresh settings default claude_oauth brain to claude sonnet", asy
     const response = await fetch(`${baseUrl}/api/settings`);
     assert.equal(response.status, 200);
     const json = await response.json();
-    assert.equal(json.agentStack.preset, "claude_oauth");
-    assert.equal(json._resolved.voiceAdmissionClassifierBinding, null);
-    assert.equal(json._resolved.voiceGenerationBinding.provider, "claude-oauth");
-    assert.equal(json._resolved.voiceGenerationBinding.model, "claude-sonnet-4-6");
-    assert.equal(json.agentStack.runtimeConfig.voice.generation.mode, "dedicated_model");
-    assert.equal(json.agentStack.runtimeConfig.voice.generation.model.provider, "claude-oauth");
-    assert.equal(json.agentStack.runtimeConfig.voice.generation.model.model, "claude-sonnet-4-6");
+    assert.equal(json.effective.agentStack.preset, "claude_oauth");
+    assert.equal(json.bindings.voiceAdmissionClassifierBinding, null);
+    assert.equal(json.bindings.voiceGenerationBinding.provider, "claude-oauth");
+    assert.equal(json.bindings.voiceGenerationBinding.model, "claude-sonnet-4-6");
+    assert.equal(json.effective.agentStack.runtimeConfig.voice.generation.mode, "dedicated_model");
+    assert.equal(json.effective.agentStack.runtimeConfig.voice.generation.model.provider, "claude-oauth");
+    assert.equal(json.effective.agentStack.runtimeConfig.voice.generation.model.model, "claude-sonnet-4-6");
   });
 
   if (result?.skipped) {
@@ -1235,6 +1235,7 @@ test("dashboard settings save clears the memory LLM override when inherit is sel
         _meta: {
           expectedUpdatedAt
         },
+        ...beforeJson.intent,
         memoryLlm: {}
       })
     });
@@ -1242,9 +1243,10 @@ test("dashboard settings save clears the memory LLM override when inherit is sel
     assert.equal(response.status, 200);
     const json = await response.json();
     assert.deepEqual(store.getSettings().memoryLlm, {});
-    assert.deepEqual(json.memoryLlm, {});
-    assert.equal(json._resolved?.memoryBinding?.provider, json._resolved?.orchestrator?.provider);
-    assert.equal(json._resolved?.memoryBinding?.model, json._resolved?.orchestrator?.model);
+    assert.equal(json.intent.memoryLlm, undefined);
+    assert.deepEqual(json.effective.memoryLlm, {});
+    assert.equal(json.bindings.memoryBinding.provider, json.bindings.orchestrator.provider);
+    assert.equal(json.bindings.memoryBinding.model, json.bindings.orchestrator.model);
   });
 
   if (result?.skipped) {
@@ -1272,22 +1274,25 @@ test("dashboard settings save reports runtime apply failure without rolling back
         headers: {
           "content-type": "application/json"
         },
-        body: JSON.stringify({
-          _meta: {
-            expectedUpdatedAt
-          },
-          identity: {
-            botName: "patched bot"
-          }
-        })
-      });
+      body: JSON.stringify({
+        _meta: {
+          expectedUpdatedAt
+        },
+        ...beforeJson.intent,
+        identity: {
+          ...beforeJson.intent?.identity,
+          botName: "patched bot"
+        }
+      })
+    });
 
-      assert.equal(response.status, 200);
-      const json = await response.json();
-      assert.equal(json.identity?.botName, "patched bot");
-      assert.equal(json._meta?.saveAppliedToRuntime, false);
-      assert.equal(json._meta?.saveApplyError, "voice reconcile failed");
-      assert.equal(store.getSettings().identity.botName, "patched bot");
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.intent.identity?.botName, "patched bot");
+    assert.equal(json.effective.identity?.botName, "patched bot");
+    assert.equal(json._meta?.saveAppliedToRuntime, false);
+    assert.equal(json._meta?.saveApplyError, "voice reconcile failed");
+    assert.equal(store.getSettings().identity.botName, "patched bot");
     }
   );
 
@@ -1343,7 +1348,7 @@ test("dashboard settings save rejects requests from outdated clients that omit s
     assert.equal(response.status, 409);
     const json = await response.json();
     assert.equal(json.error, "settings_version_required");
-    assert.equal(json._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-5");
+    assert.equal(json.bindings.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-5");
     assert.equal(
       store.getSettings().agentStack.overrides?.voiceAdmissionClassifier?.model?.model,
       "claude-sonnet-4-5"
@@ -1383,8 +1388,11 @@ test("dashboard settings save rejects stale form snapshots instead of overwritin
         _meta: {
           expectedUpdatedAt: initialUpdatedAt
         },
+        ...initialJson.intent,
         agentStack: {
+          ...initialJson.intent?.agentStack,
           overrides: {
+            ...initialJson.intent?.agentStack?.overrides,
             voiceAdmissionClassifier: {
               mode: "dedicated_model",
               model: {
@@ -1399,7 +1407,7 @@ test("dashboard settings save rejects stale form snapshots instead of overwritin
 
     assert.equal(firstSaveResponse.status, 200);
     const firstSaveJson = await firstSaveResponse.json();
-    assert.equal(firstSaveJson._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-5");
+    assert.equal(firstSaveJson.bindings.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-5");
     const firstSaveUpdatedAt = String(firstSaveJson._meta?.updatedAt || "");
     assert.equal(Boolean(firstSaveUpdatedAt), true);
     assert.notEqual(firstSaveUpdatedAt, initialUpdatedAt);
@@ -1430,7 +1438,7 @@ test("dashboard settings save rejects stale form snapshots instead of overwritin
     assert.equal(staleSaveResponse.status, 409);
     const staleSaveJson = await staleSaveResponse.json();
     assert.equal(staleSaveJson.error, "settings_conflict");
-    assert.equal(staleSaveJson._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-5");
+    assert.equal(staleSaveJson.bindings.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-5");
     assert.equal(
       store.getSettings().agentStack.overrides?.voiceAdmissionClassifier?.model?.model,
       "claude-sonnet-4-5"
@@ -1460,8 +1468,8 @@ test("dashboard settings expose realtime provider selection alongside file_wav o
     const response = await fetch(`${baseUrl}/api/settings`);
     assert.equal(response.status, 200);
     const json = await response.json();
-    assert.equal(json._resolved?.voiceProvider, "openai");
-    assert.equal(json.agentStack?.runtimeConfig?.voice?.openaiRealtime?.transcriptionMethod, "file_wav");
+    assert.equal(json.bindings.voiceProvider, "openai");
+    assert.equal(json.effective.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
   });
 
   if (result?.skipped) {
@@ -1481,9 +1489,9 @@ test("dashboard settings expose provider auth from OAuth-backed app config", asy
       const response = await fetch(`${baseUrl}/api/settings`);
       assert.equal(response.status, 200);
       const json = await response.json();
-      assert.equal(json._resolved?.providerAuth?.claude_code, true);
-      assert.equal(json._resolved?.providerAuth?.codex_cli, true);
-      assert.equal(json._resolved?.providerAuth?.codex, true);
+      assert.equal(json.bindings.providerAuth.claude_code, true);
+      assert.equal(json.bindings.providerAuth.codex_cli, true);
+      assert.equal(json.bindings.providerAuth.codex, true);
     }
   );
 

@@ -27,7 +27,7 @@ export function normalizeInitiativeSection(section: Settings["initiative"]): Set
       minMinutesBetweenPosts: normalizeInt(
         text.minMinutesBetweenPosts,
         DEFAULT_SETTINGS.initiative.text.minMinutesBetweenPosts,
-        5,
+        1,
         24 * 60
       ),
       maxPostsPerDay: normalizeInt(

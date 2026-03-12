@@ -1,6 +1,7 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { ChannelChecklist } from "../ChannelChecklist";
+import { UserIdTagInput } from "../UserIdTagInput";
 
 export function ChannelsPermissionsSettingsSection({ id, form, set }) {
   return (
@@ -30,16 +31,13 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
         channelType="text"
       />
 
-      <label htmlFor="blocked-users">Blocked user IDs (text, optional)</label>
-      <textarea
+      <UserIdTagInput
         id="blocked-users"
-        rows={3}
+        label="Blocked user IDs (text)"
+        hint="Messages from these users will be ignored for text replies and reactions."
         value={form.blockedUsers}
         onChange={set("blockedUsers")}
       />
-      <p className="settings-hint">
-        Comma or newline separated. Messages from these users will be ignored for text replies and reactions.
-      </p>
 
       <h4>Voice channels & users</h4>
       <ChannelChecklist
@@ -58,16 +56,13 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
         channelType="voice"
       />
 
-      <label htmlFor="voice-blocked-users">Blocked voice user IDs (optional)</label>
-      <textarea
+      <UserIdTagInput
         id="voice-blocked-users"
-        rows={3}
+        label="Blocked voice user IDs"
+        hint="These users cannot trigger or interact with voice mode."
         value={form.voiceBlockedUserIds}
         onChange={set("voiceBlockedUserIds")}
       />
-      <p className="settings-hint">
-        Comma or newline separated. These users cannot trigger or interact with voice mode.
-      </p>
     </SettingsSection>
   );
 }

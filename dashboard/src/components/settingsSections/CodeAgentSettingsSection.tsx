@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { UserIdTagInput } from "../UserIdTagInput";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
 
 function WorkerAuthBadge({ worker, form }: { worker: string; form: Record<string, unknown> }) {
@@ -37,21 +38,18 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
 
       {form.codeAgentEnabled && (
         <>
-          <div className="field">
-            <label htmlFor="code-agent-allowed-users">Allowed user IDs (one per line)</label>
-            <textarea
-              id="code-agent-allowed-users"
-              rows={3}
-              value={form.codeAgentAllowedUserIds}
-              onChange={set("codeAgentAllowedUserIds")}
-              placeholder="Discord user IDs that can trigger code_task"
-            />
-            {validationError && (
-              <p className="status-msg error" role="status">
-                {validationError}
-              </p>
-            )}
-          </div>
+          <UserIdTagInput
+            id="code-agent-allowed-users"
+            label="Allowed user IDs"
+            hint="Discord user IDs that can trigger code_task."
+            value={form.codeAgentAllowedUserIds}
+            onChange={set("codeAgentAllowedUserIds")}
+          />
+          {validationError && (
+            <p className="status-msg error" role="status">
+              {validationError}
+            </p>
+          )}
 
           <div className="split">
             <div>

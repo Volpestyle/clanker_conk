@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-export type VoiceState = {
+type VoiceState = {
   activeCount: number;
   sessions: VoiceSession[];
 };
@@ -343,7 +343,7 @@ export type VoiceEvent = {
   [key: string]: unknown;
 };
 
-export type SSEStatus = "connecting" | "open" | "closed";
+type SSEStatus = "connecting" | "open" | "closed";
 
 const MAX_EVENTS = 200;
 const RECONNECT_DELAY_MS = 3_000;

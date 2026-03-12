@@ -77,21 +77,38 @@ function formatProviderModelLabel(
   return fallback;
 }
 
-function PipelineFlowIndicator({ stages }: { stages: PipelineStage[] }) {
+function PipelineFlowIndicator({
+  stages,
+  parallel
+}: {
+  stages: PipelineStage[];
+  parallel?: { label: string; spanFrom: string; spanTo: string }[];
+}) {
   return (
-    <div className="vps-pipeline-flow">
-      {stages.map((stage, i) => (
-        <React.Fragment key={stage.label}>
-          {i > 0 && <span className="vps-stage-arrow">&rarr;</span>}
-          <span
-            className={`vps-stage-pill ${
-              stage.active ? "vps-stage-pill-active" : "vps-stage-pill-bypassed"
-            }`}
-          >
-            {stage.label}
-          </span>
-        </React.Fragment>
-      ))}
+    <div className="vps-pipeline-wrap">
+      <div className="vps-pipeline-flow">
+        {stages.map((stage, i) => (
+          <React.Fragment key={stage.label}>
+            {i > 0 && <span className="vps-stage-arrow">&rarr;</span>}
+            <span
+              className={`vps-stage-pill ${
+                stage.active ? "vps-stage-pill-active" : "vps-stage-pill-bypassed"
+              }`}
+            >
+              {stage.label}
+            </span>
+          </React.Fragment>
+        ))}
+      </div>
+      {parallel && parallel.length > 0 && (
+        <div className="vps-parallel-row">
+          {parallel.map((p) => (
+            <span key={p.label} className="vps-parallel-pill">
+              &#x21BA; {p.label}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -118,6 +135,28 @@ function StagePanel({
       </div>
       <div className="vps-stage-body">{children}</div>
     </div>
+  );
+}
+
+/* ── Collapsible voice subpanel ── */
+
+function VoiceSubpanel({
+  label,
+  defaultOpen = false,
+  children
+}: {
+  label: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="voice-subpanel" open={defaultOpen || undefined}>
+      <summary className="voice-subpanel-summary">
+        <span className="voice-subpanel-arrow">&#x25B8;</span>
+        <span className="voice-subpanel-label">{label}</span>
+      </summary>
+      <div className="voice-subpanel-body">{children}</div>
+    </details>
   );
 }
 
@@ -241,7 +280,6 @@ export function VoiceModeSettingsSection({
     ? [
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
-        { label: "Interrupt", active: true },
         { label: "Admission Gate", active: true },
         { label: "Realtime Model", active: true },
         { label: "Audio Out", active: true }
@@ -249,12 +287,14 @@ export function VoiceModeSettingsSection({
     : [
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
-        { label: "Interrupt", active: true },
         { label: "Admission Gate", active: true },
         { label: "Text Brain", active: true },
         { label: isApiTts ? "TTS API" : "Realtime TTS", active: true },
         { label: "Audio Out", active: true }
       ];
+  const pipelineParallel = isNativePath
+    ? undefined
+    : [{ label: "Interrupt Classifier (monitors during output)", spanFrom: "Audio Out", spanTo: "Audio Out" }];
 
   return (
     <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
@@ -266,6 +306,7 @@ export function VoiceModeSettingsSection({
       </div>
 
       <Collapse open={showVoiceSettings}>
+        <VoiceSubpanel label="Overview" defaultOpen>
           {/* ── Top: Runtime + Reply Path ── */}
           <label htmlFor="voice-mode">Voice runtime mode</label>
           <select id="voice-mode" value={form.voiceProvider} onChange={set("voiceProvider")}>
@@ -315,7 +356,7 @@ export function VoiceModeSettingsSection({
               </div>
 
               {/* ── Pipeline Flow Indicator ── */}
-              <PipelineFlowIndicator stages={pipelineStages} />
+              <PipelineFlowIndicator stages={pipelineStages} parallel={pipelineParallel} />
 
               {/* ── TTS Mode ── */}
               {isBrainPath && (
@@ -449,6 +490,9 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+        </VoiceSubpanel>
+
+        <VoiceSubpanel label="Input" defaultOpen>
           {/* ── Stage 1: ASR ── */}
           {isRealtimeMode && (isBridgePath || isBrainPath) && (
             <StagePanel number={1} label="ASR" pathTag="Bridge / Brain">
@@ -599,6 +643,9 @@ export function VoiceModeSettingsSection({
             </StagePanel>
           )}
 
+        </VoiceSubpanel>
+
+        <VoiceSubpanel label="Reply Policy" defaultOpen>
           {/* ── Reply admission / classifier ── */}
           {admissionStageVisible && (
             <StagePanel
@@ -823,6 +870,9 @@ export function VoiceModeSettingsSection({
             Current interrupt binding: {formatProviderModelLabel(voiceInterruptProvider, voiceInterruptModel, "auto")}
           </p>
 
+        </VoiceSubpanel>
+
+        <VoiceSubpanel label="Output" defaultOpen>
           {/* ── Brain (brain path only) ── */}
           {usesBrainGeneration && (
             <StagePanel number={brainStageNumber} label="Brain" pathTag="Brain">
@@ -1132,6 +1182,9 @@ export function VoiceModeSettingsSection({
 
           </StagePanel>
 
+        </VoiceSubpanel>
+
+        <VoiceSubpanel label="Limits">
           {/* ── Session ── */}
           <h4>Session</h4>
           <div className="split">
@@ -1271,6 +1324,9 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+        </VoiceSubpanel>
+
+        <VoiceSubpanel label="Screen Share">
           {/* ── Stream Watch ── */}
           <h4>Stream Watch</h4>
           <div className="toggles">
@@ -1478,6 +1534,9 @@ export function VoiceModeSettingsSection({
             </details>
           )}
 
+        </VoiceSubpanel>
+
+        <VoiceSubpanel label="Soundboard">
           {/* ── Soundboard ── */}
           <div className="toggles">
             <label>
@@ -1532,6 +1591,7 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+        </VoiceSubpanel>
       </Collapse>
     </SettingsSection>
   );

@@ -3,6 +3,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { clamp, nowIso } from "../utils.ts";
 import { normalizeSettings } from "./settingsNormalization.ts";
+import { minimizeSettingsIntent } from "../settings/settingsIntent.ts";
 import {
   rewriteRuntimeSettingsRow,
   getSettings,
@@ -33,16 +34,16 @@ import { createAutomation, getAutomationById, countAutomations, listAutomations,
 import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, deleteMemoryFactsForGuild, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding } from "./storeMemory.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
-export const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
+const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
 export const ACTION_LOG_RETENTION_DAYS_MIN = 1;
 export const ACTION_LOG_RETENTION_DAYS_MAX = 3650;
-export const ACTION_LOG_MAX_ROWS_DEFAULT = 120_000;
-export const ACTION_LOG_MAX_ROWS_MIN = 1000;
+const ACTION_LOG_MAX_ROWS_DEFAULT = 120_000;
+const ACTION_LOG_MAX_ROWS_MIN = 1000;
 export const ACTION_LOG_MAX_ROWS_RUNTIME_MIN = 1;
 export const ACTION_LOG_MAX_ROWS_MAX = 5_000_000;
-export const ACTION_LOG_PRUNE_EVERY_WRITES_DEFAULT = 250;
-export const ACTION_LOG_PRUNE_EVERY_WRITES_MIN = 1;
-export const ACTION_LOG_PRUNE_EVERY_WRITES_MAX = 10_000;
+const ACTION_LOG_PRUNE_EVERY_WRITES_DEFAULT = 250;
+const ACTION_LOG_PRUNE_EVERY_WRITES_MIN = 1;
+const ACTION_LOG_PRUNE_EVERY_WRITES_MAX = 10_000;
 
 function resolveEnvBoundedInt(rawValue, fallback, min, max) {
   const parsed = Math.floor(Number(rawValue));
@@ -234,7 +235,7 @@ export class Store {
     `);
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
-      const defaultSettings = normalizeSettings({});
+      const defaultSettings = minimizeSettingsIntent({});
       this.db
         .prepare("INSERT INTO settings(key, value, updated_at) VALUES(?, ?, ?)")
         .run(SETTINGS_KEY, JSON.stringify(defaultSettings), nowIso());

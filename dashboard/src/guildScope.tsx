@@ -16,7 +16,7 @@ const GUILD_STORAGE_KEY = "dashboard_last_guild_id";
 
 const DashboardGuildScopeContext = createContext<DashboardGuildScopeValue | null>(null);
 
-export function getStoredDashboardGuildId(): string {
+function getStoredDashboardGuildId(): string {
   try {
     return localStorage.getItem(GUILD_STORAGE_KEY) || "";
   } catch {
@@ -24,7 +24,7 @@ export function getStoredDashboardGuildId(): string {
   }
 }
 
-export function saveStoredDashboardGuildId(guildId: string) {
+function saveStoredDashboardGuildId(guildId: string) {
   try {
     const normalizedGuildId = String(guildId || "").trim();
     if (normalizedGuildId) {

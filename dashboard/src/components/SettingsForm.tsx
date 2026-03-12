@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { api } from "../api";
 import {
   GEMINI_REALTIME_MODEL_OPTIONS,
@@ -21,11 +21,11 @@ import {
 import { useActiveSection } from "../hooks/useActiveSection";
 import { AGENT_STACK_PRESET_OPTIONS } from "../../../src/settings/agentStackCatalog.ts";
 import { SettingsSection } from "./SettingsSection";
+import { EffectiveRuntimeSummary } from "./EffectiveRuntimeSummary";
 import { CoreBehaviorSettingsSection } from "./settingsSections/CoreBehaviorSettingsSection";
 import { PromptGuidanceSettingsSection } from "./settingsSections/PromptGuidanceSettingsSection";
 import { LlmConfigurationSettingsSection } from "./settingsSections/LlmConfigurationSettingsSection";
-import { WebSearchSettingsSection } from "./settingsSections/WebSearchSettingsSection";
-import { BrowserSettingsSection } from "./settingsSections/BrowserSettingsSection";
+import { ResearchBrowsingSettingsSection } from "./settingsSections/ResearchBrowsingSettingsSection";
 import { CodeAgentSettingsSection } from "./settingsSections/CodeAgentSettingsSection";
 import { VisionSettingsSection } from "./settingsSections/VisionSettingsSection";
 import { VideoContextSettingsSection } from "./settingsSections/VideoContextSettingsSection";
@@ -35,6 +35,90 @@ import { StartupCatchupSettingsSection } from "./settingsSections/StartupCatchup
 import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSection";
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
 import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
+
+const BEHAVIOR_FIELDS = new Set([
+  "botName", "botNameAliases", "personaFlavor", "personaHardLimits",
+  "textAmbientReplyEagerness", "responseWindowEagerness", "textInitiativeEagerness",
+  "reactivity", "allowReplies", "allowUnsolicitedReplies", "allowReactions",
+  "memoryEnabled", "automationsEnabled", "textInitiativeEnabled",
+  "textInitiativeMinMinutesBetweenPosts", "textInitiativeMaxPostsPerDay",
+  "textInitiativeLookbackMessages", "textInitiativeMaxToolSteps",
+  "textInitiativeMaxToolCalls", "textInitiativeAllowActiveCuriosity"
+]);
+
+const PERMISSIONS_FIELDS = new Set([
+  "maxMessages", "maxReactions", "minGap",
+  "replyChannels", "allowedChannels", "blockedChannels", "blockedUsers",
+  "catchupEnabled", "catchupLookbackHours", "catchupMaxMessages", "catchupMaxReplies"
+]);
+
+const BEHAVIOR_PROMPT_FIELDS = new Set([
+  "promptTextGuidance", "promptVoiceGuidance", "promptVoiceOperationalGuidance",
+  "promptCapabilityHonestyLine", "promptImpossibleActionLine"
+]);
+
+function getFieldNavSection(key: string): string {
+  if (BEHAVIOR_FIELDS.has(key)) return "sec-behavior";
+  if (BEHAVIOR_PROMPT_FIELDS.has(key)) return "sec-behavior";
+  if (PERMISSIONS_FIELDS.has(key)) return "sec-perms";
+  if (key.startsWith("voice")) return "sec-voice";
+  if (key.startsWith("webSearch") || key.startsWith("browser")) return "sec-research";
+  if (key.startsWith("vision") || key.startsWith("videoContext") || key.startsWith("discovery") || key.startsWith("replyImage") || key.startsWith("replyVideo") || key === "maxImagesPerDay" || key === "maxVideosPerDay" || key === "maxGifsPerDay") return "sec-media";
+  return "sec-advanced";
+}
+
+const SECTION_LABELS: Record<string, string> = {
+  "sec-behavior": "Behavior",
+  "sec-voice": "Voice",
+  "sec-research": "Research",
+  "sec-media": "Media",
+  "sec-perms": "Permissions",
+  "sec-advanced": "Advanced"
+};
+
+interface SearchEntry {
+  label: string;
+  scrollTo: string;
+  navSection: string;
+  keywords: string;
+}
+
+const SEARCH_INDEX: SearchEntry[] = [
+  { label: "Behavior", scrollTo: "sec-behavior", navSection: "sec-behavior", keywords: "bot name persona aliases eagerness reactivity reactions memory automations ambient text initiative" },
+  { label: "Voice Mode", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "voice vc call audio" },
+  { label: "Voice Overview", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "voice provider reply path tts streaming pipeline openai xai gemini elevenlabs" },
+  { label: "Voice Input", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "asr transcription language whisper speech recognition" },
+  { label: "Voice Reply Policy", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "admission gate classifier reply decision eagerness command only interrupts music brain" },
+  { label: "Voice Output", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "generation tts temperature tokens voice output brain" },
+  { label: "Voice Limits", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "session minutes inactivity max sessions concurrent" },
+  { label: "Screen Share", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "screen share stream watch frames vision" },
+  { label: "Soundboard", scrollTo: "sec-voice", navSection: "sec-voice", keywords: "soundboard sounds external" },
+  { label: "Research & Browsing", scrollTo: "sec-research", navSection: "sec-research", keywords: "web search scrape browse browser tools" },
+  { label: "Vision", scrollTo: "sec-vision", navSection: "sec-media", keywords: "vision caption image" },
+  { label: "Video Context", scrollTo: "sec-video", navSection: "sec-media", keywords: "video transcript keyframe asr" },
+  { label: "Initiative Feed & Media", scrollTo: "sec-discovery", navSection: "sec-media", keywords: "discovery feed image generation video gif" },
+  { label: "Channels & Permissions", scrollTo: "sec-channels", navSection: "sec-perms", keywords: "channels allowed blocked users permissions reply" },
+  { label: "Rate Limits", scrollTo: "sec-rate", navSection: "sec-perms", keywords: "rate limit messages reactions per hour gap" },
+  { label: "Startup Catch-up", scrollTo: "sec-startup", navSection: "sec-perms", keywords: "startup catchup lookback" },
+  { label: "Stack Preset", scrollTo: "sec-stack", navSection: "sec-advanced", keywords: "preset stack defaults agent" },
+  { label: "Prompt Lab", scrollTo: "sec-prompts", navSection: "sec-advanced", keywords: "prompt guidance capability honesty impossible action memory skip text voice media" },
+  { label: "Text LLM", scrollTo: "sec-llm", navSection: "sec-advanced", keywords: "llm provider model temperature tokens followup" },
+  { label: "Code Agent", scrollTo: "sec-code-agent", navSection: "sec-advanced", keywords: "code agent codex claude dev team" },
+  { label: "Sub-Agent Orchestration", scrollTo: "sec-orchestration", navSection: "sec-advanced", keywords: "orchestration sub agent session" }
+];
+
+function buildImpactSummary(dirty: Set<string>): string {
+  if (dirty.size === 0) return "";
+  const labels = Array.from(dirty)
+    .map((id) => SECTION_LABELS[id])
+    .filter(Boolean);
+  if (labels.length === 0) return "";
+  const changed = labels.join(", ");
+  const voiceAffected = dirty.has("sec-voice");
+  return voiceAffected
+    ? `${changed} changed. Save and apply to update active voice sessions.`
+    : `${changed} changed. Save to apply.`;
+}
 
 export default function SettingsForm({
   settings,
@@ -87,42 +171,85 @@ export default function SettingsForm({
     setPresetStatus({ text: "", type: "" });
   }, [settings]);
 
+  const [sidebarSearch, setSidebarSearch] = useState("");
+  const [searchHighlight, setSearchHighlight] = useState(0);
+  const searchResults = useMemo(() => {
+    const q = sidebarSearch.trim().toLowerCase();
+    if (!q) return [];
+    return SEARCH_INDEX.filter(
+      (entry) => entry.label.toLowerCase().includes(q) || entry.keywords.includes(q)
+    );
+  }, [sidebarSearch]);
+
   const showAdvancedStackSections = effectiveForm.stackAdvancedOverridesEnabled;
 
-  const sections = useMemo(() => {
-    const items = [
-      { id: "sec-core", label: "Identity" },
-      { id: "sec-prompts", label: "Prompting" },
-      { id: "sec-stack", label: "Stack Preset" },
-      { id: "sec-vision", label: "Vision" },
-      { id: "sec-video", label: "Video Context" },
-      { id: "sec-voice", label: "Voice" },
-      { id: "sec-rate", label: "Rate Limits" },
-      { id: "sec-startup", label: "Startup" },
-      { id: "sec-discovery", label: "Feed & Media" },
-      { id: "sec-channels", label: "Channels" }
-    ];
-    if (showAdvancedStackSections) {
-      items.splice(3, 0,
-        { id: "sec-llm", label: "Advanced Stack" },
-        { id: "sec-search", label: "Research Runtime" },
-        { id: "sec-browser", label: "Browser Runtime" },
-        { id: "sec-code-agent", label: "Dev Team" },
-        { id: "sec-orchestration", label: "Sessions" }
-      );
-    }
-    return items;
-  }, [showAdvancedStackSections]);
+  const sections = useMemo(() => [
+    { id: "sec-behavior", label: "Behavior" },
+    { id: "sec-voice", label: "Voice" },
+    { id: "sec-research", label: "Research" },
+    { id: "sec-media", label: "Media" },
+    { id: "sec-perms", label: "Permissions" },
+    { id: "sec-advanced", label: "Advanced" }
+  ], []);
 
   const sectionIds = useMemo(() => sections.map((section) => section.id), [sections]);
 
   const { activeId: activeSection, setClickedId } = useActiveSection(sectionIds);
+
+  const handleSearchSelect = useCallback((entry: SearchEntry) => {
+    setSidebarSearch("");
+    setClickedId(entry.navSection);
+    document.getElementById(entry.scrollTo)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [setClickedId]);
+
+  /* Map validation sectionIds to nav groups for sidebar indicators */
+  const VALIDATION_SECTION_MAP: Record<string, string> = {
+    "sec-core": "sec-behavior",
+    "sec-browser": "sec-research",
+    "sec-search": "sec-research",
+    "sec-rate": "sec-perms",
+    "sec-startup": "sec-perms",
+    "sec-channels": "sec-perms",
+    "sec-llm": "sec-advanced",
+    "sec-code-agent": "sec-advanced",
+    "sec-orchestration": "sec-advanced",
+    "sec-stack": "sec-advanced",
+    "sec-prompts": "sec-advanced",
+    "sec-vision": "sec-media",
+    "sec-video": "sec-media",
+    "sec-discovery": "sec-media"
+  };
+
   const isDirty = useMemo(() => {
     if (!form || !savedFormRef.current) return false;
     return JSON.stringify(form) !== savedFormRef.current;
   }, [form]);
+
+  const sectionDirty = useMemo(() => {
+    const dirty = new Set<string>();
+    if (!form || !savedFormRef.current) return dirty;
+    let saved: Record<string, unknown>;
+    try { saved = JSON.parse(savedFormRef.current); } catch { return dirty; }
+    for (const key of Object.keys(form)) {
+      if (JSON.stringify((form as Record<string, unknown>)[key]) !== JSON.stringify(saved[key])) {
+        dirty.add(getFieldNavSection(key));
+      }
+    }
+    return dirty;
+  }, [form]);
+
   const codeAgentValidationError = useMemo(() => getCodeAgentValidationError(effectiveForm), [effectiveForm]);
   const validationError = useMemo(() => getSettingsValidationError(effectiveForm), [effectiveForm]);
+  const sectionErrors = useMemo(() => {
+    const errors = new Set<string>();
+    if (codeAgentValidationError) errors.add("sec-advanced");
+    if (validationError?.sectionId) {
+      const mapped = VALIDATION_SECTION_MAP[validationError.sectionId] || validationError.sectionId;
+      errors.add(mapped);
+    }
+    return errors;
+  }, [validationError, codeAgentValidationError]);
+
   const saveDisabled = saveBusy || presetLoadBusy || Boolean(saveConflictText) || Boolean(validationError);
   const applySavedDisabled =
     refreshRuntimeBusy || saveBusy || presetLoadBusy || reloadServerSettingsBusy || isDirty || Boolean(saveConflictText);
@@ -435,6 +562,11 @@ export default function SettingsForm({
     }));
   }
 
+  function applyOverlayFields(fields: Record<string, string>) {
+    clearPresetWarning();
+    updateForm((current) => ({ ...current, ...fields }));
+  }
+
   function submit(e) {
     e.preventDefault();
     if (validationError) {
@@ -455,6 +587,47 @@ export default function SettingsForm({
       <h3 className="settings-title">Settings</h3>
       <div className="settings-layout">
         <nav className="settings-sidebar">
+          <div className="sidebar-search-wrap">
+            <input
+              type="text"
+              className="sidebar-search"
+              placeholder="Jump to…"
+              value={sidebarSearch}
+              onChange={(e) => { setSidebarSearch(e.target.value); setSearchHighlight(0); }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") { setSidebarSearch(""); return; }
+                if (searchResults.length === 0) return;
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSearchHighlight((i) => Math.min(i + 1, searchResults.length - 1));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSearchHighlight((i) => Math.max(i - 1, 0));
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleSearchSelect(searchResults[searchHighlight] || searchResults[0]);
+                }
+              }}
+            />
+            {searchResults.length > 0 && (
+              <div className="sidebar-search-results" role="listbox">
+                {searchResults.map((entry, i) => (
+                  <button
+                    key={entry.scrollTo + entry.label}
+                    type="button"
+                    role="option"
+                    aria-selected={i === searchHighlight}
+                    className={`sidebar-search-result${i === searchHighlight ? " highlighted" : ""}`}
+                    onMouseDown={(e) => { e.preventDefault(); handleSearchSelect(entry); }}
+                    onMouseEnter={() => setSearchHighlight(i)}
+                  >
+                    <span className="sidebar-search-result-label">{entry.label}</span>
+                    <span className="sidebar-search-result-section">{SECTION_LABELS[entry.navSection]}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {sections.map((s) => (
             <button
               key={s.id}
@@ -463,128 +636,26 @@ export default function SettingsForm({
               onClick={() => scrollTo(s.id)}
             >
               {s.label}
+              {sectionErrors.has(s.id) && <span className="nav-error-dot" />}
+              {!sectionErrors.has(s.id) && sectionDirty.has(s.id) && <span className="nav-dirty-dot" />}
             </button>
           ))}
         </nav>
 
         <div className="settings-content" style={{ paddingBottom: "60vh" }}>
+          {/* ── Effective Runtime Summary ── */}
+          <EffectiveRuntimeSummary form={effectiveForm} />
+
+          {/* ── Behavior ── */}
           <CoreBehaviorSettingsSection
-            id="sec-core"
+            id="sec-behavior"
             form={form}
             set={set}
             onSanitizeBotNameAliases={sanitizeBotNameAliases}
-          />
-          <PromptGuidanceSettingsSection
-            id="sec-prompts"
-            form={form}
-            set={set}
-            onResetPromptGuidance={resetPromptGuidanceFields}
+            onApplyOverlay={applyOverlayFields}
           />
 
-          <SettingsSection id="sec-stack" title="Stack Preset">
-            <label htmlFor="stack-preset">Preset</label>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")} style={{ flex: 1 }}>
-                {AGENT_STACK_PRESET_OPTIONS.map((preset) => (
-                  <option key={preset.value} value={preset.value}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                style={{
-                  flex: "0 0 auto",
-                  padding: "6px 10px",
-                  whiteSpace: "nowrap",
-                  fontSize: "0.76rem",
-                  fontWeight: 600,
-                  background: "transparent",
-                  color: "var(--text-muted)",
-                  border: "1px solid var(--border)"
-                }}
-                onClick={handlePresetDefaultsClick}
-                disabled={presetLoadBusy}
-                title="Load preset defaults into the draft and save to apply them"
-              >
-                {presetLoadBusy ? "Loading preset…" : "Load preset defaults"}
-              </button>
-            </div>
-            <div className="toggles" style={{ marginTop: 10 }}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={form.stackAdvancedOverridesEnabled}
-                  onChange={set("stackAdvancedOverridesEnabled")}
-                />
-                Customize this preset with advanced stack controls
-              </label>
-            </div>
-            <p className="status-msg" style={{ marginTop: 8 }}>
-              Preset changes update the draft only. Save settings to apply them to the bot.
-            </p>
-            {presetStatus.text && (
-              <p className={`status-msg ${presetStatus.type}`} style={{ marginTop: 8 }}>
-                {presetStatus.text}
-              </p>
-            )}
-          </SettingsSection>
-
-          {showAdvancedStackSections && (
-            <LlmConfigurationSettingsSection
-              id="sec-llm"
-              form={form}
-              set={set}
-              setProvider={setProvider}
-              selectPresetModel={selectPresetModel}
-              providerModelOptions={providerModelOptions}
-              selectedPresetModel={selectedPresetModel}
-              setTextInitiativeProvider={setTextInitiativeProvider}
-              selectTextInitiativePresetModel={selectTextInitiativePresetModel}
-              textInitiativeModelOptions={textInitiativeModelOptions}
-              selectedTextInitiativePresetModel={selectedTextInitiativePresetModel}
-              setReplyFollowupProvider={setReplyFollowupProvider}
-              selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
-              replyFollowupModelOptions={replyFollowupModelOptions}
-              selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
-              setMemoryLlmProvider={setMemoryLlmProvider}
-              selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
-              memoryLlmModelOptions={memoryLlmModelOptions}
-              selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
-            />
-          )}
-          {showAdvancedStackSections && <WebSearchSettingsSection id="sec-search" form={form} set={set} />}
-          {showAdvancedStackSections && (
-            <BrowserSettingsSection
-              id="sec-browser"
-              form={form}
-              set={set}
-              setBrowserLlmProvider={setBrowserLlmProvider}
-              selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
-              browserLlmModelOptions={browserLlmModelOptions}
-              selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
-            />
-          )}
-          {showAdvancedStackSections && (
-            <CodeAgentSettingsSection
-              id="sec-code-agent"
-              form={form}
-              set={set}
-              validationError={codeAgentValidationError}
-            />
-          )}
-          {showAdvancedStackSections && <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />}
-          <VisionSettingsSection
-            id="sec-vision"
-            form={form}
-            set={set}
-            setVisionProvider={setVisionProvider}
-            selectVisionPresetModel={selectVisionPresetModel}
-            visionModelOptions={visionModelOptions}
-            selectedVisionPresetModel={selectedVisionPresetModel}
-          />
-          <VideoContextSettingsSection id="sec-video" form={form} set={set} />
-
+          {/* ── Voice ── */}
           <VoiceModeSettingsSection
             id="sec-voice"
             form={form}
@@ -621,21 +692,140 @@ export default function SettingsForm({
             selectedStreamWatchVisionPresetModel={selectedStreamWatchVisionPresetModel}
           />
 
-          <RateLimitsSettingsSection id="sec-rate" form={form} set={set} />
-          <StartupCatchupSettingsSection id="sec-startup" form={form} set={set} />
-
-          <DiscoverySettingsSection
-            id="sec-discovery"
+          {/* ── Research & Browsing ── */}
+          <ResearchBrowsingSettingsSection
+            id="sec-research"
             form={form}
             set={set}
-            showDiscoveryFeedControls={showDiscoveryFeedControls}
-            showDiscoveryImageControls={showDiscoveryImageControls}
-            showDiscoveryVideoControls={showDiscoveryVideoControls}
-            discoveryImageModelOptions={discoveryImageModelOptions}
-            discoveryVideoModelOptions={discoveryVideoModelOptions}
+            showAdvancedOverrides={showAdvancedStackSections}
+            setBrowserLlmProvider={setBrowserLlmProvider}
+            selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
+            browserLlmModelOptions={browserLlmModelOptions}
+            selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
           />
 
-          <ChannelsPermissionsSettingsSection id="sec-channels" form={form} set={set} />
+          {/* ── Media ── */}
+          <div id="sec-media" className="section-group">
+            <VisionSettingsSection
+              id="sec-vision"
+              form={form}
+              set={set}
+              setVisionProvider={setVisionProvider}
+              selectVisionPresetModel={selectVisionPresetModel}
+              visionModelOptions={visionModelOptions}
+              selectedVisionPresetModel={selectedVisionPresetModel}
+            />
+            <VideoContextSettingsSection id="sec-video" form={form} set={set} />
+            <DiscoverySettingsSection
+              id="sec-discovery"
+              form={form}
+              set={set}
+              showDiscoveryFeedControls={showDiscoveryFeedControls}
+              showDiscoveryImageControls={showDiscoveryImageControls}
+              showDiscoveryVideoControls={showDiscoveryVideoControls}
+              discoveryImageModelOptions={discoveryImageModelOptions}
+              discoveryVideoModelOptions={discoveryVideoModelOptions}
+            />
+          </div>
+
+          {/* ── Permissions ── */}
+          <div id="sec-perms" className="section-group">
+            <ChannelsPermissionsSettingsSection id="sec-channels" form={form} set={set} />
+            <RateLimitsSettingsSection id="sec-rate" form={form} set={set} />
+            <StartupCatchupSettingsSection id="sec-startup" form={form} set={set} />
+          </div>
+
+          {/* ── Advanced ── */}
+          <div id="sec-advanced" className="section-group">
+            <SettingsSection id="sec-stack" title="Stack Preset">
+              <label htmlFor="stack-preset">Preset</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")} style={{ flex: 1 }}>
+                  {AGENT_STACK_PRESET_OPTIONS.map((preset) => (
+                    <option key={preset.value} value={preset.value}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  style={{
+                    flex: "0 0 auto",
+                    padding: "6px 10px",
+                    whiteSpace: "nowrap",
+                    fontSize: "0.76rem",
+                    fontWeight: 600,
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    border: "1px solid var(--border)"
+                  }}
+                  onClick={handlePresetDefaultsClick}
+                  disabled={presetLoadBusy}
+                  title="Load preset defaults into the draft and save to apply them"
+                >
+                  {presetLoadBusy ? "Loading preset\u2026" : "Load preset defaults"}
+                </button>
+              </div>
+              <div className="toggles" style={{ marginTop: 10 }}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={form.stackAdvancedOverridesEnabled}
+                    onChange={set("stackAdvancedOverridesEnabled")}
+                  />
+                  Customize this preset with advanced stack controls
+                </label>
+              </div>
+              <p className="status-msg" style={{ marginTop: 8 }}>
+                Preset changes update the draft only. Save settings to apply them to the bot.
+              </p>
+              {presetStatus.text && (
+                <p className={`status-msg ${presetStatus.type}`} style={{ marginTop: 8 }}>
+                  {presetStatus.text}
+                </p>
+              )}
+            </SettingsSection>
+
+            <PromptGuidanceSettingsSection
+              id="sec-prompts"
+              form={form}
+              set={set}
+              onResetPromptGuidance={resetPromptGuidanceFields}
+            />
+
+            {showAdvancedStackSections && (
+              <LlmConfigurationSettingsSection
+                id="sec-llm"
+                form={form}
+                set={set}
+                setProvider={setProvider}
+                selectPresetModel={selectPresetModel}
+                providerModelOptions={providerModelOptions}
+                selectedPresetModel={selectedPresetModel}
+                setTextInitiativeProvider={setTextInitiativeProvider}
+                selectTextInitiativePresetModel={selectTextInitiativePresetModel}
+                textInitiativeModelOptions={textInitiativeModelOptions}
+                selectedTextInitiativePresetModel={selectedTextInitiativePresetModel}
+                setReplyFollowupProvider={setReplyFollowupProvider}
+                selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
+                replyFollowupModelOptions={replyFollowupModelOptions}
+                selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
+                setMemoryLlmProvider={setMemoryLlmProvider}
+                selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
+                memoryLlmModelOptions={memoryLlmModelOptions}
+                selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
+              />
+            )}
+            {showAdvancedStackSections && (
+              <CodeAgentSettingsSection
+                id="sec-code-agent"
+                form={form}
+                set={set}
+                validationError={codeAgentValidationError}
+              />
+            )}
+            {showAdvancedStackSections && <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />}
+          </div>
         </div>
       </div>
 
@@ -656,7 +846,7 @@ export default function SettingsForm({
               onClick={onReloadServerSettings}
               disabled={reloadServerSettingsBusy || saveBusy || presetLoadBusy}
             >
-              {reloadServerSettingsBusy ? "Reloading latest settings…" : "Reload latest saved settings"}
+              {reloadServerSettingsBusy ? "Reloading latest settings\u2026" : "Reload latest saved settings"}
             </button>
           </div>
         )}
@@ -667,7 +857,7 @@ export default function SettingsForm({
             style={{ marginTop: 0, width: "auto", flex: "1 1 auto", minWidth: 0 }}
             disabled={saveDisabled}
           >
-            {saveBusy ? "Saving…" : "Save settings"}
+            {saveBusy ? "Saving\u2026" : "Save settings"}
             {isDirty && <span className="unsaved-dot" />}
           </button>
           <button
@@ -699,9 +889,14 @@ export default function SettingsForm({
               <polyline points="1 20 1 14 7 14" />
               <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15" />
             </svg>
-            <span>{refreshRuntimeBusy ? "Applying…" : "Apply Saved"}</span>
+            <span>{refreshRuntimeBusy ? "Applying\u2026" : "Apply Saved"}</span>
           </button>
         </div>
+        {isDirty && !saveConflictText && !validationError && (
+          <div className="save-bar-summary">
+            {buildImpactSummary(sectionDirty)}
+          </div>
+        )}
         {validationError && !saveConflictText && (
           <p className="status-msg error" role="status">
             {validationError.message}

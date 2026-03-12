@@ -50,13 +50,13 @@ export type AgentStackPresetDefaults = {
 
 export type AgentStackPresetName = (typeof AGENT_STACK_PRESETS)[number];
 
-export type AgentStackPresetDefinition = AgentStackPresetDefaults & {
+type AgentStackPresetDefinition = AgentStackPresetDefaults & {
   label: string;
   browserFallback?: ModelBinding;
   visionFallback?: ModelBinding;
 };
 
-export const AGENT_STACK_PRESET_DEFINITIONS = {
+const AGENT_STACK_PRESET_DEFINITIONS = {
   claude_oauth: {
     label: "Claude OAuth",
     harness: "internal",
@@ -75,6 +75,10 @@ export const AGENT_STACK_PRESET_DEFINITIONS = {
     voiceAdmissionClassifier: {
       provider: "claude-oauth",
       model: "claude-sonnet-4-6"
+    },
+    voiceInterruptClassifier: {
+      provider: "claude-oauth",
+      model: "claude-haiku-4-5"
     },
     voiceMusicBrain: {
       provider: "claude-oauth",

@@ -12,41 +12,12 @@ import {
   settingsToForm,
   settingsToFormPreserving
 } from "./settingsFormModel.ts";
+import { buildDashboardSettingsEnvelope } from "../../src/settings/dashboardSettingsState.ts";
 import { normalizeSettings } from "../../src/store/settingsNormalization.ts";
-import {
-  getResolvedOrchestratorBinding,
-  getResolvedFollowupBinding,
-  getResolvedMemoryBinding,
-  getResolvedTextInitiativeBinding,
-  getResolvedVisionBinding,
-  getResolvedVoiceInitiativeBinding,
-  getResolvedVoiceAdmissionClassifierBinding,
-  getResolvedVoiceInterruptClassifierBinding,
-  getResolvedVoiceMusicBrainBinding,
-  getResolvedVoiceGenerationBinding,
-  resolveAgentStack
-} from "../../src/settings/agentStack.ts";
-import { resolveVoiceRuntimeSelectionFromMode } from "../../src/settings/voiceDashboardMappings.ts";
+import { resolveAgentStack } from "../../src/settings/agentStack.ts";
 
 function withResolved(settings: unknown) {
-  const s = settings as Record<string, unknown>;
-  return {
-    ...s,
-    _resolved: {
-      agentStack: resolveAgentStack(s),
-      orchestrator: getResolvedOrchestratorBinding(s),
-      followupBinding: getResolvedFollowupBinding(s),
-      memoryBinding: getResolvedMemoryBinding(s),
-      textInitiativeBinding: getResolvedTextInitiativeBinding(s),
-      visionBinding: getResolvedVisionBinding(s),
-      voiceProvider: resolveVoiceRuntimeSelectionFromMode(resolveAgentStack(s).voiceRuntime),
-      voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(s),
-      voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(s),
-      voiceInterruptClassifierBinding: getResolvedVoiceInterruptClassifierBinding(s),
-      voiceMusicBrainBinding: getResolvedVoiceMusicBrainBinding(s),
-      voiceGenerationBinding: getResolvedVoiceGenerationBinding(s)
-    }
-  };
+  return buildDashboardSettingsEnvelope({ intent: settings, effective: settings });
 }
 
 function assertDedicatedExecutionModel(
@@ -64,6 +35,14 @@ function assertDedicatedExecutionModel(
   if (execution.mode !== "dedicated_model") return;
   assert.equal(execution.model?.provider, provider);
   assert.equal(execution.model?.model, model);
+}
+
+function serializeForm(form: ReturnType<typeof settingsToForm>) {
+  const patch = formToSettingsPatch(form);
+  return {
+    patch,
+    effectivePatch: normalizeSettings(patch)
+  };
 }
 
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
@@ -217,7 +196,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.discoveryMaxSourcesPerType = 7;
   form.discoveryMaxMediaPromptChars = 640;
 
-  const patch = formToSettingsPatch(form);
+  const { patch, effectivePatch } = serializeForm(form);
   assert.deepEqual(patch.identity.botNameAliases, ["clank", "conk"]);
   assert.deepEqual(patch.persona.hardLimits, ["no hate", "keep it fun"]);
   assert.deepEqual(patch.permissions.replies.allowedChannelIds, ["2", "3"]);
@@ -230,38 +209,38 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.interaction.followup.toolBudget.maxImageLookupCalls, 1);
   assert.equal(patch.interaction.followup.toolBudget.toolTimeoutMs, 16000);
   assertDedicatedExecutionModel(
-    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
+    effectivePatch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
     "claude-oauth",
     "claude-opus-4-6"
   );
-  assert.equal(patch.agentStack.runtimeConfig.browser.headed, true);
+  assert.equal(effectivePatch.agentStack.runtimeConfig.browser.headed, true);
   assert.equal(patch.automations.enabled, false);
   assertDedicatedExecutionModel(
-    patch.initiative.text.execution,
+    effectivePatch.initiative.text.execution,
     "anthropic",
     "claude-haiku-4-5"
   );
-  assert.equal(patch.initiative.text.minMinutesBetweenPosts, 15);
-  assert.equal(patch.initiative.text.maxPostsPerDay, 6);
-  assert.equal(patch.initiative.text.allowActiveCuriosity, false);
-  assert.equal(patch.initiative.text.maxToolSteps, 2);
-  assert.equal(patch.initiative.text.maxToolCalls, 3);
-  assert.equal(patch.agentStack.runtimeConfig.voice.generation.mode, "inherit_orchestrator");
-  assert.equal(patch.voice.streamWatch.keyframeIntervalMs, 1750);
-  assert.equal(patch.voice.streamWatch.autonomousCommentaryEnabled, false);
-  assert.equal(patch.voice.streamWatch.brainContextEnabled, true);
-  assert.equal(patch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
-  assert.equal(patch.voice.streamWatch.brainContextMaxEntries, 5);
-  assert.equal(patch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
-  assert.equal(patch.voice.conversationPolicy.streaming.enabled, false);
-  assert.equal(patch.voice.conversationPolicy.streaming.eagerFirstChunkChars, 84);
-  assert.equal(patch.voice.conversationPolicy.streaming.maxBufferChars, 340);
-  assert.equal(patch.voice.conversationPolicy.defaultInterruptionMode, "speaker");
-  assert.equal(patch.voice.conversationPolicy.commandOnlyMode, true);
-  assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
-  assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge, false);
-  assert.equal(patch.voice.transcription.languageMode, "fixed");
-  assert.equal(patch.voice.transcription.languageHint, "en-us");
+  assert.equal(effectivePatch.initiative.text.minMinutesBetweenPosts, 15);
+  assert.equal(effectivePatch.initiative.text.maxPostsPerDay, 6);
+  assert.equal(effectivePatch.initiative.text.allowActiveCuriosity, false);
+  assert.equal(effectivePatch.initiative.text.maxToolSteps, 2);
+  assert.equal(effectivePatch.initiative.text.maxToolCalls, 3);
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.generation.mode, "inherit_orchestrator");
+  assert.equal(effectivePatch.voice.streamWatch.keyframeIntervalMs, 1750);
+  assert.equal(effectivePatch.voice.streamWatch.autonomousCommentaryEnabled, false);
+  assert.equal(effectivePatch.voice.streamWatch.brainContextEnabled, true);
+  assert.equal(effectivePatch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
+  assert.equal(effectivePatch.voice.streamWatch.brainContextMaxEntries, 5);
+  assert.equal(effectivePatch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
+  assert.equal(effectivePatch.voice.conversationPolicy.streaming.enabled, false);
+  assert.equal(effectivePatch.voice.conversationPolicy.streaming.eagerFirstChunkChars, 84);
+  assert.equal(effectivePatch.voice.conversationPolicy.streaming.maxBufferChars, 340);
+  assert.equal(effectivePatch.voice.conversationPolicy.defaultInterruptionMode, "speaker");
+  assert.equal(effectivePatch.voice.conversationPolicy.commandOnlyMode, true);
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge, false);
+  assert.equal(effectivePatch.voice.transcription.languageMode, "fixed");
+  assert.equal(effectivePatch.voice.transcription.languageHint, "en-us");
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
   assert.deepEqual(patch.agentStack.overrides.devTeam.roles, {
     design: "claude_code",
@@ -269,13 +248,13 @@ test("settingsFormModel converts settings to form defaults and back to normalize
     review: "claude_code",
     research: "codex"
   });
-  assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
-  assert.equal(patch.initiative.voice.enabled, true);
-  assert.equal(patch.initiative.voice.eagerness, 50);
-  assert.equal(patch.initiative.discovery.sources.reddit, false);
-  assert.equal(patch.initiative.discovery.allowSelfCuration, false);
-  assert.equal(patch.initiative.discovery.maxSourcesPerType, 7);
-  assert.equal(patch.initiative.discovery.maxMediaPromptChars, 640);
+  assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+  assert.equal(effectivePatch.initiative.voice.enabled, true);
+  assert.equal(effectivePatch.initiative.voice.eagerness, 50);
+  assert.equal(effectivePatch.initiative.discovery.sources.reddit, false);
+  assert.equal(effectivePatch.initiative.discovery.allowSelfCuration, false);
+  assert.equal(effectivePatch.initiative.discovery.maxSourcesPerType, 7);
+  assert.equal(effectivePatch.initiative.discovery.maxMediaPromptChars, 640);
 });
 
 test("settingsToForm preserves explicit empty prompt overrides", () => {
@@ -428,8 +407,8 @@ test("settingsFormModel round-trips canonical voice runtime mode", () => {
 
   assert.equal(form.voiceProvider, "openai");
   assert.equal(form.stackAdvancedOverridesEnabled, true);
-  const patch = formToSettingsPatch(form);
-  assert.equal(patch.agentStack.runtimeConfig.voice.runtimeMode, "openai_realtime");
+  const { effectivePatch } = serializeForm(form);
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.runtimeMode, "openai_realtime");
 });
 
 test("settingsFormModel keeps realtime provider selection while preserving file_wav + api TTS overrides", () => {
@@ -462,10 +441,10 @@ test("settingsFormModel keeps realtime provider selection while preserving file_
   assert.equal(form.voiceOpenAiRealtimeTranscriptionMethod, "file_wav");
   assert.equal(form.voiceTtsMode, "api");
   assert.equal(form.voiceApiTtsVoice, "ash");
-  const patch = formToSettingsPatch(form);
-  assert.equal(patch.agentStack.runtimeConfig.voice.runtimeMode, "openai_realtime");
-  assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
-  assert.equal(patch.agentStack.runtimeConfig.voice.openaiAudioApi.ttsVoice, "ash");
+  const { effectivePatch } = serializeForm(form);
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.runtimeMode, "openai_realtime");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiAudioApi.ttsVoice, "ash");
 });
 
 test("settingsFormModel round-trips browser llm provider and model", () => {
@@ -490,9 +469,9 @@ test("settingsFormModel round-trips browser llm provider and model", () => {
   assert.equal(form.browserLlmProvider, "openai");
   assert.equal(form.browserLlmModel, "gpt-5-mini");
 
-  const patch = formToSettingsPatch(form);
+  const { effectivePatch } = serializeForm(form);
   assertDedicatedExecutionModel(
-    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
+    effectivePatch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
     "openai",
     "gpt-5-mini"
   );
@@ -520,9 +499,9 @@ test("settingsFormModel round-trips claude oauth browser llm provider and model"
   assert.equal(form.browserLlmProvider, "claude-oauth");
   assert.equal(form.browserLlmModel, "claude-sonnet-4-6");
 
-  const patch = formToSettingsPatch(form);
+  const { effectivePatch } = serializeForm(form);
   assertDedicatedExecutionModel(
-    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
+    effectivePatch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
     "claude-oauth",
     "claude-sonnet-4-6"
   );
@@ -560,9 +539,8 @@ test("getCodeAgentValidationError requires allowed users when code agent is enab
   assert.equal(getCodeAgentValidationError(form), "");
 });
 
-test("getSettingsValidationError blocks blank advanced numeric inputs", () => {
+test("getSettingsValidationError blocks blank browser numeric inputs even without advanced overrides", () => {
   const form = settingsToForm(withResolved(normalizeSettings({})));
-  form.stackAdvancedOverridesEnabled = true;
   form.browserEnabled = true;
   (form as Record<string, unknown>).browserMaxPerHour = "";
 
@@ -600,10 +578,10 @@ test("settingsFormModel round-trips code agent provider fields", () => {
   assert.equal(form.codeAgentModel, "sonnet");
   assert.equal(form.codeAgentCodexModel, "gpt-5-codex");
 
-  const patch = formToSettingsPatch(form);
+  const { patch, effectivePatch } = serializeForm(form);
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
-  assert.equal(patch.agentStack.runtimeConfig.devTeam.claudeCode.model, "sonnet");
-  assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.claudeCode.model, "sonnet");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
 });
 
 test("settingsFormModel round-trips codex cli code agent fields", () => {
@@ -629,9 +607,9 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
   assert.equal(form.codeAgentProvider, "codex-cli");
   assert.equal(form.codeAgentCodexCliModel, "gpt-5.4");
 
-  const patch = formToSettingsPatch(form);
+  const { patch, effectivePatch } = serializeForm(form);
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex_cli"]);
-  assert.equal(patch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
 });
 
 test("settingsFormModel enables role-selected coding workers even when provider stays auto", () => {
@@ -677,8 +655,9 @@ test("settingsFormModel supports the canonical claude_oauth preset", () => {
   assert.equal(form.voiceGenerationLlmProvider, "claude-oauth");
   assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
 
-  const patch = formToSettingsPatch(form);
-  assert.equal(patch.agentStack.preset, "claude_oauth");
+  const { patch, effectivePatch } = serializeForm(form);
+  assert.equal(patch.agentStack?.preset, undefined);
+  assert.equal(effectivePatch.agentStack.preset, "claude_oauth");
 });
 
 test("settingsFormModel preserves classifier admission defaults for openai_native_realtime", () => {
@@ -697,8 +676,8 @@ test("settingsFormModel preserves classifier admission defaults for openai_nativ
   assert.equal(form.voiceMusicBrainLlmProvider, "openai");
   assert.equal(form.voiceMusicBrainLlmModel, "gpt-5-mini");
 
-  const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.admission.mode, "classifier_gate");
+  const { effectivePatch } = serializeForm(form);
+  assert.equal(effectivePatch.voice.admission.mode, "classifier_gate");
 });
 
 test("settingsFormModel persists dedicated music brain selections", () => {
@@ -712,8 +691,9 @@ test("settingsFormModel persists dedicated music brain selections", () => {
   form.voiceMusicBrainLlmProvider = "anthropic";
   form.voiceMusicBrainLlmModel = "claude-haiku-4-5";
 
-  const patch = formToSettingsPatch(form);
-  assert.deepEqual(patch.agentStack.runtimeConfig.voice.musicBrain, {
+  const { patch, effectivePatch } = serializeForm(form);
+  assert.equal(patch.agentStack.runtimeConfig.voice.musicBrain.mode, "dedicated_model");
+  assert.deepEqual(effectivePatch.agentStack.runtimeConfig.voice.musicBrain, {
     mode: "dedicated_model",
     model: {
       provider: "anthropic",
@@ -731,8 +711,9 @@ test("settingsFormModel persists disabled music brain mode", () => {
 
   form.voiceMusicBrainMode = "disabled";
 
-  const patch = formToSettingsPatch(form);
-  assert.deepEqual(patch.agentStack.runtimeConfig.voice.musicBrain, {
+  const { patch, effectivePatch } = serializeForm(form);
+  assert.equal(patch.agentStack?.runtimeConfig?.voice?.musicBrain, undefined);
+  assert.deepEqual(effectivePatch.agentStack.runtimeConfig.voice.musicBrain, {
     mode: "disabled"
   });
 });
@@ -756,10 +737,10 @@ test("settingsFormModel persists bridge classifier overrides even when advanced 
   form.voiceReplyDecisionLlmProvider = "anthropic";
   form.voiceReplyDecisionLlmModel = "claude-haiku-4-5";
 
-  const patch = formToSettingsPatch(form);
+  const { patch, effectivePatch } = serializeForm(form);
   assert.equal(patch.voice.conversationPolicy.replyPath, "bridge");
   assert.equal(patch.voice.admission.mode, "classifier_gate");
-  assert.deepEqual(patch.agentStack.overrides.voiceAdmissionClassifier, {
+  assert.deepEqual(effectivePatch.agentStack.overrides.voiceAdmissionClassifier, {
     mode: "dedicated_model",
     model: {
       provider: "anthropic",
@@ -788,10 +769,10 @@ test("settingsFormModel preserves optional full-brain classifier admission", () 
   assert.equal(form.voiceReplyDecisionLlmProvider, "claude-oauth");
   assert.equal(form.voiceReplyDecisionLlmModel, "claude-sonnet-4-6");
 
-  const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.conversationPolicy.replyPath, "brain");
-  assert.equal(patch.voice.admission.mode, "classifier_gate");
-  assert.deepEqual(patch.agentStack.overrides.voiceAdmissionClassifier, {
+  const { effectivePatch } = serializeForm(form);
+  assert.equal(effectivePatch.voice.conversationPolicy.replyPath, "brain");
+  assert.equal(effectivePatch.voice.admission.mode, "classifier_gate");
+  assert.deepEqual(effectivePatch.agentStack.overrides.voiceAdmissionClassifier, {
     mode: "dedicated_model",
     model: {
       provider: "claude-oauth",
@@ -828,9 +809,9 @@ test("settingsFormModel persists classifier selections even when they match the 
   form.voiceReplyDecisionLlmProvider = "claude-oauth";
   form.voiceReplyDecisionLlmModel = "claude-sonnet-4-6";
 
-  const patch = formToSettingsPatch(form);
+  const { patch, effectivePatch } = serializeForm(form);
   assert.equal(patch.voice.admission.mode, "classifier_gate");
-  assert.deepEqual(patch.agentStack.overrides.voiceAdmissionClassifier, {
+  assert.deepEqual(effectivePatch.agentStack.overrides.voiceAdmissionClassifier, {
     mode: "dedicated_model",
     model: {
       provider: "claude-oauth",
@@ -845,11 +826,11 @@ test("settingsFormModel uses canonical voice fallbacks when form fields are blan
   form.voiceOperationalMessages = "";
   Reflect.set(form, "voiceReplyDecisionRealtimeAdmissionMode", "");
 
-  const patch = formToSettingsPatch(form);
+  const { effectivePatch } = serializeForm(form);
 
-  assert.equal(patch.voice.conversationPolicy.replyPath, "brain");
-  assert.equal(patch.voice.conversationPolicy.operationalMessages, "minimal");
-  assert.equal(patch.voice.admission.mode, "generation_decides");
+  assert.equal(effectivePatch.voice.conversationPolicy.replyPath, "brain");
+  assert.equal(effectivePatch.voice.conversationPolicy.operationalMessages, "minimal");
+  assert.equal(effectivePatch.voice.admission.mode, "generation_decides");
 });
 
 test("settingsFormModel forces bridge replies onto realtime output", () => {
@@ -866,10 +847,10 @@ test("settingsFormModel forces bridge replies onto realtime output", () => {
   assert.equal(form.voiceTtsMode, "realtime");
 
   form.voiceTtsMode = "api";
-  const patch = formToSettingsPatch(form);
+  const { patch, effectivePatch } = serializeForm(form);
 
   assert.equal(patch.voice.conversationPolicy.replyPath, "bridge");
-  assert.equal(patch.voice.conversationPolicy.ttsMode, "realtime");
+  assert.equal(effectivePatch.voice.conversationPolicy.ttsMode, "realtime");
 });
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
@@ -896,19 +877,19 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   assert.equal(form.voiceElevenLabsRealtimeInputSampleRateHz, 16000);
   assert.equal(form.voiceElevenLabsRealtimeOutputSampleRateHz, 22050);
 
-  const patch = formToSettingsPatch(form);
-  assert.equal(patch.agentStack.runtimeConfig.voice.runtimeMode, "elevenlabs_realtime");
-  assert.equal(patch.agentStack.runtimeConfig.voice.elevenLabsRealtime.agentId, "agent_123");
+  const { effectivePatch } = serializeForm(form);
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.runtimeMode, "elevenlabs_realtime");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.agentId, "agent_123");
   assert.equal(
-    patch.agentStack.runtimeConfig.voice.elevenLabsRealtime.apiBaseUrl,
+    effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.apiBaseUrl,
     "https://api.elevenlabs.io"
   );
   assert.equal(
-    patch.agentStack.runtimeConfig.voice.elevenLabsRealtime.inputSampleRateHz,
+    effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.inputSampleRateHz,
     16000
   );
   assert.equal(
-    patch.agentStack.runtimeConfig.voice.elevenLabsRealtime.outputSampleRateHz,
+    effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.outputSampleRateHz,
     22050
   );
 });
@@ -933,8 +914,9 @@ test("settingsFormModel keeps memory LLM inheriting the main text model by defau
   const form = settingsToForm(withResolved(normalizeSettings({})));
 
   assert.equal(form.memoryLlmInheritTextModel, true);
-  const patch = formToSettingsPatch(form);
-  assert.deepEqual(patch.memoryLlm, {});
+  const { patch, effectivePatch } = serializeForm(form);
+  assert.equal(patch.memoryLlm, undefined);
+  assert.deepEqual(effectivePatch.memoryLlm, {});
 });
 
 test("settingsToFormPreserving keeps user's comma format for aliases on reload", () => {

@@ -4,8 +4,9 @@ import type { Database } from "bun:sqlite";
 import { deepMerge, nowIso } from "../utils.ts";
 import { SETTINGS_KEY } from "./store.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
-import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
+import { DEFAULT_SETTINGS, type SettingsInput } from "../settings/settingsSchema.ts";
 import { normalizeSettings } from "./settingsNormalization.ts";
+import { minimizeSettingsIntent } from "../settings/settingsIntent.ts";
 
 type RuntimeSettings = ReturnType<typeof normalizeSettings>;
 
@@ -20,14 +21,16 @@ interface SettingsValueRow {
   updated_at?: string;
 }
 
-export interface RuntimeSettingsRecord {
+interface RuntimeSettingsRecord {
+  intent: SettingsInput;
   settings: RuntimeSettings;
   updatedAt: string;
 }
 
-export type VersionedSettingsPatchResult =
+type VersionedSettingsPatchResult =
   | {
       ok: true;
+      intent: SettingsInput;
       settings: RuntimeSettings;
       updatedAt: string;
     }
@@ -35,13 +38,13 @@ export type VersionedSettingsPatchResult =
       ok: false;
     } & RuntimeSettingsRecord);
 
-const CANONICAL_DEFAULT_SETTINGS = normalizeSettings({});
+const CANONICAL_DEFAULT_SETTINGS_INTENT = minimizeSettingsIntent({});
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function mergeSettingsPatch(current: RuntimeSettings, patch: unknown): RuntimeSettings {
+function mergeSettingsPatch(current: SettingsInput, patch: unknown): SettingsInput {
   const patchRecord = isRecordLike(patch) ? patch : {};
   const merged = deepMerge(current, patchRecord);
 
@@ -49,19 +52,21 @@ function mergeSettingsPatch(current: RuntimeSettings, patch: unknown): RuntimeSe
     merged.memoryLlm = patchRecord.memoryLlm;
   }
 
-  return normalizeSettings(merged);
+  return minimizeSettingsIntent(merged);
 }
 
 export function rewriteRuntimeSettingsRow(store: SettingsStore, rawValue: string | null | undefined) {
   const parsed = safeJsonParse(rawValue, DEFAULT_SETTINGS);
-  const normalized = normalizeSettings(parsed);
-  const normalizedJson = JSON.stringify(normalized);
-  if (normalizedJson === String(rawValue || "")) return normalized;
+  const intent = minimizeSettingsIntent(parsed);
+  const intentJson = JSON.stringify(intent);
+  if (intentJson === String(rawValue || "")) {
+    return normalizeSettings(intent);
+  }
 
   store.db
     .prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = ?")
-    .run(normalizedJson, nowIso(), SETTINGS_KEY);
-  return normalized;
+    .run(intentJson, nowIso(), SETTINGS_KEY);
+  return normalizeSettings(intent);
 }
 
 export function getSettings(store: SettingsStore) {
@@ -69,7 +74,7 @@ export function getSettings(store: SettingsStore) {
     .prepare<SettingsValueRow, [string]>("SELECT value FROM settings WHERE key = ?")
     .get(SETTINGS_KEY);
   const parsed = safeJsonParse(row?.value, DEFAULT_SETTINGS);
-  return normalizeSettings(parsed);
+  return normalizeSettings(minimizeSettingsIntent(parsed));
 }
 
 export function getSettingsRecord(store: SettingsStore): RuntimeSettingsRecord {
@@ -77,23 +82,26 @@ export function getSettingsRecord(store: SettingsStore): RuntimeSettingsRecord {
     .prepare<SettingsValueRow, [string]>("SELECT value, updated_at FROM settings WHERE key = ?")
     .get(SETTINGS_KEY);
   const parsed = safeJsonParse(row?.value, DEFAULT_SETTINGS);
+  const intent = minimizeSettingsIntent(parsed);
   return {
-    settings: normalizeSettings(parsed),
+    intent,
+    settings: normalizeSettings(intent),
     updatedAt: String(row?.updated_at || "")
   };
 }
 
 export function setSettings(store: SettingsStore, next) {
-  const normalized = normalizeSettings(next);
+  const intent = minimizeSettingsIntent(next);
+  const normalized = normalizeSettings(intent);
   store.db
     .prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = ?")
-    .run(JSON.stringify(normalized), nowIso(), SETTINGS_KEY);
+    .run(JSON.stringify(intent), nowIso(), SETTINGS_KEY);
   return normalized;
 }
 
 export function patchSettings(store: SettingsStore, patch) {
-  const current = store.getSettings();
-  return store.setSettings(mergeSettingsPatch(current, patch));
+  const current = getSettingsRecord(store);
+  return store.setSettings(mergeSettingsPatch(current.intent, patch));
 }
 
 export function patchSettingsWithVersion(
@@ -109,11 +117,12 @@ export function patchSettingsWithVersion(
     };
   }
 
-  const nextSettings = mergeSettingsPatch(current.settings, patch);
+  const nextIntent = mergeSettingsPatch(current.intent, patch);
+  const nextSettings = normalizeSettings(nextIntent);
   const nextUpdatedAt = nowIso();
   const result = store.db
     .prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = ? AND updated_at = ?")
-    .run(JSON.stringify(nextSettings), nextUpdatedAt, SETTINGS_KEY, current.updatedAt);
+    .run(JSON.stringify(nextIntent), nextUpdatedAt, SETTINGS_KEY, current.updatedAt);
 
   if (Number(result.changes || 0) !== 1) {
     return {
@@ -124,11 +133,12 @@ export function patchSettingsWithVersion(
 
   return {
     ok: true,
+    intent: nextIntent,
     settings: nextSettings,
     updatedAt: nextUpdatedAt
   };
 }
 
 export function resetSettings(store: SettingsStore) {
-  return store.setSettings(CANONICAL_DEFAULT_SETTINGS);
+  return store.setSettings(CANONICAL_DEFAULT_SETTINGS_INTENT);
 }

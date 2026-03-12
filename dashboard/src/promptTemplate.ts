@@ -1,5 +1,5 @@
 const PROMPT_TEMPLATE_TOKEN_RE = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
-export const SUPPORTED_PROMPT_TEMPLATE_VARIABLES = Object.freeze(["botName"]);
+const SUPPORTED_PROMPT_TEMPLATE_VARIABLES = Object.freeze(["botName"]);
 
 export function interpolatePromptTemplate(template, variables = {}) {
   const input = String(template || "");

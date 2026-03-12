@@ -5,6 +5,12 @@ import {
   type SettingsInput
 } from "../../src/settings/settingsSchema.ts";
 import {
+  buildDashboardSettingsEnvelope,
+  isDashboardSettingsEnvelope,
+  type DashboardSettingsEnvelope
+} from "../../src/settings/dashboardSettingsState.ts";
+import { minimizeSettingsIntent } from "../../src/settings/settingsIntent.ts";
+import {
   formatCommaList,
   formatLineList,
   normalizeBoundedStringList,
@@ -32,59 +38,6 @@ import {
 import {
   OPENAI_REALTIME_SESSION_MODEL_OPTIONS
 } from "../../src/voice/realtimeProviderNormalization.ts";
-export type ResolvedBindings = {
-  agentStack: {
-    preset: string;
-    harness: string;
-    orchestrator: { provider: string; model: string };
-    researchRuntime: string;
-    browserRuntime: string;
-    voiceRuntime: string;
-    voiceAdmissionPolicy: { mode: string; classifierProvider?: string; classifierModel?: string; musicWakeLatchSeconds?: number };
-    sessionPolicy: unknown;
-    devTeam: {
-      orchestrator: { provider: string; model: string };
-      roles: Record<string, unknown>;
-      codingWorkers: string[];
-    };
-  };
-  orchestrator: { provider: string; model: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string };
-  followupBinding: { provider: string; model: string };
-  memoryBinding: { provider: string; model: string };
-  textInitiativeBinding: {
-    provider: string;
-    model: string;
-    temperature?: number;
-    maxOutputTokens?: number;
-    reasoningEffort?: string;
-  };
-  visionBinding: { provider: string; model: string };
-  voiceProvider: string;
-  voiceInitiativeBinding: { provider: string; model: string; temperature?: number };
-  voiceAdmissionClassifierBinding: { provider: string; model: string } | null;
-  voiceInterruptClassifierBinding: { provider: string; model: string };
-  voiceMusicBrainBinding: { provider: string; model: string };
-  voiceGenerationBinding: { provider: string; model: string };
-  codeAgent: {
-    enabled: boolean;
-    provider: string;
-    model: string;
-    codexModel: string;
-    codexCliModel: string;
-    maxTurns: number;
-    timeoutMs: number;
-    maxBufferBytes: number;
-    defaultCwd: string;
-    maxTasksPerHour: number;
-    maxParallelTasks: number;
-    allowedUserIds: readonly string[];
-    roleDesign?: string;
-    roleImplementation?: string;
-    roleReview?: string;
-    roleResearch?: string;
-  };
-  providerAuth?: { claude_code?: boolean; codex_cli?: boolean; codex?: boolean };
-};
 export const OPENAI_REALTIME_MODEL_OPTIONS = OPENAI_REALTIME_SESSION_MODEL_OPTIONS.slice(0, 3);
 
 export const OPENAI_REALTIME_VOICE_OPTIONS = Object.freeze([
@@ -124,7 +77,7 @@ export const XAI_VOICE_OPTIONS = Object.freeze([
   "Leo"
 ]);
 
-export const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
+const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   anthropic: ["claude-sonnet-4-5-20250929"],
   "claude-oauth": [...PROVIDER_MODEL_FALLBACKS["claude-oauth"]],
   openai: ["gpt-5-mini"]
@@ -134,10 +87,23 @@ function valueOr<T>(value: T | undefined, fallback: T): T {
   return value !== undefined && value !== null ? value : fallback;
 }
 
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function resolveSettingsEnvelope(settings: unknown): DashboardSettingsEnvelope {
+  if (isDashboardSettingsEnvelope(settings)) {
+    return settings;
+  }
+  return buildDashboardSettingsEnvelope({ intent: settings || DEFAULT_SETTINGS });
+}
+
 function buildSettingsFormView(settings: unknown) {
   const d = DEFAULT_SETTINGS;
-  const s = (settings || d) as Partial<Settings> & { _resolved?: ResolvedBindings };
-  const resolved = s._resolved;
+  const envelope = resolveSettingsEnvelope(settings);
+  const s = (envelope.effective || d) as Partial<Settings>;
+  const intent = (envelope.intent || {}) as Partial<Settings>;
+  const resolved = envelope.bindings;
   const agentStack = valueOr(s.agentStack, d.agentStack);
   const prompting = valueOr(s.prompting, d.prompting);
   const activity = valueOr(s.interaction?.activity, d.interaction.activity);
@@ -151,8 +117,8 @@ function buildSettingsFormView(settings: unknown) {
   const orchestrator = resolved?.orchestrator || { provider: agentStack.overrides?.orchestrator?.provider || "openai", model: agentStack.overrides?.orchestrator?.model || "gpt-5" };
   const followupBinding = resolved?.followupBinding || orchestrator;
   const rawMemoryBinding =
-    s.memoryLlm && typeof s.memoryLlm === "object" && !Array.isArray(s.memoryLlm)
-      ? s.memoryLlm
+    intent.memoryLlm && typeof intent.memoryLlm === "object" && !Array.isArray(intent.memoryLlm)
+      ? intent.memoryLlm
       : {};
   const memoryOverrideConfigured =
     Boolean(String((rawMemoryBinding as Record<string, unknown>).provider || "").trim()) ||
@@ -185,6 +151,8 @@ function buildSettingsFormView(settings: unknown) {
   const voiceClassifierBinding = resolved?.voiceAdmissionClassifierBinding;
   const voiceInterruptClassifierBinding =
     resolved?.voiceInterruptClassifierBinding || getResolvedVoiceInterruptClassifierBinding(s);
+  const rawVoiceInterruptClassifier = intent.agentStack?.overrides?.voiceInterruptClassifier;
+  const voiceInterruptClassifierExplicit = isRecordLike(rawVoiceInterruptClassifier);
   const voiceMusicBrainBinding = resolved?.voiceMusicBrainBinding || orchestrator;
   const voiceMusicBrainMode = String(voiceRuntime.musicBrain?.mode || d.agentStack.runtimeConfig.voice.musicBrain.mode || "disabled")
     .trim()
@@ -351,7 +319,7 @@ function buildSettingsFormView(settings: unknown) {
         enabled: voiceInitiative.enabled,
         provider: voiceInitiativeBinding.provider,
         model: voiceInitiativeBinding.model,
-        temperature: voiceInitiativeBinding.temperature,
+        temperature: voiceInitiative.execution?.temperature,
         eagerness: voiceInitiative.eagerness,
         minSilenceSeconds: voiceInitiative.minSilenceSeconds,
         minSecondsBetweenThoughts: voiceInitiative.minSecondsBetweenThoughts
@@ -363,6 +331,7 @@ function buildSettingsFormView(settings: unknown) {
         model: voiceClassifierFallback.model
       },
       interruptLlm: {
+        explicit: voiceInterruptClassifierExplicit,
         provider: voiceInterruptClassifierFallback.provider,
         model: voiceInterruptClassifierFallback.model
       },
@@ -395,8 +364,9 @@ const DEFAULT_VIEW = buildSettingsFormView(DEFAULT_SETTINGS);
 
 export function settingsToForm(settings: unknown) {
   const defaults = DEFAULT_VIEW;
-  const resolved = buildSettingsFormView(settings || DEFAULT_SETTINGS);
-  const voiceMusicBrainFallback = getResolvedVoiceMusicBrainBinding(settings || DEFAULT_SETTINGS);
+  const envelope = resolveSettingsEnvelope(settings || DEFAULT_SETTINGS);
+  const resolved = buildSettingsFormView(envelope);
+  const voiceMusicBrainFallback = getResolvedVoiceMusicBrainBinding(envelope.effective);
   const defaultPrompt = defaults.prompt;
   const defaultActivity = defaults.activity;
   const defaultPermissions = defaults.permissions;
@@ -604,6 +574,8 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
       resolved?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
+    voiceInterruptLlmExplicit:
+      resolved?.voice?.interruptLlm?.explicit ?? false,
     voiceInterruptLlmProvider:
       resolved?.voice?.interruptLlm?.provider ?? defaultVoiceInterruptLlm.provider,
     voiceInterruptLlmModel:
@@ -775,19 +747,19 @@ export function settingsToForm(settings: unknown) {
   };
 }
 
-export type SettingsForm = ReturnType<typeof settingsToForm>;
+type SettingsForm = ReturnType<typeof settingsToForm>;
 
 export function getCodeAgentValidationError(form: SettingsForm): string {
   if (!form.stackAdvancedOverridesEnabled || !form.codeAgentEnabled) {
     return "";
   }
   const patch = formToSettingsPatch(form);
-  return patch.permissions.devTasks.allowedUserIds.length > 0
+  return (patch.permissions?.devTasks?.allowedUserIds || []).length > 0
     ? ""
     : "Add at least one allowed user ID before enabling the code agent.";
 }
 
-export type SettingsFormValidationError = {
+type SettingsFormValidationError = {
   sectionId: string;
   message: string;
 };
@@ -957,7 +929,7 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       max: SETTINGS_NUMERIC_CONSTRAINTS.interaction.sessions.maxConcurrentSessions.max
     }),
     validateNumericField({
-      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
+      enabled: Boolean(form.browserEnabled),
       sectionId: "sec-browser",
       label: "Max browse calls per hour",
       value: form.browserMaxPerHour,
@@ -965,7 +937,7 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxBrowseCallsPerHour.max
     }),
     validateNumericField({
-      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
+      enabled: Boolean(form.browserEnabled),
       sectionId: "sec-browser",
       label: "Max steps per task",
       value: form.browserMaxSteps,
@@ -973,7 +945,7 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxStepsPerTask.max
     }),
     validateNumericField({
-      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
+      enabled: Boolean(form.browserEnabled),
       sectionId: "sec-browser",
       label: "Browser step timeout (ms)",
       value: form.browserStepTimeoutMs,
@@ -981,7 +953,7 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.stepTimeoutMs.max
     }),
     validateNumericField({
-      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
+      enabled: Boolean(form.browserEnabled),
       sectionId: "sec-browser",
       label: "Browser session timeout (ms)",
       value: form.browserSessionTimeoutMs,
@@ -1193,6 +1165,10 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     String(form.voiceInterruptLlmProvider || presetInterruptClassifierFallback.provider || "").trim();
   const normalizedVoiceInterruptModel =
     String(form.voiceInterruptLlmModel || presetInterruptClassifierFallback.model || "").trim();
+  const shouldPersistVoiceInterruptClassifier =
+    Boolean(form.voiceInterruptLlmExplicit) ||
+    normalizedVoiceInterruptProvider !== presetInterruptClassifierFallback.provider ||
+    normalizedVoiceInterruptModel !== presetInterruptClassifierFallback.model;
   const normalizedVoiceMusicBrainProvider =
     String(form.voiceMusicBrainLlmProvider || presetMusicBrainFallback.provider || "").trim();
   const normalizedVoiceMusicBrainModel =
@@ -1211,7 +1187,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
           }
         }
       : undefined;
-  return {
+  return minimizeSettingsIntent({
     identity: {
       botName: form.botName.trim(),
       botNameAliases: parseUniqueList(form.botNameAliases)
@@ -1324,13 +1300,15 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
             }
           : {}),
         voiceAdmissionClassifier: voiceAdmissionClassifierOverride,
-        voiceInterruptClassifier: {
-          mode: "dedicated_model",
-          model: {
-            provider: normalizedVoiceInterruptProvider,
-            model: normalizedVoiceInterruptModel
-          }
-        }
+        voiceInterruptClassifier: shouldPersistVoiceInterruptClassifier
+          ? {
+              mode: "dedicated_model",
+              model: {
+                provider: normalizedVoiceInterruptProvider,
+                model: normalizedVoiceInterruptModel
+              }
+            }
+          : undefined
       },
       runtimeConfig: {
         research: {
@@ -1613,7 +1591,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     automations: {
       enabled: Boolean(form.automationsEnabled)
     }
-  };
+  });
 }
 
 export function sanitizeAliasListInput(value: unknown) {

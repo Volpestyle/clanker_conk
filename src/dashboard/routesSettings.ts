@@ -6,27 +6,16 @@ import { getLlmModelCatalog } from "../llm/pricing.ts";
 import { isClaudeOAuthConfigured } from "../llm/claudeOAuth.ts";
 import { isCodexOAuthConfigured } from "../llm/codexOAuth.ts";
 import {
-  getReplyGenerationSettings,
-  getResolvedOrchestratorBinding,
-  getResolvedFollowupBinding,
-  getResolvedMemoryBinding,
-  getResolvedTextInitiativeBinding,
-  getResolvedVisionBinding,
-  getResolvedVoiceInitiativeBinding,
-  getResolvedVoiceAdmissionClassifierBinding,
-  getResolvedVoiceInterruptClassifierBinding,
-  getResolvedVoiceMusicBrainBinding,
-  getResolvedVoiceGenerationBinding,
-  getVoiceRuntimeConfig,
-  resolveAgentStack
+  getReplyGenerationSettings
 } from "../settings/agentStack.ts";
 import {
-  resolveVoiceRuntimeSelectionFromMode
-} from "../settings/voiceDashboardMappings.ts";
+  buildDashboardSettingsEnvelope,
+  type DashboardProviderAuthBindings
+} from "../settings/dashboardSettingsState.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
 import { readDashboardBody, toRecord } from "./shared.ts";
 
-export interface SettingsRouteDeps {
+interface SettingsRouteDeps {
   store: Store;
   bot: DashboardBot;
   appConfig: DashboardAppConfig;
@@ -34,6 +23,7 @@ export interface SettingsRouteDeps {
 
 export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps) {
   const { store, bot, appConfig } = deps;
+  const providerAuth = resolveProviderAuth(appConfig);
 
   app.get("/api/health", (c) => {
     return c.json({ ok: true });
@@ -41,7 +31,12 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
 
   app.get("/api/settings", (c) => {
     const current = store.getSettingsRecord();
-    return c.json(buildSettingsResponse(current.settings, appConfig, current.updatedAt));
+    return c.json(buildSettingsResponse({
+      intent: current.intent,
+      effective: current.settings,
+      providerAuth,
+      updatedAt: current.updatedAt
+    }));
   });
 
   app.put("/api/settings", async (c) => {
@@ -56,7 +51,12 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
         {
           error: "settings_version_required",
           detail: "Refresh the dashboard before saving. This tab is using an outdated settings form.",
-          ...buildSettingsResponse(current.settings, appConfig, current.updatedAt)
+          ...buildSettingsResponse({
+            intent: current.intent,
+            effective: current.settings,
+            providerAuth,
+            updatedAt: current.updatedAt
+          })
         },
         409
       );
@@ -67,7 +67,12 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
         {
           error: "settings_conflict",
           detail: "Settings changed since this form was loaded. Reload the latest settings and try again.",
-          ...buildSettingsResponse(current.settings, appConfig, current.updatedAt)
+          ...buildSettingsResponse({
+            intent: current.intent,
+            effective: current.settings,
+            providerAuth,
+            updatedAt: current.updatedAt
+          })
         },
         409
       );
@@ -79,7 +84,12 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
         {
           error: "settings_conflict",
           detail: "Settings changed while this save was being applied. Reload the latest settings and try again.",
-          ...buildSettingsResponse(saved.settings, appConfig, saved.updatedAt)
+          ...buildSettingsResponse({
+            intent: saved.intent,
+            effective: saved.settings,
+            providerAuth,
+            updatedAt: saved.updatedAt
+          })
         },
         409
       );
@@ -96,7 +106,11 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     }
 
     return c.json(
-      buildSettingsResponse(saved.settings, appConfig, saved.updatedAt, {
+      buildSettingsResponse({
+        intent: saved.intent,
+        effective: saved.settings,
+        providerAuth,
+        updatedAt: saved.updatedAt,
         saveAppliedToRuntime,
         ...(saveApplyError ? { saveApplyError } : {})
       })
@@ -119,7 +133,11 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
         channelPolicy: current.voice?.channelPolicy
       }
     });
-    return c.json({ ...settings, _resolved: resolveSettingsBindings(settings, appConfig) });
+    return c.json(buildSettingsResponse({
+      intent: settings,
+      effective: settings,
+      providerAuth
+    }));
   });
 
   app.post("/api/settings/refresh", async (c) => {
@@ -155,7 +173,11 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
         channelPolicy: current.voice?.channelPolicy
       }
     });
-    return c.json({ ...settings, _resolved: resolveSettingsBindings(settings, appConfig) });
+    return c.json(buildSettingsResponse({
+      intent: settings,
+      effective: settings,
+      providerAuth
+    }));
   });
 
   app.get("/api/llm/models", (c) => {
@@ -267,48 +289,41 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   });
 }
 
-function buildSettingsResponse(
-  settings: unknown,
-  appConfig: DashboardAppConfig,
-  updatedAt: string,
-  extraMeta: Record<string, unknown> = {}
-) {
-  const settingsRecord = toRecord(settings);
-  return {
-    ...settingsRecord,
-    _resolved: resolveSettingsBindings(settings, appConfig),
-    _meta: {
+function buildSettingsResponse({
+  intent,
+  effective,
+  providerAuth,
+  updatedAt = "",
+  ...meta
+}: {
+  intent: unknown;
+  effective?: unknown;
+  providerAuth: DashboardProviderAuthBindings;
+  updatedAt?: string;
+  [key: string]: unknown;
+}) {
+  return buildDashboardSettingsEnvelope({
+    intent,
+    effective,
+    providerAuth,
+    meta: {
       updatedAt: String(updatedAt || ""),
-      ...extraMeta
+      ...meta
     }
-  };
+  });
 }
 
-function resolveSettingsBindings(settings: unknown, appConfig: DashboardAppConfig) {
+function resolveProviderAuth(appConfig: DashboardAppConfig): DashboardProviderAuthBindings {
   return {
-    agentStack: resolveAgentStack(settings),
-    orchestrator: getResolvedOrchestratorBinding(settings),
-    followupBinding: getResolvedFollowupBinding(settings),
-    memoryBinding: getResolvedMemoryBinding(settings),
-    textInitiativeBinding: getResolvedTextInitiativeBinding(settings),
-    visionBinding: getResolvedVisionBinding(settings),
-    voiceProvider: resolveVoiceRuntimeSelectionFromMode(getVoiceRuntimeConfig(settings).runtimeMode),
-    voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(settings),
-    voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(settings),
-    voiceInterruptClassifierBinding: getResolvedVoiceInterruptClassifierBinding(settings),
-    voiceMusicBrainBinding: getResolvedVoiceMusicBrainBinding(settings),
-    voiceGenerationBinding: getResolvedVoiceGenerationBinding(settings),
-    providerAuth: {
-      claude_code:
-        Boolean(appConfig.anthropicApiKey) ||
-        isClaudeOAuthConfigured(appConfig.claudeOAuthRefreshToken || ""),
-      codex_cli:
-        Boolean(appConfig.openaiApiKey) ||
-        isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || ""),
-      codex:
-        Boolean(appConfig.openaiApiKey) ||
-        isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || "")
-    }
+    claude_code:
+      Boolean(appConfig.anthropicApiKey) ||
+      isClaudeOAuthConfigured(appConfig.claudeOAuthRefreshToken || ""),
+    codex_cli:
+      Boolean(appConfig.openaiApiKey) ||
+      isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || ""),
+    codex:
+      Boolean(appConfig.openaiApiKey) ||
+      isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || "")
   };
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type ActivitySSEStatus = "connecting" | "open" | "closed";
+type ActivitySSEStatus = "connecting" | "open" | "closed";
 
 type ActivityAction = {
   id?: number;
