@@ -195,7 +195,7 @@ During active music:
 - no wake latch: non-wake chatter is denied
 - while music is `paused_wake_word`: only the wake-word speaker's ordinary follow-ups can continue without another wake word
 - wake latch open: follow-ups can continue without repeating the wake word
-- a recent same-speaker follow-up immediately after a successful barge-in also stays eligible even if no wake latch is open; interrupted speech should not be reclassified as background chatter
+- a recent same-speaker follow-up immediately after a successful barge-in also stays eligible even if no wake latch is open; both the music prefilter and the final reply admission layer honor that follow-up so interrupted speech is not reclassified as background chatter
 - fresh wake-word/direct-address turns go straight to the main reply brain
 - exact compact control words like `pause`, `stop`, `skip`, and `resume` use an immediate fast path when the dedicated music brain is enabled
 - fuzzy control/disambiguation turns use the dedicated music brain only to decide whether they should be consumed as music-side commands

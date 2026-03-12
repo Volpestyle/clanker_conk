@@ -1987,28 +1987,32 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       trackUrl: playbackResult.track?.externalUrl || null
     }
   });
-  await sendOperationalMessage(manager, {
-    channel: resolvedChannel,
-    settings: resolvedSettings,
-    guildId: resolvedGuildId,
-    channelId: resolvedChannelId || session.textChannelId || null,
-    userId: resolvedUserId || null,
-    messageId: message?.id || null,
-    event: "voice_music_request",
-    reason: "started",
-    details: {
-      source: String(source || "text_voice_intent"),
-      provider: playbackResult.provider,
-      query: playbackResult.query || playbackQuery || null,
-      requestedTrackId: playbackTrackId,
-      selectedResultId: selectedResult?.id || null,
-      selectedResultPlatform: selectedResult?.platform || null,
-      trackTitle: playbackResult.track?.title || null,
-      trackArtists: playbackResult.track?.artistNames || [],
-      trackUrl: playbackResult.track?.externalUrl || null
-    },
-    mustNotify
-  });
+  // When the command came from a voice tool call, the voice reply path
+  // handles confirmation — skip the redundant text-channel message.
+  if (String(source || "") !== "voice_tool_call") {
+    await sendOperationalMessage(manager, {
+      channel: resolvedChannel,
+      settings: resolvedSettings,
+      guildId: resolvedGuildId,
+      channelId: resolvedChannelId || session.textChannelId || null,
+      userId: resolvedUserId || null,
+      messageId: message?.id || null,
+      event: "voice_music_request",
+      reason: "started",
+      details: {
+        source: String(source || "text_voice_intent"),
+        provider: playbackResult.provider,
+        query: playbackResult.query || playbackQuery || null,
+        requestedTrackId: playbackTrackId,
+        selectedResultId: selectedResult?.id || null,
+        selectedResultPlatform: selectedResult?.platform || null,
+        trackTitle: playbackResult.track?.title || null,
+        trackArtists: playbackResult.track?.artistNames || [],
+        trackUrl: playbackResult.track?.externalUrl || null
+      },
+      mustNotify
+    });
+  }
   console.info(
     `[voiceMusic] request complete guildId=${resolvedGuildId} sessionId=${session.id} provider=${playbackResult.provider} totalMs=${Date.now() - requestStartedAt} query=${JSON.stringify(playbackResult.query || playbackQuery || "")}`
   );
@@ -2175,12 +2179,10 @@ export async function requestStopMusic(manager: MusicPlaybackHost, {
     }
   });
 
-  // When a voice tool triggers stop on already-idle music, suppress the
-  // operational text-channel message entirely — the voice AI already
-  // responds vocally and a text message like "nothing was playing" breaks
-  // continuity.
+  // When the command came from a voice tool call, the voice reply path
+  // handles confirmation — skip the redundant text-channel message.
   const suppressOperationalMessage =
-    !wasActive && String(source || "") === "voice_tool_call";
+    String(source || "") === "voice_tool_call";
 
   if (!suppressOperationalMessage) {
     await sendOperationalMessage(manager, {
@@ -2316,22 +2318,26 @@ export async function requestPauseMusic(manager: MusicPlaybackHost, {
     }
   });
 
-  await sendOperationalMessage(manager, {
-    channel: resolvedChannel,
-    settings: resolvedSettings,
-    guildId: resolvedGuildId,
-    channelId: resolvedChannelId || session.textChannelId || null,
-    userId: resolvedUserId || null,
-    messageId: message?.id || null,
-    event: "voice_music_request",
-    reason: "paused",
-    details: {
-      provider: music?.provider || "discord",
-      source: String(source || "text_voice_intent"),
-      requestText: normalizedRequestText
-    },
-    mustNotify
-  });
+  // When the command came from a voice tool call, the voice reply path
+  // handles confirmation — skip the redundant text-channel message.
+  if (String(source || "") !== "voice_tool_call") {
+    await sendOperationalMessage(manager, {
+      channel: resolvedChannel,
+      settings: resolvedSettings,
+      guildId: resolvedGuildId,
+      channelId: resolvedChannelId || session.textChannelId || null,
+      userId: resolvedUserId || null,
+      messageId: message?.id || null,
+      event: "voice_music_request",
+      reason: "paused",
+      details: {
+        provider: music?.provider || "discord",
+        source: String(source || "text_voice_intent"),
+        requestText: normalizedRequestText
+      },
+      mustNotify
+    });
+  }
   return true;
 }
 

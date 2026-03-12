@@ -77,7 +77,7 @@ export const VOICE_INTERRUPT_SPEECH_START_RECHECK_MS = 200;
 export const VOICE_GENERATION_SOUNDBOARD_CANDIDATE_TIMEOUT_MS = 1_200;
 export const VOICE_GENERATION_CONTINUITY_TIMEOUT_MS = 2_400;
 export const VOICE_GENERATION_BEHAVIORAL_TIMEOUT_MS = 1_800;
-export const VOICE_GENERATION_ONLY_WATCHDOG_MS = 9_000;
+export const VOICE_GENERATION_ONLY_WATCHDOG_MS = 20_000;
 // Promotion fallback when server VAD has not confirmed speech yet. This should
 // only pass obviously voiced local speech, not quiet background chatter.
 export const VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN = 0.008;

@@ -487,6 +487,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     participantCount,
     now
   });
+  const interruptedReplyOwnerFollowup = Boolean(baseConversationContext.interruptedAssistantReply);
   const buildConversationContext = () => ({
     ...baseConversationContext,
     pendingCommandFollowupSignal: Boolean(sameSpeakerPendingCommandFollowup),
@@ -631,6 +632,19 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
         runtimeEventContext: normalizedRuntimeEventContext
       };
     }
+    if (interruptedReplyOwnerFollowup) {
+      return {
+        allow: true,
+        reason: "interrupted_reply_followup",
+        participantCount,
+        directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
+        transcript: normalizedTranscript,
+        conversationContext,
+        runtimeEventContext: normalizedRuntimeEventContext
+      };
+    }
     if (!musicWakeLatched) {
       return {
         allow: false,
@@ -690,7 +704,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
       conversationContext = buildConversationContext();
     }
-    if (!musicWakeLatched) {
+    if (!musicWakeLatched && !interruptedReplyOwnerFollowup) {
       return {
         allow: false,
         reason: "music_playing_not_awake",
