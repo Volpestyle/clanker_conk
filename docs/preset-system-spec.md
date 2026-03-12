@@ -2,6 +2,8 @@
 
 Canonical reference for how agent stack presets work. Canonical preset metadata lives in `src/settings/agentStackCatalog.ts`, numeric guardrails live in `src/settings/settingsConstraints.ts`, and runtime resolution lives in `src/settings/agentStack.ts`.
 
+The cross-cutting settings contract now lives in [`docs/settings.md](settings.md)`. This document stays focused on preset-specific defaults, behavior, and product intent.
+
 ## Presets
 
 Six named presets. Each is a coherent combination of orchestrator, voice pipeline, tool ownership, and cost profile.
@@ -26,7 +28,7 @@ Six named presets. Each is a coherent combination of orchestrator, voice pipelin
 - **provider_native** — Tools registered with the realtime/voice-agent API. The provider model calls them directly. Used when voice reply path is `native` or `bridge`.
 - **transport_only** — Realtime connection is audio transport only. Tool calls go through the internal text orchestrator (brain path). Used when voice reply path is `brain`.
 
-Tools are defined once in `src/tools/sharedToolSchemas.ts` and adapted per target via format converters (`toAnthropicTool`, `toRealtimeTool`). Those shared schemas stay concise: the description explains the capability and the key contrast with nearby tools, while longer routing policy lives in prompts and runtime docs. The tool registry in `voiceToolCallToolRegistry.ts` conditionally includes tools based on feature flags (memory, research, browser, code agent) regardless of which preset is active.
+Tools are defined once in `src/tools/sharedToolSchemas.ts` and adapted per target via format converters (`toAnthropicTool`, `toRealtimeTool`). Those shared schemas stay concise: the description explains the capability and the key contrast with nearby tools. Cross-modal tool-choice policy lives in `src/prompts/toolPolicy.ts`, which is consumed by the text prompt, voice prompt, and realtime instruction manager; each runtime then layers its own modality-specific constraints on top. The tool registry in `voiceToolCallToolRegistry.ts` conditionally includes tools based on feature flags (memory, research, browser, code agent) regardless of which preset is active.
 
 ### Preset Defaults Detail
 
@@ -72,15 +74,9 @@ The Stack Preset section shows a dropdown with all 6 presets. The dropdown label
 
 The preview is local-only. The dirty indicator stays on until the user clicks Save, and runtime settings do not change just from selecting a preset in the dashboard.
 
-The Save action serializes the latest local form edit, even if the user changes a field and immediately clicks Save before React finishes a re-render. The dashboard does not intentionally drop the most recently touched field and revert it to the last persisted value.
-
-Dashboard saves are versioned by the settings row's `updated_at` timestamp. If an older tab or stale form snapshot tries to save after newer settings have already been written, `/api/settings` rejects the stale write with a conflict instead of silently overwriting the newer value.
-
-The settings API also rejects save requests that omit this version metadata. An outdated dashboard tab cannot continue using the old unversioned save path and silently roll the form back to older values; it must refresh first.
-
 ### Reset to Preset Defaults
 
-A "Reset to preset defaults" button next to the preset dropdown loads a full normalized default form for the selected preset. It resolves the selected preset through canonical normalization and preserves only server-specific channel permissions and voice channel policy. Save is still required before those defaults affect the live bot.
+A "Reset to preset defaults" button next to the preset dropdown loads a preview envelope for the selected preset. It resolves the selected preset through canonical normalization and preserves only server-specific channel permissions and voice channel policy. Save is still required before those defaults affect the live bot.
 
 For `openai_native_realtime`, saving the reset form preserves the preset's `classifier_gate` voice admission mode on the bridge reply path so the OpenAI classifier binding stays attached to `openai/gpt-5-mini`.
 
@@ -92,19 +88,4 @@ The Voice section's classifier provider/model controls persist without requiring
 
 When `advancedOverridesEnabled` is true, additional sections appear: Advanced Stack (LLM), Research Runtime, Browser Runtime, Dev Team, Sessions. These sections are mounted only when advanced overrides are enabled, and their numeric bounds are shared with backend normalization through `settingsConstraints.ts`.
 
-## Settings Resolution Flow
-
-```
-User settings (data/settings.json)
-  ↓
-Normalization (settingsNormalization.ts + store/normalize/*)
-  ├── Preset name normalization via agentStackCatalog.ts
-  ├── Preset config seeds defaults for admission mode, reply path, TTS mode
-  └── Per-section normalization (bounds, validation) via settingsConstraints.ts
-  ↓
-Resolved Agent Stack (agentStack.ts → resolveAgentStack())
-  ├── Merges preset defaults + overrides
-  └── Produces runtime-only ResolvedAgentStack
-  ↓
-Dashboard + runtime use the same preset catalog and numeric constraints
-```
+Canonical persistence, envelope, and save/version semantics live in [`docs/settings.md](settings.md)`. In preset terms, the only special rule is that presets seed defaults into `effective` resolution; they are not stored as a second parallel config object.

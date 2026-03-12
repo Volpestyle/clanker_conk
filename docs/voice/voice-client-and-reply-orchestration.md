@@ -4,10 +4,13 @@
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
 > Output and barge-in: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
 > Capture and ASR: [`voice-capture-and-asr-pipeline.md`](voice-capture-and-asr-pipeline.md)
+> Cross-cutting settings contract: [`../settings.md`](../settings.md)
 
 ---
 
 ## Part 1: Realtime Client
+
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document covers the runtime orchestration path and the voice-local settings that affect client lifecycle and reply dispatch.
 
 This part defines the realtime client lifecycle — how the bot connects to the AI provider (OpenAI, xAI, Gemini, ElevenLabs) for voice generation, manages instructions and tools, and handles the event stream that drives the assistant output state machine. Tool execution and context assembly stay shared across providers; the client adapter only translates provider protocol into the common runtime surface.
 
@@ -332,7 +335,7 @@ Labeled transcript `(speakerName): text` sent to realtime provider. Cancels any 
 
 ### Brain Path (`runVoiceReplyPipeline`)
 
-The unified pipeline: generate text via LLM, build playback plan, play via realtime TTS or API TTS. See `voice-provider-abstraction.md` §3 for detailed stage description.
+The unified pipeline: generate text via LLM, build playback plan, play via realtime TTS or API TTS. See [`voice-provider-abstraction.md`](voice-provider-abstraction.md) §3 for detailed stage description.
 
 In realtime sessions, this path can still deliver speech through the realtime client even when settings-level `voice.conversationPolicy.replyPath` is `"brain"`. Here `mode: "realtime_transport"` means "use realtime output transport for pre-generated text", not "use the transcript-to-realtime bridge path above". On OpenAI, these exact-line playback requests are sent out-of-band with tools disabled so pre-generated speech cannot start a second provider tool/reasoning loop.
 
@@ -564,6 +567,8 @@ The plumbing exists and is ready to wire for voice:
 
 The active reply handle is created immediately after the generation-preflight supersede check and before the expensive prompt/context work begins. That closes the gap where a late same-utterance ASR revision could arrive after admission but before generation had anything abortable.
 
+Generation prep is also bounded. Soundboard-candidate lookup, continuity/history loading, and behavioral-memory loading each have deterministic fallback deadlines, and a generation-only watchdog aborts any admitted turn that never escapes the pre-playback `generation_only` phase. Slow prep should degrade context quality, not wedge the room.
+
 **Wiring:**
 
 ```typescript
@@ -581,7 +586,7 @@ const generation = await runtime.llm.generate({
 
 Same-utterance late ASR revisions are treated as replacements, not as brand-new stale work. When the turn processor aborts a pre-audio generation because a newer revision of the same bridge utterance arrived, the revised turn is replayed with a fresh reply-scope timestamp before it re-enters the queue. That keeps the stale-cutoff safety from cancelling the corrected replacement.
 
-**Cleanup on abort:** Catch `AbortError`, log `voice_generation_aborted_superseded`, skip playback, let the newer turn proceed through the queue drain.
+**Cleanup on abort:** Catch `AbortError`, log `voice_generation_aborted_superseded`, skip playback, let the newer turn proceed through the queue drain, and keep watchdog/timer cleanup nonfatal so the abort does not escape as a process-level crash.
 
 ### Stage 3: Pre-playback supersede (existing)
 
@@ -634,6 +639,7 @@ When a user turn is admitted but the bot doesn't reply:
 
 1. Check which dispatch path was taken (native, bridge, brain reply)
 2. For full-brain replies: check `runVoiceReplyPipeline` — did `generateVoiceTurn` produce content?
+   - If not, inspect `voice_generation_prep_stage` and `voice_generation_watchdog_timeout` first. These distinguish prep fallback from a real generation failure.
 3. Check `pendingResponse` — was a tracked response created?
 4. Check for supersede — was the reply abandoned for newer input?
 
@@ -649,7 +655,7 @@ When post-barge-in recovery feels wrong:
 1. Check `session.interruptedAssistantReply` — was context actually stored?
 2. Check whether either cancel or truncate actually cut the reply — truncate-only interruptions still keep recovery context
 3. Check whether a newer assistant reply cleared applicability (`lastAssistantReplyAt > interruptedAt`)
-4. If the follow-up ASR was empty, inspect `voice_interrupted_reply_recovered` — the runtime should replay the cut line directly instead of generating a fake turn
+4. If the follow-up ASR was empty or unclear, inspect `voice_interrupt_unclear_turn_handoff_requested` — the runtime should hand interruption context back to the voice brain instead of replaying the cut line directly
 5. Inspect the generated prompt — did it include the interruption recovery section from `buildVoiceTurnPrompt`?
 
 ## 21. Regression Tests (Reply Orchestration)
@@ -663,7 +669,7 @@ These cases should remain covered:
 - Coalesced deferred turns re-run the full admission gate
 - Barge-in stores interruption context when cancel succeeds or truncate succeeds
 - Prompt generation receives interruption recovery context on the interrupting user's next turn
-- Empty ASR after barge-in replays the interrupted assistant line directly
+- Empty or unclear ASR after a committed barge-in hands interruption context back to the voice brain
 - Pre-generation gate skips generation when newer finalized turn exists
 - Pre-generation gate skips generation when live promoted capture exists
 - Aborted generation produces no playback and no conversation window entry

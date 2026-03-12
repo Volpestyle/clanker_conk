@@ -323,7 +323,7 @@ Likewise, being active in text can inform VC continuity without automatically gr
 | `initiative.text.minMinutesBetweenPosts` | Minimum gap between ambient text considerations |
 | `initiative.text.maxPostsPerDay` | Daily ambient text budget |
 | `initiative.text.lookbackMessages` | Per-channel context window size |
-| `initiative.text.allowActiveCuriosity` | Whether `web_search` and `browser_browse` are available |
+| `initiative.text.allowActiveCuriosity` | Whether `web_search`, `web_scrape`, and `browser_browse` are available |
 | `initiative.text.maxToolSteps` / `initiative.text.maxToolCalls` | Ambient text tool-loop budgets |
 | `initiative.discovery.*` | Passive feed collection, source curation, and media budgets |
 
@@ -346,22 +346,27 @@ Likewise, being active in text can inform VC continuity without automatically gr
 
 Text and voice share most of the same conversational tool surface, but voice keeps durable-memory search automatic rather than model-invoked. The tools are capabilities the model may choose when they help.
 
-Shared tools include:
+Core shared conversational tools include:
 
 - `conversation_search`
 - `memory_write`
 - `web_search`
+- `web_scrape`
 - `browser_browse`
 - `code_task`
 
-Text-only shared tool:
+Reply-loop conditional tools include:
 
 - `memory_search`
+- `image_lookup`
+- `offer_screen_share_link`
 
 Voice-only or voice-centric tools include:
 
 - `music_*`
-- session transport / leave actions
+- `play_soundboard`
+- `screen_note` / `screen_moment`
+- join / leave voice-channel actions
 - provider-native realtime function calls
 
 Relevant code:

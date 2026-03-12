@@ -60,7 +60,7 @@ Use:
 - `--allow-missing-credentials`
 - `--max-cases`
 
-For the current authoritative defaults, check `scripts/voiceGoldenHarness.ts` and `docs/tests.md`.
+For the current authoritative defaults, check `scripts/voiceGoldenHarness.ts` and [`docs/tests.md](tests.md)`.
 
 ### Credential Requirements
 

@@ -4,10 +4,13 @@
 > Voice output state machine: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
 > Voice reply admission/orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
 > Provider/runtime pipeline: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
+> Cross-cutting settings contract: [`../settings.md`](../settings.md)
 
 ---
 
 ## 1. Purpose
+
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document only covers music-local voice behavior and the settings that shape that behavior.
 
 Music behavior crosses several voice subsystems:
 

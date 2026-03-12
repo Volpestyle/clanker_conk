@@ -4,11 +4,12 @@ This document explains the live runtime shape of the bot: where core decisions h
 
 Canonical companion docs:
 
-- `docs/presence-and-attention.md`
-- `docs/clanker-activity.md`
-- `docs/initiative-unified-spec.md`
-- `docs/voice/voice-provider-abstraction.md`
-- `docs/preset-system-spec.md`
+- [`docs/settings.md`](settings.md)
+- [`docs/presence-and-attention.md`](presence-and-attention.md)
+- [`docs/clanker-activity.md`](clanker-activity.md)
+- [`docs/initiative-unified-spec.md`](initiative-unified-spec.md)
+- [`docs/voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
+- [`docs/preset-system-spec.md`](preset-system-spec.md)
 
 ## 1. High-Level Components
 
@@ -22,6 +23,8 @@ Core runtime:
 - `src/bot/*`: text reply admission, reply pipeline, ambient text initiative, automations, permissions, continuity, memory slices, and message history
 - `src/settings/settingsSchema.ts`: canonical persisted settings schema
 - `src/settings/agentStack.ts`: preset resolution and runtime binding helpers
+- `src/settings/dashboardSettingsState.ts`: dashboard settings envelope (`intent`, `effective`, `bindings`)
+- `src/settings/settingsIntent.ts`: intent minimization before persistence
 - `src/store/settingsNormalization.ts`: settings normalization into the canonical shape
 - `src/llm.ts`: provider/runtime abstraction for generation, embeddings, image/video generation, ASR, and TTS
 - `src/memory/*`: durable memory extraction, storage, lookup, and reflection
@@ -53,23 +56,34 @@ Text and voice are separate transports under that shared attention layer. Music 
 
 The orchestrator is still tool-using and LLM-driven. The preset system resolves which external runtimes back those capabilities.
 
-Shared tool schemas in `src/tools/sharedToolSchemas.ts` are concise capability contracts. Tool descriptions state what the tool does and the key contrast with nearby tools; longer routing policy and conversational guidance live in prompts and runtime docs.
+Shared tool schemas in `src/tools/sharedToolSchemas.ts` are concise capability contracts. The local non-MCP tool registry in `src/tools/toolRegistry.ts` is the central source of truth for which local tools exist on the reply and provider-native voice surfaces. Tool descriptions state what the tool does and the key contrast with nearby tools. Cross-modal tool-choice guidance lives in `src/prompts/toolPolicy.ts`; the text prompt, voice prompt, and provider-native realtime instructions all consume that shared policy and then add modality-specific constraints locally.
 
-Shared conversational tools:
+Core shared conversational tools:
 
 - `conversation_search`
 - `memory_write`
 - `web_search`
+- `web_scrape`
 - `browser_browse`
 - `code_task`
 - media generation tools
 
-Text-only conversational tool:
+Reply-loop conditional tools:
 
 - `memory_search`
+- `image_lookup`
+- `offer_screen_share_link`
+
+Voice-centric tools:
+
+- `music_*`
+- `play_soundboard`
+- `screen_note` / `screen_moment`
+- `join_voice_channel` / `leave_voice_channel`
 
 Core routing:
 
+- local tool registry: `src/tools/toolRegistry.ts`
 - text: `src/tools/replyTools.ts`
 - voice: `src/voice/voiceToolCalls.ts` and `src/voice/voiceToolCallDispatch.ts`
 - browser tasks: `src/tools/browserTaskRuntime.ts`
@@ -82,70 +96,24 @@ Current voice dispatch modules:
 - `src/voice/voiceToolCallWeb.ts`
 - `src/voice/voiceToolCallAgents.ts`
 
-Hosted OpenAI web lookup is implemented in `src/services/search.ts` through the Responses API `web_search_preview` tool.
+Search runtime is resolved in `src/services/search.ts`:
+
+- `openai_native_web_search`: hosted OpenAI Responses API lookup via the `web_search_preview` tool
+- `local_external_search`: local provider-ordered search through Brave / SerpApi plus direct page-summary reads
 
 There is no separate directive tool handler in the live architecture.
 
 ## 4. Settings Flow
 
-Settings are written through the dashboard API, normalized in `normalizeSettings()`, and then read lazily at decision time.
+The canonical settings contract now lives in [`docs/settings.md](settings.md)`.
 
-Control-plane guarantees:
+At a high level:
 
-- browser dashboard sessions exchange `DASHBOARD_TOKEN` once at `POST /api/auth/session` and then use an HTTP-only signed session cookie
-- admin routes accept either the signed dashboard session cookie or `x-dashboard-token`
-- non-loopback dashboard binds require `DASHBOARD_TOKEN`
+- the store persists authored `intent`, not materialized runtime state
+- normalization produces the fully resolved `effective` runtime object
+- dashboard/runtime helpers are exposed as derived `bindings`
 - dashboard saves use compare-and-swap on `settings.updated_at`
-- persistence and live-session application are separate outcomes: a save can succeed even when active voice sessions still need a manual refresh
-
-Canonical top-level settings groups:
-
-- `identity`
-- `persona`
-- `prompting`
-- `permissions`
-- `interaction`
-- `agentStack`
-- `memory`
-- `memoryLlm`
-- `initiative`
-- `voice`
-- `media`
-- `music`
-- `automations`
-
-Preset-driven runtime surfaces:
-
-- `agentStack.preset`
-- `agentStack.overrides`
-- `agentStack.runtimeConfig.research`
-- `agentStack.runtimeConfig.browser`
-- `agentStack.runtimeConfig.voice`
-- `agentStack.runtimeConfig.devTeam`
-
-Nested voice surfaces:
-
-- `voice.conversationPolicy.*`
-- `voice.admission.*`
-- `voice.transcription.*`
-- `voice.channelPolicy.*`
-- `voice.sessionLimits.*`
-- `initiative.voice.*`
-
-Normalization responsibilities:
-
-- clamp numeric ranges
-- sanitize lists and strings
-- normalize incoming settings into canonical nested fields
-- apply preset defaults when canonical fields are absent
-
-Dashboard save semantics:
-
-- `PUT /api/settings` requires `_meta.expectedUpdatedAt`
-- version mismatches return `409` with the latest saved settings snapshot
-- successful saves return the new `updatedAt`
-- runtime application status is reported separately through `_meta.saveAppliedToRuntime` and `_meta.saveApplyError`
-- `POST /api/settings/refresh` reapplies the last saved settings to active voice sessions; it does not apply unsaved dashboard draft state
+- persistence and live-session application are separate outcomes
 
 ![Settings Flow](diagrams/settings-flow.png)
 <!-- source: docs/diagrams/settings-flow.mmd -->
@@ -160,7 +128,7 @@ Main runtime stores:
 
 Important tables:
 
-- `settings`
+- `settings` (`key = 'runtime_settings'` stores authored settings intent; `updated_at` is the dashboard save version)
 - `messages`
 - `actions`
 - `memory_facts`
@@ -190,7 +158,7 @@ Main stages:
 4. LLM/tool loop
 5. delivery and persistence
 
-The user-facing activity model for these paths is documented in `docs/clanker-activity.md`.
+The user-facing activity model for these paths is documented in [`docs/clanker-activity.md](clanker-activity.md)`.
 
 ![Message Event Flow](diagrams/message-event-flow.png)
 <!-- source: docs/diagrams/message-event-flow.mmd -->
@@ -219,10 +187,10 @@ Canonical public surfaces:
 
 Voice-specific docs:
 
-- `docs/voice/voice-provider-abstraction.md`
-- `docs/voice/voice-capture-and-asr-pipeline.md`
-- `docs/voice/voice-client-and-reply-orchestration.md`
-- `docs/voice/voice-output-and-barge-in.md`
+- [`docs/voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
+- [`docs/voice/voice-capture-and-asr-pipeline.md`](voice/voice-capture-and-asr-pipeline.md)
+- [`docs/voice/voice-client-and-reply-orchestration.md`](voice/voice-client-and-reply-orchestration.md)
+- [`docs/voice/voice-output-and-barge-in.md`](voice/voice-output-and-barge-in.md)
 
 ## 8. Unified Initiative Flow
 
@@ -247,8 +215,8 @@ This is the text spoke's ambient delivery path. The corresponding voice spoke is
 
 Canonical references:
 
-- `docs/initiative-unified-spec.md`
-- `docs/clanker-activity.md`
+- [`docs/initiative-unified-spec.md`](initiative-unified-spec.md)
+- [`docs/clanker-activity.md`](clanker-activity.md)
 
 ## 9. Memory Model
 

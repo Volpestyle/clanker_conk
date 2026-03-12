@@ -1,8 +1,12 @@
 # Repository Instructions
 
+- Bot name is a customizable setting. Bot is not always named 'clanker conk'.
+- This is more a framework for building a discord bot than a specific bot, which is why we have so much **configuration** [docs/voice/voice-provider-abstraction.md](docs/voice/voice-provider-abstraction.md).
+- When making changes, it is essential we think about the code paths of all these possible configurations.
+
 ## Agent Autonomy — Core Design Principle
 
-This bot is built around a single idea: **the agent sees context like a human would, and decides what to do on its own.**
+This bot in this repository (Clanker Conk) is built around a single idea: **the agent sees context like a human would, and decides what to do on its own.**
 
 We do not hardcode behaviors for the agent. We give it rich context — conversation history, channel events, available tools, memory, participant state — and let the model reason about what to do. The agent should feel like a real person who happens to have access to powerful tools, not a state machine following a script. Think about Clanker Conk as if it was YOU (agent reading this), and guide your product and design decisions based on what YOU would want if you were this autonomous, self-directed, discord 'user'.
 
@@ -20,28 +24,35 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 
 ## General
 
+#### Style
+- Include a 'Product language' conclusion in your messages and commit messages when it seems like it makes sense.
+
+#### Code Hygiene
+- LOGS LOGS LOGS, log everything that might be beneficial for debugging or incident analysis. (logs.md)[docs/logs.md]
+- Remove legacy compatibility paths, dead code, backward-compat shims, aliases, and old-field fallbacks as part of the same change. Prefer a single source of truth over parallel old/new code paths. Always sweep up after a change to remove all leftover latent code. Keep only what the user explicitly asks to preserve.
 - When doing large changes, don't worry about tests until the very end. It's better to have ME prove our system manually before spending energy making and fixing tests.
 - Always update canonical documentation of related feature when updating code. Prefer to avoid 'past tense' language, stating a canonical truth rather than a redesign or migration plan, unless explicitly asked for plan.
+- Build modular, composable, and easily testable components. Avoid monolithic architecture.
+##### Tests
 - Don't add new tests willy nilly. This can lead to bloat and heavy tech debt. Tests should only test critical business logic paths and edge cases.
 - If you find tests that seem to be adding useless bloat, testing legacy things, or are redundant, please remove them.
-- Include a 'Product language' conclusion in your messages and commit messages when it seems like it makes sense.
+- If you come across code that seems to be latent or dead, please remove.
+
+#### Process
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
 - Do not run 'smoke' or 'live' tests unless the user explicitly directs you to run them, since they incur cost. E2E tests and essential unit tests are the primary focus.
-- Build modular, composable, and easily testable components. Avoid monolithic architecture.
 - For runtime debugging and incident analysis, prefer Grafana/Loki log exploration first; see `docs/logs.md` for setup and query workflow.
-- Remove legacy compatibility paths, dead code, backward-compat shims, aliases, and old-field fallbacks as part of the same change. Prefer a single source of truth over parallel old/new code paths. Keep only what the user explicitly asks to preserve.
 - Expect parallel in-flight edits from the user or other agents; treat unexpected diffs as active work, and never revert/reset/checkout files you did not explicitly change for the current task. Do not call out unrelated in-flight edits unless they directly interfere with your task.
 - Avoid typecasts to `any` or `unknown`; prefer explicit, concrete types and narrow unions. Use casts only as a last resort with clear justification.
-- Bot name is a customizable setting. Bot is not always named 'clanker conk'.
 - Use git commit author `Volpestyle <14805252+Volpestyle@users.noreply.github.com>` for all commits in this repository.
 - Pull inspiration from ../openclaw when designing and coding agentic capabilities for clanker conk.
 
 ## Testing Philosophy
 
 - Design around Test Driven Development using Golden E2E Test Suites/Harnesses.
-- E2E Discord bot-to-bot tests (`tests/e2e/`) validate the physical voice layer but require separate bot tokens and test guild setup (see `docs/e2e-testing.md`)
-- The E2E Discord bot-to-bot tests are our primary testing method for this.
-- When running live smoke or golden test suites, make sure we test different configurations, and are conscious about watching the integration test and the actual process logs at the same time, to cross reference. Integration test timings are most accurate when we read directly from our process logs.
+- Unit tests are still essential, but should be strictly reserved for testing complex business logic, algorithmic boundaries, state machines, and data transformations. Never write unit tests that simply verify prompt string concatenation or other brittle, implementation-detail patterns.
+- The E2E Discord bot-to-bot tests are our primary testing method for truley reliable behavior.
+- When running/writing tests, make sure we test different configurations, and during E2E live tests, be conscious about watching the integration test and the actual process logs at the same time, to cross reference. Integration test timings are most accurate when we read directly from our process logs.
 
 ### Test Commands
 
@@ -50,7 +61,6 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 - `bun run test:e2e` — E2E tests only (`tests/e2e/`). Requires running dashboard, bot tokens, and test guild.
 - `bun run test:e2e:voice` / `bun run test:e2e:text` — targeted E2E suites.
 - Never run bare `bun test` — it discovers all `*.test.ts` files including E2E. Always use `bun run test`.
-
 
 ## Dashboard UI Preferences
 
@@ -90,25 +100,3 @@ This runs `@mermaid-js/mermaid-cli` (`mmdc`) at 4x scale to produce crisp PNGs. 
    ```
 
 4. Commit the `.mmd`, `.png`, and updated `.md` together.
-
-## Code Hygiene (Desloppifying)
-
-When the codebase accumulates AI-generated cruft, follow this protocol:
-
-### Audit Phase
-
-Run analysis tools to identify issues, prioritized by impact:
-
-- **High**: Bugs, security issues, type safety violations, `any`/`unknown` casts
-- **Medium**: Duplicate code, dead code, unused imports/variables, inconsistent naming
-- **Low**: Formatting, style inconsistencies
-
-### Cleanup Workflow
-
-1. Run linters and type checkers to surface issues
-2. Categorize findings by severity (see above)
-3. Fix incrementally — one category at a time, with tests between changes
-4. Verify fixes with `bun run typecheck` and existing test suite
-5. Use agents with file-level context rather than whole-repo context for targeted fixes
-
-General rules on dead code removal, single source of truth, and type safety apply here — see [General](#general) above.

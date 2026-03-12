@@ -3,6 +3,7 @@
 > **Scope:** Current voice transport stack, runtime modes, and canonical settings surfaces.
 > Shared attention model: [`../presence-and-attention.md`](../presence-and-attention.md)
 > Activity model and knob map: [`../clanker-activity.md`](../clanker-activity.md)
+> Cross-cutting settings contract: [`../settings.md`](../settings.md)
 > Capture and ASR details: [`voice-capture-and-asr-pipeline.md`](voice-capture-and-asr-pipeline.md)
 > Reply orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
 > Output and barge-in: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
@@ -10,6 +11,10 @@
 This document describes the voice spoke under the shared attention contract: capture, transcription, admission, transport, output, and voice-side ambient delivery.
 
 ## 1. Canonical Settings Surface
+
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics now live in [`../settings.md`](../settings.md).
+
+This document keeps the voice-local settings surfaces that matter for voice transport and stage behavior.
 
 Voice configuration is split across these live surfaces:
 
@@ -181,7 +186,8 @@ Important runtime behavior:
 
 Tool ownership:
 
-- provider-native tool definitions come from `src/voice/voiceToolCallToolRegistry.ts`
+- canonical local tool definitions come from `src/tools/toolRegistry.ts` and `src/tools/sharedToolSchemas.ts`
+- provider-native voice exports are assembled in `src/voice/voiceToolCallToolRegistry.ts`
 - execution is still centralized in `src/voice/voiceToolCallDispatch.ts`
 - full-brain replies use the shared orchestrator tool loop instead of provider-native replanning
 - provider-native sessions emit `realtime_tool_call_*` events; brain/transport-only sessions emit `voice_brain_*` events

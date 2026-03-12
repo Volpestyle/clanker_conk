@@ -53,10 +53,11 @@ import {
   isUserBlocked as isUserBlockedForPermissions
 } from "./bot/permissions.ts";
 import {
+  evaluateReplyAdmissionDecision,
   getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
-  hasStartupFollowupAfterMessage as hasStartupFollowupAfterMessageForReplyAdmission,
-  shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission
+  hasStartupFollowupAfterMessage as hasStartupFollowupAfterMessageForReplyAdmission
 } from "./bot/replyAdmission.ts";
+import { buildRuntimeDecisionCorrelation } from "./services/runtimeCorrelation.ts";
 import { runStartupCatchup as runStartupCatchupForStartupCatchup } from "./bot/startupCatchup.ts";
 import {
   maybeRunInitiativeCycle as maybeRunInitiativeCycleForInitiativeEngine
@@ -1212,15 +1213,63 @@ export class ClankerBot {
       message,
       recentMessages
     );
-    const shouldQueueReply = shouldAttemptReplyDecisionForReplyAdmission({
+    const isReplyChannel = isReplyChannelForPermissions(settings, String(message.channelId));
+    const replyAdmissionDecision = evaluateReplyAdmissionDecision({
       botUserId: this.client.user?.id,
       settings,
       recentMessages,
       addressSignal,
+      isReplyChannel,
       triggerMessageId: message.id,
+      triggerAuthorId: message.author?.id || null,
+      triggerReferenceMessageId: message.reference?.messageId || null,
       windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
     });
-    if (!shouldQueueReply) return;
+    this.store.logAction({
+      kind: "text_runtime",
+      guildId: message.guildId,
+      channelId: message.channelId,
+      messageId: message.id,
+      userId: message.author.id,
+      content: "reply_admission_decision",
+      metadata: {
+        ...buildRuntimeDecisionCorrelation({
+          botId: this.client.user?.id || null,
+          triggerMessageId: message.id,
+          source: "message_event",
+          stage: "admission",
+          allow: replyAdmissionDecision.allow,
+          reason: replyAdmissionDecision.reason
+        }),
+        isReplyChannel,
+        allowUnsolicitedReplies: replyAdmissionDecision.allowUnsolicitedReplies,
+        ambientReplyEagerness: Number(settings?.interaction?.activity?.ambientReplyEagerness || 0),
+        addressSignal: {
+          direct: Boolean(addressSignal.direct),
+          inferred: Boolean(addressSignal.inferred),
+          triggered: Boolean(addressSignal.triggered),
+          reason: String(addressSignal.reason || "llm_decides"),
+          confidence: Math.max(0, Math.min(1, Number(addressSignal.confidence) || 0)),
+          threshold: Math.max(0.4, Math.min(0.95, Number(addressSignal.threshold) || 0.62)),
+          confidenceSource: addressSignal.confidenceSource || "fallback"
+        },
+        attentionMode: replyAdmissionDecision.attentionState.mode,
+        attentionReason: replyAdmissionDecision.attentionState.reason,
+        recentReplyWindowActive: replyAdmissionDecision.attentionState.recentReplyWindowActive,
+        responseWindowSize: replyAdmissionDecision.attentionState.responseWindowSize,
+        latestBotMessageId: replyAdmissionDecision.attentionState.latestBotMessageId,
+        coldAmbientProbability: Number.isFinite(replyAdmissionDecision.coldAmbientProbability)
+          ? Number(replyAdmissionDecision.coldAmbientProbability.toFixed(4))
+          : null,
+        coldAmbientGatePassed: replyAdmissionDecision.coldAmbientGatePassed,
+        coldAmbientGateValue: Number.isFinite(replyAdmissionDecision.coldAmbientGateValue)
+          ? Number(replyAdmissionDecision.coldAmbientGateValue.toFixed(4))
+          : null,
+        triggerReferenceMessageId: message.reference?.messageId || null,
+        recentMessageCount: Array.isArray(recentMessages) ? recentMessages.length : 0
+      }
+    });
+    if (!replyAdmissionDecision.allow) return;
     this.enqueueReplyJob({
       source: "message_event",
       message,
@@ -1596,6 +1645,9 @@ export class ClankerBot {
       settings
     );
     await maybeRunAutomationCycleForAutomationEngine(this.toAutomationEngineRuntime());
+
+    // Run an ambient initiative cycle on startup to catch unanswered conversations
+    await maybeRunInitiativeCycleForInitiativeEngine(this.toInitiativeRuntime());
 
     // Catch up on any missed reflections from past days
     const startupSettings = this.store.getSettings();

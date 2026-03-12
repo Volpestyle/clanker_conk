@@ -13,7 +13,7 @@ import {
   restoreTemporaryE2ESettings,
   VoiceHistoryAssertionHelper
 } from "./driver/index.ts";
-import { Store } from "../../src/store.ts";
+import { Store } from "../../src/store/store.ts";
 import { LLMService } from "../../src/llm.ts";
 import { runJsonJudge } from "../../scripts/replay/core/judge.ts";
 import { DEFAULT_SETTINGS } from "../../src/settings/settingsSchema.ts";

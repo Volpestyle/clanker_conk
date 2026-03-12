@@ -4,10 +4,13 @@
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
 > Output and barge-in: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
 > Reply orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
+> Cross-cutting settings contract: [`../settings.md`](../settings.md)
 
 ---
 
 # Part 1: Audio Capture
+
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document keeps the capture lifecycle, promotion thresholds, ASR handoff, and related voice-local settings scoped to the audio pipeline itself.
 
 This part defines the per-user audio capture state machine. Each user who speaks in a voice session gets an independent `CaptureState` that tracks their audio from the first Discord speaking event through promotion, finalization, and handoff to the turn processor.
 
@@ -69,7 +72,7 @@ Promotion is evaluated on every incoming audio chunk in `onUserAudio`. Two indep
 | Signal | Criteria | Constants |
 |---|---|---|
 | `server_vad_confirmed` | Server VAD fired for this utterance (`speechDetectedUtteranceId === captureState.asrUtteranceId`) AND `activeSampleRatio >= 0.02` AND `peak >= 0.016` AND `bytesSent >= minPromotionBytes` | `VOICE_TURN_PROMOTION_ACTIVE_RATIO_MIN` (0.02), `VOICE_TURN_PROMOTION_PEAK_MIN` (0.016), `VOICE_TURN_PROMOTION_MIN_CLIP_MS` (420) |
-| `strong_local_audio` | `activeSampleRatio >= 0.06` AND `peak >= 0.04` AND `rms >= 0.004` AND `bytesSent >= minPromotionBytes` | `VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN` (0.06), `VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN` (0.04), `VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN` (0.004) |
+| `strong_local_audio` | `activeSampleRatio >= 0.14` AND `peak >= 0.06` AND `rms >= 0.008` AND `bytesSent >= minPromotionBytes` | `VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN` (0.14), `VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN` (0.06), `VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN` (0.008) |
 
 The hybrid design is deliberate:
 
@@ -377,7 +380,9 @@ Audio arrives via `appendAudioToAsr` on every `onUserAudio` chunk:
 
 If the commit times out empty but the same utterance produces a late final segment shortly after, the capture manager still watches that committed utterance object during the late-recovery window. A new provisional utterance for the same speaker does not cancel recovery of the older committed transcript.
 
-If that late-recovery window also ends empty, both bridge empty-drop paths recover any stashed preplay-superseded turn before returning. If no preplay-superseded turn exists but the same speaker had just barge-interrupted a live reply, the runtime replays that interrupted assistant line directly. Empty newer speech is treated as noise or abandonment, not as durable reason to lose the older admitted turn.
+If that late-recovery window also ends empty, both bridge empty-drop paths recover any stashed preplay-superseded turn before returning. If no preplay-superseded turn exists but the same speaker had just committed a live barge-in, the runtime hands interruption context back to the normal voice brain instead of replaying the interrupted assistant line deterministically. Empty newer speech is treated as noise or abandonment, not as durable reason to lose the older admitted turn.
+
+Malformed provider transcripts that contain OpenAI reserved control-token syntax such as `<|...|>`, `vq_*_audio_*`, `audio_future*`, or `end_of_task` are dropped at the ASR bridge boundary and again at the bridge-turn handoff if needed. These malformed transcripts are treated the same as empty bridge results for recovery and interruption handoff, and they never enter realtime turn context, memory lookup, or admitted user turns. This guard is ASR-only: assistant directives such as `[[TO:...]]` and `[[SOUNDBOARD:...]]` remain valid on assistant-generation paths.
 
 If that late transcript revises a turn that has already been admitted but has not started audio yet, the turn processor replaces the older queued turn in place and replays the corrected revision with a fresh reply scope. The corrected utterance is treated as the same turn becoming more complete, not as stale newer work that should be dropped.
 
@@ -438,8 +443,8 @@ The `OpenAiRealtimeTranscriptionClient` emits:
 | Event | Handler | Effect on ASR State |
 |---|---|---|
 | `transcript` | `wireClientEvents` | Updates `utterance.finalSegments` / `partialText`, sets `lastTranscriptAt`. Shared mode: populates `finalTranscriptsByItemId`. |
-| `speech_started` | `wireClientEvents` | Sets `speechDetectedAt`, `speechDetectedUtteranceId`, `speechActive = true`. Used by capture promotion (see [Section 4](#4-promotion-signals)). |
-| `speech_stopped` | `wireClientEvents` | Sets `speechActive = false`. |
+| `speech_started` | `wireClientEvents` | Sets `speechDetectedAt`, `speechDetectedUtteranceId`, `speechActive = true`. Used by capture promotion (see [Section 4](#4-promotion-signals)) and, in transcript-overlap sessions, can arm a pending same-speaker interrupt sustain window only when the live capture already passes the same assertive acoustic gate used for raw barge-in. The hard cut only commits if that utterance is still active when the sustain window closes. |
+| `speech_stopped` | `wireClientEvents` | Sets `speechActive = false`. In transcript-overlap sessions this also releases an uncommitted pending same-speaker interrupt so the staged turn can flush normally. |
 | `error_event` | `wireClientEvents` | Logs error. May trigger session close depending on severity. |
 | `socket_closed` | `wireClientEvents` | Transitions phase to `idle`. Clears client reference. |
 

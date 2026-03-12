@@ -4,20 +4,28 @@ This document describes the shipped browser-agent system: how `browser_browse` w
 
 ## Overview
 
-The browser agent is a local browsing capability built on `agent-browser`. It runs headless by default and can optionally show a visible browser window from the dashboard Browser Runtime section:
+`browser_browse` is one browsing capability with two shipped runtimes selected from `settings.agentStack`:
+
+- `local_browser_agent`: our internal browse-agent loop. An LLM drives low-level browser tools through `BrowserManager`.
+- `openai_computer_use`: OpenAI-hosted computer-use reasoning. The model emits computer actions, and Clanker executes them locally through `BrowserManager`.
+
+Both runtimes run headless by default and can optionally show a visible browser window from the dashboard Browser Runtime section.
+
+Key modules:
 
 - `src/services/BrowserManager.ts`: wraps `agent-browser` CLI commands and logical session lifecycle.
-- `src/tools/browserTools.ts`: low-level browser tool schemas and execution wrappers (`browser_open`, `browser_click`, `browser_extract`, etc.).
-- `src/agents/browseAgent.ts`: inner LLM tool loop that drives those browser tools until it reaches a final answer.
-- `src/tools/browserTaskRuntime.ts`: shared task runtime used by both text and voice for task registration, cancellation, and normalized browser-browse execution.
+- `src/tools/browserTools.ts`: low-level browser tool schemas and execution wrappers (`browser_open`, `browser_click`, `browser_extract`, etc.) for the local runtime.
+- `src/agents/browseAgent.ts`: inner LLM tool loop for `local_browser_agent`.
+- `src/tools/browserTaskRuntime.ts`: local-runtime wrapper used by both text and voice for cancellation, logging, and normalized browser-browse execution.
+- `src/tools/openAiComputerUseRuntime.ts`: hosted `openai_computer_use` loop that feeds screenshots into the OpenAI Responses API and replays returned computer actions.
 
-At the top level, the main brain does not directly drive `browser_open` / `browser_click`. It calls the higher-level `browser_browse` tool, and that tool launches the inner browse agent.
+At the top level, the main brain does not directly drive `browser_open` / `browser_click`. It calls the higher-level `browser_browse` tool, and that tool dispatches to the configured browser runtime.
 
-The shared `browser_browse` schema description stays short on purpose. The schema names the capability and contrasts it with `web_scrape`; the fuller routing guidance lives in prompts and this runtime doc.
+The shared `browser_browse` schema description stays short on purpose. The schema names the capability and contrasts it with `web_scrape`; the cross-modal routing policy lives in `src/prompts/toolPolicy.ts`, and this runtime doc adds browser-specific behavior on top.
 
 Tool selection is by fit, not a fixed ladder. `web_scrape` is best for quickly reading page text from a known URL. `browser_browse` is the right tool when the user explicitly asks for browser use, asks for a screenshot, asks what a page looks like, when page appearance/layout matters, or when navigation/interaction/JS rendering is needed.
 
-When interactive browser sessions are enabled, `session_id` is the continuation signal. If a `browser_browse` turn returns a `session_id`, the parent brain can continue that session on a later turn. If the inner browser agent explicitly ends the session with `browser_close`, the tool result omits `session_id`. The parent brain does not need a second lifecycle flag to know whether continuation is possible.
+When the resolved runtime is `local_browser_agent` and browser sessions are enabled, `session_id` is the continuation signal. If a `browser_browse` turn returns a `session_id`, the parent brain can continue that session on a later turn. If the inner browser agent explicitly ends the session with `browser_close`, the tool result omits `session_id`. `openai_computer_use` is currently one-shot; it does not expose persistent `browser_browse` session continuation.
 
 ## Where It Is Available
 
@@ -25,7 +33,8 @@ When interactive browser sessions are enabled, `session_id` is the continuation 
 
 - `/clank browse` slash subcommand
 - text reply tool loop
-- voice tool loop
+- full-brain voice reply tool loop
+- provider-native realtime voice tool loop
 
 It is intentionally not enabled for automation runs right now, even though automations use the same general reply-tool loop.
 
@@ -42,28 +51,38 @@ browser_browse({ query: "go find ..." })
 That top-level tool exists in:
 
 - text replies via `src/tools/replyTools.ts`
+- full-brain voice replies via `src/bot/voiceReplies.ts`
 - provider-native realtime voice tool definitions via `src/voice/voiceToolCallToolRegistry.ts`
 
-### 2. Shared browser task runtime
+### 2. Runtime selection
 
-Both text and voice pass through:
+Text and voice both resolve the active browser runtime from `agentStack.runtimeConfig.browser` / `agentStack.overrides.browserRuntime`.
+
+Current runtime values:
+
+- `local_browser_agent`
+- `openai_computer_use`
+
+The `openai_native_realtime` preset defaults to `openai_computer_use`. Other presets currently default to the local browser agent unless explicitly overridden.
+
+### 3. Local runtime: `local_browser_agent`
+
+Text and voice route through:
 
 - `runBrowserBrowseTask(...)` in `src/tools/browserTaskRuntime.ts`
 
-This shared runtime is responsible for:
+That wrapper is responsible for:
 
-- starting the browse-agent run
+- starting the local browse-agent run
 - normalizing abort/cancel errors
 - logging `browser_browse_call`
 - keeping task lifecycle behavior aligned across modalities
 
-### 3. Inner browse-agent loop
-
-The shared runtime then calls:
+It then calls:
 
 - `runBrowseAgent(...)` in `src/agents/browseAgent.ts`
 
-That loop:
+That inner loop:
 
 - calls `llm.chatWithTools(...)`
 - exposes the low-level browser tool set from `src/tools/browserTools.ts`
@@ -71,13 +90,29 @@ That loop:
 - appends tool results back into the loop
 - stops when the model returns plain text
 
-When the inner browse agent captures a screenshot, that image is preserved as a structured image input instead of being stranded as raw base64 text. The parent brain receives the screenshot on the next continuation turn alongside the browser tool result text, so it can inspect the page visually. A request like "take a screenshot of eBay and tell me what's on the page" should route through `browser_browse`, not `web_scrape`.
+When the inner browse agent captures a screenshot, that image is preserved as a structured image input instead of being stranded as raw base64 text. The parent brain receives the screenshot alongside the browser tool result text, so it can inspect the page visually. A request like "take a screenshot of eBay and tell me what's on the page" should route through `browser_browse`, not `web_scrape`.
 
-`browser_close` is terminal for persistent browser sessions. It is not just a low-level cleanup action. When the inner agent uses it, the browser session is treated as completed, future continuation on that `session_id` is rejected, and the wrapper omits `session_id` from the returned tool result.
+`browser_close` is terminal for persistent local browser sessions. It is not just a low-level cleanup action. When the inner agent uses it, the browser session is treated as completed, future continuation on that `session_id` is rejected, and the wrapper omits `session_id` from the returned tool result.
 
-### 4. Low-level browser execution
+### 4. Hosted runtime: `openai_computer_use`
 
-`BrowserManager` converts each low-level browser action into an `agent-browser` CLI call such as:
+When the resolved runtime is `openai_computer_use`, text and voice call:
+
+- `runOpenAiComputerUseTask(...)` in `src/tools/openAiComputerUseRuntime.ts`
+
+That runtime:
+
+- opens a local browser session through `BrowserManager`
+- sends the current URL plus a screenshot to the OpenAI Responses API computer tool
+- executes returned computer actions locally (`click`, `type`, `keypress`, `drag`, `scroll`, `move`, `wait`)
+- captures a fresh screenshot after each action batch and feeds it back into the hosted loop
+- stops when OpenAI returns final text or the task hits the configured step cap
+
+This branch still uses the local browser manager for actual page execution, but it does not run our inner `browseAgent.ts` loop and it does not expose multi-turn `session_id` continuation to the parent brain.
+
+### 5. Low-level browser execution
+
+For the local runtime, `BrowserManager` converts each low-level browser action into an `agent-browser` CLI call such as:
 
 - `open`
 - `snapshot`
@@ -90,6 +125,8 @@ When the inner browse agent captures a screenshot, that image is preserved as a 
 
 Each call uses a short deterministic `--session` value derived from the logical session key so the browser task operates in an isolated logical session without tripping Unix socket path-length limits inside `agent-browser`.
 
+The hosted `openai_computer_use` runtime also executes against the same `BrowserManager`, but the action plan comes from OpenAI computer-use output instead of our local browser tool loop.
+
 When `agentStack.runtimeConfig.browser.headed` is enabled, the local browser manager launches those sessions with `agent-browser --headed`, so you can watch the task on the same machine that is running the bot. The default remains headless.
 
 ## Cancellation Model
@@ -101,9 +138,9 @@ Cancellation is unified across text and voice. See [`cancel.md`](cancel.md) for 
 - Every active `browser_browse` task gets an `AbortController`.
 - The abort signal is threaded through:
   - top-level text/voice tool entrypoint
-  - shared browser task runtime
-  - `runBrowseAgent(...)`
-  - `executeBrowserTool(...)`
+  - either `runBrowserBrowseTask(...)` or `runOpenAiComputerUseTask(...)`
+  - hosted runtime only: the OpenAI Responses API computer-use request loop
+  - local runtime only: `runBrowseAgent(...)` and `executeBrowserTool(...)`
   - `BrowserManager`
   - `execFile(..., { signal })` for the underlying `agent-browser` process
 - Abort errors are normalized so callers consistently see a cancellation instead of a generic subprocess failure.
@@ -123,6 +160,11 @@ This is implemented in:
 
 ### Voice path
 
+Full-brain voice replies use the same `ReplyToolRuntime` path as text replies:
+
+- the voice-generation abort signal is forwarded into reply-tool execution
+- when sub-agent sessions are available, `browser_browse` uses the persistent local browser-session path before falling back to one-shot channel-scoped browser tasks
+
 Provider-native realtime voice tool calls also create abort controllers per pending call:
 
 - pending tool-call controllers are stored on the voice session
@@ -136,13 +178,15 @@ This is implemented in:
 
 ## Settings
 
-Browser-agent settings live under `settings.agentStack.runtimeConfig.browser`, with the selected runtime resolved from `settings.agentStack`.
+The canonical persistence, preset, and save semantics for these fields live in [`docs/settings.md](settings.md)`.
+
+This document only covers the browser-local knobs that matter for browser runtime behavior.
 
 Important fields:
 
 - `agentStack.runtimeConfig.browser.enabled`
 - `agentStack.runtimeConfig.browser.headed`
-- `agentStack.overrides.browserRuntime`
+- `agentStack.overrides.browserRuntime` (`local_browser_agent` or `openai_computer_use`)
 - `agentStack.runtimeConfig.browser.localBrowserAgent.maxStepsPerTask`
 - `agentStack.runtimeConfig.browser.localBrowserAgent.stepTimeoutMs`
 - `agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.provider`
@@ -170,12 +214,12 @@ Current guardrails include:
 Browser-agent activity is visible via action-log kinds:
 
 - `browser_browse_call`
-- `browser_tool_step`
+- `browser_tool_step` (local runtime low-level steps)
 
 The dashboard text history also surfaces richer tool-result detail for browser-adjacent tool usage alongside other tool calls.
 The dashboard Agents tab follows the global header guild selector, so browser-session history stays isolated to the currently selected guild instead of mixing sessions from every server.
 
-`browser_browse_call` and `browser_agent_session_turn` metadata include `imageInputCount` when screenshots were captured and handed back to the parent brain.
+`browser_browse_call` is emitted by both runtimes. The local runtime records step count, cost, and `imageInputCount` for screenshots forwarded back to the parent brain. The hosted runtime records `runtime: "openai_computer_use"`, step count, current URL, and duration. `browser_agent_session_turn` is specific to the local browse-agent loop.
 
 ## Testing
 
@@ -183,12 +227,15 @@ Current focused coverage includes:
 
 - `src/agents/browseAgent.test.ts`
 - `src/tools/browserTaskRuntime.test.ts`
+- `src/tools/openAiComputerUseRuntime.test.ts`
 - `src/voice/voiceToolCalls.test.ts`
 
 Those tests cover:
 
+- runtime selection and settings gating
 - timeout forwarding
 - abort during the LLM loop
 - abort during an in-flight browser tool call
+- OpenAI computer-use action execution and cancellation
 - channel-scoped task registry behavior
 - voice-path signal propagation

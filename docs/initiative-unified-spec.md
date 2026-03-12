@@ -121,7 +121,7 @@ Canonical tool budget settings:
 
 Tool availability:
 
-- `web_search` and `browser_browse` are available only when `initiative.text.allowActiveCuriosity` is true
+- `web_search`, `web_scrape`, and `browser_browse` are available only when `initiative.text.allowActiveCuriosity` is true
 - `memory_search` is available when memory is enabled
 - discovery source-management tools are available only when `initiative.discovery.allowSelfCuration` is true
 
@@ -223,7 +223,7 @@ Both transports now ship a lightweight pending-thought queue so an ambient thoug
 | `initiative.text.minMinutesBetweenPosts` | Minimum spacing between ambient-text considerations |
 | `initiative.text.maxPostsPerDay` | Daily ambient-text budget |
 | `initiative.text.lookbackMessages` | Channel context window |
-| `initiative.text.allowActiveCuriosity` | Enables `web_search` and `browser_browse` |
+| `initiative.text.allowActiveCuriosity` | Enables `web_search`, `web_scrape`, and `browser_browse` |
 | `initiative.text.maxToolSteps` | Max ambient-text tool-loop steps |
 | `initiative.text.maxToolCalls` | Max ambient-text tool calls |
 

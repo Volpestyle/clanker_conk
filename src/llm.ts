@@ -423,7 +423,10 @@ export class LLMService {
           event: normalizedTrace.event || null,
           reason: normalizedTrace.reason || null,
           messageId: normalizedTrace.messageId || null,
-          streaming: usedStreamingTransport
+          streaming: usedStreamingTransport,
+          systemPrompt: effectiveSystemPrompt || null,
+          userPrompt: userPrompt || null,
+          contextMessageCount: contextMessages.length
         },
         usdCost: costUsd
       });

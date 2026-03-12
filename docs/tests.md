@@ -21,28 +21,27 @@ The active voice live suites share a single source of truth:
 
 Current shared voice catalog size:
 
-- `91` scenarios total
+- `69` scenarios total
 - `8` scenario groups
-- The same `91` scenarios intentionally exercise two different contracts: voice admission in `voiceAdmission.live.test.ts` and voice generation in the voice section of `replyGeneration.live.test.ts`
-- Voice generation expectations are now exact for `82` of those `91` shared scenarios
-- The remaining `9` generation `either` cases are raw room-event cues, where admission may allow but the brain is still intentionally free to speak or `[SKIP]`
+- The same `69` scenarios intentionally exercise two different contracts: voice admission in `voiceAdmission.live.test.ts` and voice generation in the voice section of `replyGeneration.live.test.ts`
+- The shared corpus currently encodes `35` spoken-reply expectations, `30` `[SKIP]` expectations, and `4` actionable `voiceIntent` expectations
 
 Current group breakdown:
 
 - `name detection fast-paths`: `4`
 - `join events`: `9`
-- `music commands`: `4`
-- `clear engagement`: `18`
-- `contextual engagement`: `13`
-- `stays quiet`: `15`
-- `music wake latch`: `7`
-- `eagerness sweeps`: `21`
+- `clear engagement`: `11`
+- `contextual engagement`: `7`
+- `categorical restraint`: `8`
+- `command recognition`: `3`
+- `music wake latch handling`: `3`
+- `eagerness sweeps`: `24`
 
 Coverage assessment:
 
-- Good breadth for admission and generation behavior across name detection, unsolicited participation, joins, music control, silence cases, and eagerness thresholds
+- Good breadth for admission and generation behavior across name detection, joins, direct follow-ups, contextual engagement, restraint cases, command turns, wake-latch handling, and eagerness thresholds
 - Good alignment because admission and generation consume the same voice inputs
-- The voice generation prompt relies on transcript plus contextual guidance such as membership events, room context, and fuzzy bot-name cues
+- The shared corpus keeps admission plus generation/intent expectations coupled in one source of truth
 - Still not full-stack realtime coverage: these tests do not validate websocket/session transport, ASR streaming, TTS audio output, Discord timing, or end-to-end voice latency
 - Still not a full provider matrix by default: the scenarios are broad, but we do not automatically run every scenario against every provider/model combination
 
@@ -119,7 +118,7 @@ It uses the same shared scenario corpus as the voice section of `replyGeneration
 Defaults:
 
 - Classifier provider defaults to `claude-oauth`
-- The suite covers the shared name-detection, join-event, music, contextual, and eagerness scenarios
+- The suite covers the shared name-detection, join-event, engagement, restraint, command, wake-latch, and eagerness scenarios
 
 ```sh
 bun test tests/live/voiceAdmission.live.test.ts
@@ -143,7 +142,7 @@ Debug visibility:
 The project includes two offline behavior-validation harnesses:
 
 - Flooding replay harness: [`scripts/floodingReplayHarness.ts`](../scripts/floodingReplayHarness.ts)
-- Voice golden harness: [`scripts/voiceGoldenHarness.ts`](../scripts/voiceGoldenHarness.ts) (covered in `docs/e2e-test-spec.md`)
+- Voice golden harness: [`scripts/voiceGoldenHarness.ts`](../scripts/voiceGoldenHarness.ts) (covered in [`docs/e2e-test-spec.md`](e2e-test-spec.md))
 
 Harness intent:
 
@@ -170,7 +169,7 @@ Current flooding wiring:
 
 The flooding harness runs this pipeline:
 
-1. Parse CLI args and load runtime settings from `settings.runtime_settings`.
+1. Parse CLI args and load runtime settings from the SQLite `settings` row where `key = 'runtime_settings'`.
 2. Query `messages` for replay context and user turns (`since`/`until`/`channel-id` filters).
 3. Query `actions` for recorded outcomes (`sent_reply`, `sent_message`, `reply_skipped`, `voice_intent_detected`).
 4. Rebuild turn-by-turn context and detect whether each user turn is addressed to the bot.
@@ -178,9 +177,13 @@ The flooding harness runs this pipeline:
 6. Resolve the turn outcome:
    - `recorded` mode: reuse recorded action rows from DB.
    - `live` mode: call the actor LLM (`buildSystemPrompt` + `buildReplyPrompt`) for admitted turns.
-7. Accumulate per-channel-mode stats (`reply_channel` vs `other_channel`), timeline events, and turn snapshots.
+7. Accumulate per-channel-mode stats (`initiative` vs `non_initiative`), timeline events, and turn snapshots.
 8. Optionally run a judge LLM in `live` mode to score flooding for a specific `window-start`/`window-end`.
 9. Evaluate assertions; any failure sets process exit code to `1`.
+
+Current limitation:
+
+- The replay harness currently buckets initiative channels from the legacy `permissions.initiativeChannelIds` field in `scripts/replay/core/db.ts`. The live runtime treats `permissions.replies.replyChannelIds` as the canonical initiative-eligible pool, so replay initiative/non-initiative buckets are still a compatibility approximation until that harness is updated.
 
 ### Running the Flooding Replay
 

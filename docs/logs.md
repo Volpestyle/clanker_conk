@@ -104,6 +104,115 @@ Filter examples:
 {job="clanker_runtime",agent="voice",level="error"}
 ```
 
+## Incident analysis and replay
+
+Loki/Grafana is the raw event substrate, not the final debugging experience.
+
+For day-to-day operator work, the highest-leverage observability surface is a
+turn debugger that reconstructs one incident from the underlying structured
+events.
+
+Prioritize this workflow over generic metrics dashboards:
+
+- open any sent message, reply, error, or suspicious runtime event
+- reconstruct the full turn timeline from correlated logs
+- show the raw JSON beside a human-readable replay
+- let operators pivot into broader log search only after the local turn makes sense
+
+Minimum replay payload for a text or multimodal turn:
+
+- trigger message and `triggerMessageIds`
+- ingress admission decision (`reply_admission_decision`)
+- queue-side drop reasons (`reply_queue_gate_rejected`) when a queued turn never reaches generation
+- reply-pipeline boundary (`reply_pipeline_gate`) when a queued turn reaches the pipeline but stops before generation
+- tool availability snapshot (`reply_tool_availability`) before the model decides whether to call tools
+- coalesced recent-message window
+- addressing / admission decision
+- prompt bundle (`metadata.replyPrompts`)
+- LLM calls in order, including `toolNames`, `toolCallCount`, `stopReason`, and transcript/output previews
+- tool loop steps and tool results
+- attachment artifacts, image lookup results, fetched pages, or other retrieved context
+- final delivered action: reaction, sent message, sent reply, skip, or failure
+- memory side effects such as retrieval, embedding, and reply ingestion
+- cost and latency breakdown (`performance.*`, `usd_cost`)
+
+Correlation keys to preserve across the UI:
+
+- `metadata.botId`
+- `metadata.deployment`
+- `metadata.triggerMessageId`
+- `metadata.sessionId`
+- `metadata.turnId`
+- `metadata.source`
+- `metadata.stage`
+- `metadata.allow`
+- `metadata.reason`
+- `message_id`
+- `metadata.triggerMessageId`
+- `metadata.triggerMessageIds`
+- `metadata.sessionId`
+- `guild_id`
+- `channel_id`
+- `user_id`
+
+## Text reply incident workflow
+
+When a text message appears to be ignored before any prompt or LLM call happens, start with the ingress and queue boundaries:
+
+- `reply_admission_decision`
+- `reply_queue_gate_rejected`
+- `reply_pipeline_gate`
+- `reply_tool_availability`
+
+Suggested query:
+
+```logql
+{job="clanker_runtime",kind="text_runtime"} |= "reply_"
+```
+
+Inspect these metadata fields together:
+
+- `botId`
+- `deployment`
+- `triggerMessageId`
+- `sessionId`
+- `turnId`
+- `allow`
+- `reason`
+- `addressSignal`
+- `attentionMode`
+- `attentionReason`
+- `recentReplyWindowActive`
+- `coldAmbientProbability`
+- `coldAmbientGatePassed`
+- `queueDepth`
+- `forceRespond`
+- `sendBudgetAllowed`
+- `talkNowAllowed`
+- `ctxBuilt`
+- `includedTools`
+- `excludedTools`
+
+Interpretation notes:
+
+- `reply_admission_decision` is the text ingress decision before the message is ever queued for generation.
+- `reason=hard_address` means the text path admitted the turn immediately because it was a direct address or exact bot-name hit.
+- `reason=recent_reply_window` means the turn stayed in the active follow-up window from a recent bot reply.
+- `reason=cold_ambient_*` means the turn was ambient and passed or failed the deterministic cold-ambient probability gate.
+- `reply_queue_gate_rejected` means the message was already queued, but the queue worker later dropped it because settings, identity, permissions, or duplicate-trigger state changed before send-time.
+- `reply_pipeline_gate` means the queued turn reached `maybeReplyToMessagePipeline()`. `reason=ready` is the successful boundary crossing; other reasons explain why the pipeline exited before any LLM call.
+- `reply_tool_availability` records the tool set that was actually exposed to the model for that text turn, including excluded tool names with collapsed reasons like `settings_disabled`, `budget_blocked`, `provider_unconfigured`, and `no_history_images`.
+- These decision-boundary events should all carry the same debugger anchor bundle: `botId`, `deployment`, `triggerMessageId` or `sessionId`, `turnId`, `source`, `stage`, `allow`, and `reason`.
+
+Design rule:
+
+- analytics charts are secondary
+- incident reconstruction, replay, and search are primary
+
+If a weird behavior requires an operator to manually stitch together five log
+lines across captioning, tool calls, memory, and final delivery, the logs are
+present but the debugging product is still incomplete.
+
 ## Voice memory attribution
 
 When voice feels redundant or expensive, attribute memory work before changing
@@ -174,6 +283,7 @@ assistant output state machine doc first:
 Start with these events:
 
 - `voice_turn_addressing`
+- `voice_barge_in_gate`
 - `voice_direct_address_interrupt`
 - `bot_audio_started`
 - `openai_realtime_response_done`
@@ -192,8 +302,11 @@ Suggested query:
 
 Inspect these metadata fields together:
 
-- `outputLockReason`
+- `allow`
 - `reason`
+- `outputLockReason`
+- `stage`
+- `source`
 - `msSinceAssistantReply`
 - `retryAfterMs`
 
@@ -206,6 +319,10 @@ Common blockers:
 
 Operator notes:
 
+- `voice_barge_in_gate` is promotion-scoped, not chunk-scoped. It captures the first summarized interruption decision for a promoted user capture when some assistant output context is active.
+- if `voice_barge_in_gate` shows `allow=false`, treat `reason` as the primary interruption blocker and `outputLockReason` as supporting context about what the assistant was doing.
+- if `voice_barge_in_gate` shows `allow=false reason=transcript_overlap_interrupts_enabled`, the system intentionally waited for transcript-burst interruption logic instead of cutting audio from raw PCM.
+- if `voice_barge_in_gate` shows `allow=false reason=local_only_promotion_pending_server_vad`, the capture promoted from strong local audio but had not yet been confirmed by server VAD for live interruption.
 - if `outputLockReason=bot_audio_buffered` persists for more than a couple seconds after `openai_realtime_response_done`, suspect stale `clankvox` playback telemetry rather than real remaining speech
 - if `voice_turn_addressing` shows `reason=bot_turn_open` but a same-moment `voice_direct_address_interrupt` follows, the turn cut through output lock because it was an allowed wake-word / bot-name interruption
 - if a deferred turn keeps rescheduling, inspect whether `voice_activity_started` is followed by `voice_turn_dropped_silence_gate`; silence-only captures should not be treated the same as real live speech

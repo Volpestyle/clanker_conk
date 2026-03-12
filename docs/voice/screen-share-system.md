@@ -2,7 +2,10 @@
 
 Complete documentation of the screen share pipeline: session lifecycle, frame processing, and how the agent sees and reasons about what's on screen.
 
-See also: `docs/public-https-entrypoint-spec.md` (public URL gating).
+See also: [`docs/public-https-entrypoint-spec.md`](../public-https-entrypoint-spec.md) (public URL gating).
+Cross-cutting settings contract: [`../settings.md`](../settings.md)
+
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document covers the screen-share pipeline and the stream-watch settings that shape voice-local visual context.
 
 ## Design Philosophy
 
@@ -246,7 +249,7 @@ This separates "what the scanner saw" from "what context the VC brain currently 
 - Tokens are 18-byte random base64url, never logged in full
 - Sessions auto-expire after TTL
 - Session creation requires `DASHBOARD_TOKEN` (admin auth)
-- Public URL gating defined in `docs/public-https-entrypoint-spec.md`
+- Public URL gating defined in [`docs/public-https-entrypoint-spec.md`](../public-https-entrypoint-spec.md)
 
 ## Key Source Files
 
