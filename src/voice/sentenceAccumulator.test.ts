@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { SentenceAccumulator } from "./sentenceAccumulator.ts";
 
-test("SentenceAccumulator emits the first chunk eagerly after punctuation once threshold is met", () => {
+test("SentenceAccumulator emits the first chunk eagerly after two sentences once threshold is met", () => {
   const emitted: string[] = [];
   const accumulator = new SentenceAccumulator({
     eagerFirstChunk: true,
@@ -14,9 +14,10 @@ test("SentenceAccumulator emits the first chunk eagerly after punctuation once t
   });
 
   accumulator.push("Let me check that out for you. ");
-  accumulator.push("I want one more sentence.");
+  assert.deepEqual(emitted, []);
 
-  assert.equal(emitted[0], "Let me check that out for you.");
+  accumulator.push("I want one more sentence.");
+  assert.equal(emitted[0], "Let me check that out for you. I want one more sentence.");
 });
 
 test("SentenceAccumulator keeps the first chunk intact until sentence punctuation arrives", () => {
@@ -25,6 +26,7 @@ test("SentenceAccumulator keeps the first chunk intact until sentence punctuatio
     eagerFirstChunk: true,
     eagerMinChars: 30,
     maxBufferChars: 120,
+    minSentencesPerChunk: 1,
     onSentence(text) {
       emitted.push(text);
     }
@@ -43,6 +45,7 @@ test("SentenceAccumulator waits for a sentence break after the first emitted chu
     eagerFirstChunk: true,
     eagerMinChars: 10,
     maxBufferChars: 120,
+    minSentencesPerChunk: 1,
     onSentence(text) {
       emitted.push(text);
     }
@@ -56,12 +59,37 @@ test("SentenceAccumulator waits for a sentence break after the first emitted chu
   assert.deepEqual(emitted, ["First sentence.", "Second sentence is still coming through now."]);
 });
 
+test("SentenceAccumulator waits for two sentence breaks after the first emitted chunk by default", () => {
+  const emitted: string[] = [];
+  const accumulator = new SentenceAccumulator({
+    eagerFirstChunk: true,
+    eagerMinChars: 10,
+    maxBufferChars: 120,
+    onSentence(text) {
+      emitted.push(text);
+    }
+  });
+
+  accumulator.push("First sentence. Second sentence. ");
+  assert.deepEqual(emitted, ["First sentence. Second sentence."]);
+
+  accumulator.push("Third sentence. ");
+  assert.deepEqual(emitted, ["First sentence. Second sentence."]);
+
+  accumulator.push("Fourth sentence.");
+  assert.deepEqual(emitted, [
+    "First sentence. Second sentence.",
+    "Third sentence. Fourth sentence."
+  ]);
+});
+
 test("SentenceAccumulator merges tiny post-first chunks into the next chunk", () => {
   const emitted: string[] = [];
   const accumulator = new SentenceAccumulator({
     eagerFirstChunk: true,
     eagerMinChars: 10,
     maxBufferChars: 120,
+    minSentencesPerChunk: 1,
     onSentence(text) {
       emitted.push(text);
     }
@@ -84,6 +112,7 @@ test("SentenceAccumulator does not split the first chunk on an internal word bou
     eagerFirstChunk: true,
     eagerMinChars: 16,
     maxBufferChars: 120,
+    minSentencesPerChunk: 1,
     onSentence(text) {
       emitted.push(text);
     }
@@ -99,6 +128,7 @@ test("SentenceAccumulator does not split the first chunk on an internal word bou
 test("SentenceAccumulator flush emits trailing text without punctuation", () => {
   const emitted: string[] = [];
   const accumulator = new SentenceAccumulator({
+    minSentencesPerChunk: 1,
     onSentence(text) {
       emitted.push(text);
     }
@@ -117,6 +147,7 @@ test("SentenceAccumulator flush preserves a deferred tiny post-first chunk", () 
     eagerFirstChunk: true,
     eagerMinChars: 10,
     maxBufferChars: 120,
+    minSentencesPerChunk: 1,
     onSentence(text) {
       emitted.push(text);
     }
@@ -135,6 +166,7 @@ test("SentenceAccumulator forces a chunk when the buffer grows too large", () =>
   const accumulator = new SentenceAccumulator({
     eagerFirstChunk: false,
     maxBufferChars: 30,
+    minSentencesPerChunk: 1,
     onSentence(text) {
       emitted.push(text);
     }
@@ -153,6 +185,7 @@ test("SentenceAccumulator does not split on the colon inside an inline soundboar
     eagerFirstChunk: true,
     eagerMinChars: 10,
     maxBufferChars: 120,
+    minSentencesPerChunk: 1,
     onSentence(text) {
       emitted.push(text);
     }
@@ -170,6 +203,7 @@ test("SentenceAccumulator does not force-break inside an inline soundboard direc
   const accumulator = new SentenceAccumulator({
     eagerFirstChunk: false,
     maxBufferChars: 24,
+    minSentencesPerChunk: 1,
     onSentence(text) {
       emitted.push(text);
     }

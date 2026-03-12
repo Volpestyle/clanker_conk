@@ -33,6 +33,7 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
       voiceGenerationLlmProvider: "claude-oauth",
       voiceGenerationLlmModel: "claude-sonnet-4-6",
       voiceStreamingEnabled: true,
+      voiceStreamingMinSentencesPerChunk: 2,
       voiceStreamingEagerFirstChunkChars: 30,
       voiceStreamingMaxBufferChars: 300,
       voiceAsrEnabled: true,

@@ -15,6 +15,11 @@ import {
   CONVERSATION_SEARCH_POLICY_LINE,
   WEB_SCRAPE_POLICY_LINE
 } from "./toolPolicy.ts";
+import {
+  buildActiveMusicReplyGuidanceLines,
+  MUSIC_ACTIVE_AUTONOMY_POLICY_LINE,
+  MUSIC_REPLY_HANDOFF_POLICY_LINE
+} from "./voiceLivePolicy.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
 import {
   formatVoiceChannelEffectSummary,
@@ -75,15 +80,6 @@ function resolveMusicPromptDisplayState(musicContext: VoiceMusicPromptContext | 
     return "stopped";
   }
   return musicContext.playbackState;
-}
-
-function buildActiveMusicReplyGuidanceLines(musicContext: VoiceMusicPromptContext | null) {
-  if (!musicContext) return [];
-  if (musicContext.playbackState !== "playing" || musicContext.replyHandoffMode) return [];
-  return [
-    "- Music is live right now. If you answer without a pause/duck handoff, keep it brief by default: usually one or two short sentences.",
-    "- If you want to say more than a quick reaction while music is playing, call music_reply_handoff with mode=duck or mode=pause first."
-  ];
 }
 
 function collectAvailableVoiceToolNames({
@@ -689,9 +685,9 @@ export function buildVoiceTurnPrompt({
     if (normalizedMusicContext.lastAction) musicLines.push(`- Last action: ${normalizedMusicContext.lastAction}`);
     if (normalizedMusicContext.lastQuery) musicLines.push(`- Last query: ${normalizedMusicContext.lastQuery}`);
     if (normalizedMusicContext.replyHandoffMode === "pause") {
-      musicLines.push("- Your next spoken reply owns the floor: music is already paused and auto-resumes when you finish or stay silent.");
+      musicLines.push("- Your next spoken reply can take the floor: music is already paused and auto-resumes when you finish or stay silent.");
     } else if (normalizedMusicContext.replyHandoffMode === "duck") {
-      musicLines.push("- Your next spoken reply owns the floor: music stays live, ducks under your voice, then unducks when you finish.");
+      musicLines.push("- Your next spoken reply can take the floor: music stays live, ducks under your voice, then unducks when you finish.");
     }
     musicLines.push(...buildActiveMusicReplyGuidanceLines(normalizedMusicContext));
     parts.push(musicLines.join("\n"));
@@ -711,11 +707,12 @@ export function buildVoiceTurnPrompt({
 
   if (allowVoiceToolCalls) {
     parts.push([
-      "Music: music_play starts/replaces playback (re-call with selection_id for disambiguation picks). music_search only to browse candidates. Always include query text.",
-      "Queue: music_queue_next (after current), music_queue_add (append), music_stop, music_pause, music_resume, music_skip, music_now_playing. Don't chain queue_add+skip to emulate play-now.",
-      "Floor control: if a music-active turn reaches you, decide for yourself whether to take the floor, talk naturally, or stay silent.",
-      "If music is currently playing and you have not claimed the floor with music_reply_handoff, keep spoken replies short by default. For anything longer than a quick reaction, call music_reply_handoff first.",
-      "Use music_reply_handoff with mode=pause or duck when music is active and you want this one spoken reply to own the floor temporarily. Runtime auto-restores after you finish. Use music_pause only when you want playback to stay paused."
+      "Music: music_play starts/replaces playback (re-call with selection_id only when reusing an exact prior id). Omit selection_id unless you already have the exact id from prompt context or a prior tool result. Never invent placeholder or markup tokens.",
+      "Queue: music_queue_next (after current) and music_queue_add (append) can take either direct query text or exact prior IDs. Prefer direct query for ordinary queue requests; use music_search only when the user explicitly wants options or browsing.",
+      "For a request like \"play X, then queue Y\", emit music_play for X first and music_queue_next for Y second in the same tool response. Do not say Y is queued unless music_queue_next or music_queue_add succeeds.",
+      "Other music controls: music_stop, music_pause, music_resume, music_skip, music_now_playing. Don't chain queue_add+skip to emulate play-now.",
+      `Floor control: ${MUSIC_ACTIVE_AUTONOMY_POLICY_LINE}`,
+      MUSIC_REPLY_HANDOFF_POLICY_LINE
     ].join("\n"));
   }
 

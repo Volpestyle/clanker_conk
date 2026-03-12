@@ -2,7 +2,8 @@
  * Live structured-reply tests for text and voice generation.
  *
  * GENERATION LLM ONLY — no classifier. Each scenario builds a full generation
- * prompt (buildSystemPrompt + buildVoiceTurnPrompt) and sends it directly to
+ * prompt (buildVoiceSystemPrompt + buildVoiceTurnPrompt for voice, buildSystemPrompt
+ * + buildReplyPrompt for text) and sends it directly to
  * the LLM via llm.generate(). The classifier admission pipeline
  * (evaluateVoiceReplyDecision) is never called here.
  *
@@ -39,8 +40,7 @@ import type { ChatTool, ImageInput } from "../../src/llm/serviceShared.ts";
 import { normalizeDefaultModel, normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
 import { extractJsonObjectFromText } from "../../src/normalization/jsonExtraction.ts";
 import { parseBooleanFlag } from "../../src/normalization/valueParsers.ts";
-import { buildReplyPrompt, buildSystemPrompt, buildVoiceTurnPrompt } from "../../src/prompts/index.ts";
-import { buildVoiceToneGuardrails } from "../../src/prompts/promptCore.ts";
+import { buildReplyPrompt, buildSystemPrompt, buildVoiceSystemPrompt, buildVoiceTurnPrompt } from "../../src/prompts/index.ts";
 import {
   applyOrchestratorOverrideSettings,
   getResolvedOrchestratorBinding,
@@ -505,9 +505,7 @@ function buildVoicePrompt(sc: VoiceLiveScenario): PromptEnvelope {
     binding: getResolvedOrchestratorBinding(tunedSettings),
     settings: tunedSettings,
     systemPrompt: [
-      buildSystemPrompt(settings),
-      "You are speaking in live Discord voice chat.",
-      ...buildVoiceToneGuardrails(),
+      buildVoiceSystemPrompt(settings),
       "Return strict JSON only matching the provided schema.",
       directAddressed
         ? "This speaker directly addressed you. Prefer skip=false with a response unless the transcript is too unclear."

@@ -32,18 +32,31 @@ function findProtectedSpanAt(index: number, spans: ProtectedSpan[]) {
   return spans.find((span) => index >= span.start && index < span.end) || null;
 }
 
-function findLastBoundaryIndex(buffer: string, allowClauseBreaks: boolean) {
-  let lastBoundaryIndex = -1;
-  const protectedSpans = collectProtectedSpans(buffer);
-
+function collectSentenceBoundaryIndexes(buffer: string, protectedSpans: ProtectedSpan[]) {
+  const boundaryIndexes: number[] = [];
   for (const match of buffer.matchAll(SENTENCE_BREAK_RE)) {
     const start = Number(match.index || 0);
     const matchedText = String(match[0] || "");
     if (findProtectedSpanAt(start, protectedSpans)) continue;
-    lastBoundaryIndex = start + matchedText.length;
+    boundaryIndexes.push(start + matchedText.length);
+  }
+  return boundaryIndexes;
+}
+
+function findLastBoundaryIndex(
+  buffer: string,
+  allowClauseBreaks: boolean,
+  minSentenceBreaks: number
+) {
+  let lastBoundaryIndex = -1;
+  const protectedSpans = collectProtectedSpans(buffer);
+  const sentenceBoundaryIndexes = collectSentenceBoundaryIndexes(buffer, protectedSpans);
+
+  if (sentenceBoundaryIndexes.length >= minSentenceBreaks) {
+    return sentenceBoundaryIndexes.at(-1) ?? -1;
   }
 
-  if (lastBoundaryIndex >= 0 || !allowClauseBreaks) {
+  if (sentenceBoundaryIndexes.length > 0 || !allowClauseBreaks || minSentenceBreaks > 1) {
     return lastBoundaryIndex;
   }
 
@@ -72,10 +85,10 @@ function findForcedBreakIndex(buffer: string, maxBufferChars: number) {
   return maxBufferChars;
 }
 
-function findEagerFirstChunkBoundaryIndex(buffer: string) {
+function findEagerFirstChunkBoundaryIndex(buffer: string, minSentenceBreaks: number) {
   // Keep the first streamed chunk coherent. Whitespace-only cuts create
   // tiny trailing fragments like "vc!" that sound like a new sentence.
-  return findLastBoundaryIndex(buffer, false);
+  return findLastBoundaryIndex(buffer, false, minSentenceBreaks);
 }
 
 const MIN_STANDALONE_POST_FIRST_CHUNK_CHARS = 24;
@@ -106,6 +119,7 @@ interface SentenceAccumulatorOptions {
   eagerFirstChunk?: boolean;
   eagerMinChars?: number;
   maxBufferChars?: number;
+  minSentencesPerChunk?: number;
 }
 
 export class SentenceAccumulator {
@@ -116,6 +130,7 @@ export class SentenceAccumulator {
   private readonly eagerFirstChunk: boolean;
   private readonly eagerMinChars: number;
   private readonly maxBufferChars: number;
+  private readonly minSentencesPerChunk: number;
   private readonly onSentence: (text: string, index: number) => void;
 
   constructor(options: SentenceAccumulatorOptions) {
@@ -123,6 +138,7 @@ export class SentenceAccumulator {
     this.eagerFirstChunk = options.eagerFirstChunk !== false;
     this.eagerMinChars = Math.max(1, Math.floor(Number(options.eagerMinChars) || 30));
     this.maxBufferChars = Math.max(20, Math.floor(Number(options.maxBufferChars) || 300));
+    this.minSentencesPerChunk = Math.max(1, Math.floor(Number(options.minSentencesPerChunk) || 2));
   }
 
   push(delta: string) {
@@ -161,12 +177,16 @@ export class SentenceAccumulator {
   private emitReadyChunks() {
     while (this.buffer.trim()) {
       const allowClauseBreaks = this.emittedFirstChunk;
-      const boundaryIndex = findLastBoundaryIndex(this.buffer, allowClauseBreaks);
+      const boundaryIndex = findLastBoundaryIndex(
+        this.buffer,
+        allowClauseBreaks,
+        this.minSentencesPerChunk
+      );
       const eagerBoundaryIndex =
         !this.emittedFirstChunk &&
         this.eagerFirstChunk &&
         this.buffer.trim().length >= this.eagerMinChars
-          ? findEagerFirstChunkBoundaryIndex(this.buffer)
+          ? findEagerFirstChunkBoundaryIndex(this.buffer, this.minSentencesPerChunk)
           : -1;
       const canEagerEmitFirstChunk =
         !this.emittedFirstChunk &&

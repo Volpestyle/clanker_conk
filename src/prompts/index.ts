@@ -1,4 +1,4 @@
-export { buildSystemPrompt } from "./promptFormatters.ts";
+export { buildSystemPrompt, buildVoiceSystemPrompt } from "./promptFormatters.ts";
 export {
   buildAutomationPrompt,
   buildInitiativePrompt,

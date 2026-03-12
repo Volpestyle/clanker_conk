@@ -49,6 +49,7 @@ export const SETTINGS_NUMERIC_CONSTRAINTS = {
     conversationPolicy: {
       ambientReplyEagerness: { min: 0, max: 100 },
       streaming: {
+        minSentencesPerChunk: { min: 1, max: 6 },
         eagerFirstChunkChars: { min: 8, max: 220 },
         maxBufferChars: { min: 80, max: 800 }
       }

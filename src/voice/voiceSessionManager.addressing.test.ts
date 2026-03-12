@@ -42,6 +42,7 @@ const LEGACY_VOICE_KEYS = [
   "ttsMode",
   "operationalMessages",
   "streamingEnabled",
+  "streamingMinSentencesPerChunk",
   "streamingEagerFirstChunkChars",
   "streamingMaxBufferChars",
   "thoughtEngine",
@@ -5961,7 +5962,7 @@ test("buildRealtimeInstructions includes idle music history and queued tracks", 
   assert.equal(instructions.includes("Last music query: midnight city"), true);
 });
 
-test("buildRealtimeInstructions keeps active-music pass-through replies brief by default", () => {
+test("buildRealtimeInstructions keeps active-music pass-through replies situational", () => {
   const manager = createManager();
   const session = {
     id: "session-playing-music-guidance-1",
@@ -6010,11 +6011,11 @@ test("buildRealtimeInstructions keeps active-music pass-through replies brief by
   });
 
   assert.equal(
-    instructions.includes("If you answer without a pause/duck handoff, keep it brief by default: usually one or two short sentences."),
+    instructions.includes("Music is live right now. If you answer without claiming the floor with music_reply_handoff, favor a quick reaction or short answer unless the moment clearly wants more."),
     true
   );
   assert.equal(
-    instructions.includes("If you want to say more than a quick reaction while music is playing, call music_reply_handoff with mode=duck or mode=pause first."),
-    true
+    instructions.split("Music is live right now. If you answer without claiming the floor with music_reply_handoff, favor a quick reaction or short answer unless the moment clearly wants more.").length - 1,
+    1
   );
 });

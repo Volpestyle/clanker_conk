@@ -10,6 +10,11 @@ import {
   CONVERSATION_SEARCH_POLICY_LINE,
   IMMEDIATE_WEB_SEARCH_POLICY_LINE
 } from "../prompts/toolPolicy.ts";
+import {
+  buildActiveMusicReplyGuidanceLines,
+  MUSIC_ACTIVE_AUTONOMY_POLICY_LINE,
+  MUSIC_REPLY_HANDOFF_POLICY_LINE
+} from "../prompts/voiceLivePolicy.ts";
 import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import {
   loadConversationContinuityContext,
@@ -157,15 +162,6 @@ interface MusicPromptContext {
   upcomingTracks: Array<{ id: string | null; title: string; artist: string | null }>;
   lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
   lastQuery: string | null;
-}
-
-function buildActiveMusicReplyGuidanceLines(musicContext: MusicPromptContext | null) {
-  if (!musicContext) return [];
-  if (musicContext.playbackState !== "playing" || musicContext.replyHandoffMode) return [];
-  return [
-    "- Music is live right now. If you answer without a pause/duck handoff, keep it brief by default: usually one or two short sentences.",
-    "- If you want to say more than a quick reaction while music is playing, call music_reply_handoff with mode=duck or mode=pause first."
-  ];
 }
 
 interface QueueRealtimeTurnContextRefreshArgs {
@@ -961,9 +957,9 @@ export class InstructionManager {
         musicLines.push(`- Last music query: ${musicContext.lastQuery}`);
       }
       if (musicContext.replyHandoffMode === "pause") {
-        musicLines.push("- Your next spoken reply owns the floor: music is paused now and auto-resumes when you finish or stay silent.");
+        musicLines.push("- Your next spoken reply can take the floor: music is paused now and auto-resumes when you finish or stay silent.");
       } else if (musicContext.replyHandoffMode === "duck") {
-        musicLines.push("- Your next spoken reply owns the floor: music stays live and ducks under your voice, then unducks when you finish.");
+        musicLines.push("- Your next spoken reply can take the floor: music stays live and ducks under your voice, then unducks when you finish.");
       }
       musicLines.push(...buildActiveMusicReplyGuidanceLines(musicContext));
       sections.push(musicLines.join("\n"));
@@ -1004,16 +1000,18 @@ export class InstructionManager {
           hasMemoryWriteTool ? "- For memory writes, only store concise durable facts and avoid secrets." : null,
           "- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options.",
           "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",
-          "- Use music_search only for explicit browsing requests or when you need candidate IDs for queue operations.",
-          "- For a fresh play request, pass query to music_play or music_search. For a followup choice after disambiguation, call music_play with selection_id.",
+          "- Omit selection_id unless you are reusing an exact one already shown in prompt context or a prior tool result. Never invent placeholder or markup tokens.",
+          "- Use music_search only for explicit browsing requests or when the user wants options. Ordinary play and queue requests can resolve directly from query text.",
+          "- For a fresh play request, pass query to music_play. For a followup choice after disambiguation, call music_play with selection_id.",
           "- If Music playback context already shows a selection_id for the exact track you want, reuse that selection_id with music_play and include the matching query text instead of re-searching.",
-          "- Use music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
+          "- Use music_queue_next to place a track after the current one and music_queue_add to append. Both can take direct query text or exact prior IDs.",
+          "- For requests like \"play X, then queue Y\", call music_play for X first and music_queue_next for Y second in the same tool response.",
+          "- Do not claim a track is queued or added until music_queue_next or music_queue_add succeeds.",
+          "- Use music_stop to stop playback.",
           "- Do not emulate play-now by chaining music_queue_add and music_skip.",
           "- Do not use music_skip as a substitute for music_stop.",
-          "- If a music-active turn reaches you at all, you may decide to take the floor, talk naturally over current playback, or stay silent.",
-          "- If music is currently playing and you have not claimed the floor with music_reply_handoff, keep spoken replies short by default. For anything longer than a quick reaction, call music_reply_handoff first.",
-          "- Use music_reply_handoff with mode=pause or duck when music is active and you want only this spoken reply to own the floor temporarily. Runtime auto-restores playback after you finish.",
-          "- Use music_pause only when you want playback to remain paused beyond the current reply.",
+          `- ${MUSIC_ACTIVE_AUTONOMY_POLICY_LINE}`,
+          `- ${MUSIC_REPLY_HANDOFF_POLICY_LINE}`,
           "- If a tool fails, explain the failure briefly and continue naturally."
         ]
           .filter(Boolean)

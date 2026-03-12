@@ -30,6 +30,7 @@ const LEGACY_VOICE_KEYS = [
   "ttsMode",
   "operationalMessages",
   "streamingEnabled",
+  "streamingMinSentencesPerChunk",
   "streamingEagerFirstChunkChars",
   "streamingMaxBufferChars",
   "thoughtEngine",

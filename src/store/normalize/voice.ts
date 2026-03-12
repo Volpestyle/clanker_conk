@@ -119,6 +119,12 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
           conversationPolicy.streaming?.enabled,
           DEFAULT_SETTINGS.voice.conversationPolicy.streaming.enabled
         ),
+        minSentencesPerChunk: normalizeInt(
+          conversationPolicy.streaming?.minSentencesPerChunk,
+          DEFAULT_SETTINGS.voice.conversationPolicy.streaming.minSentencesPerChunk,
+          SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.minSentencesPerChunk.min,
+          SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.minSentencesPerChunk.max
+        ),
         eagerFirstChunkChars: normalizeInt(
           conversationPolicy.streaming?.eagerFirstChunkChars,
           DEFAULT_SETTINGS.voice.conversationPolicy.streaming.eagerFirstChunkChars,

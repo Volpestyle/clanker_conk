@@ -398,10 +398,25 @@ export function VoiceModeSettingsSection({
                   </div>
                   <p>
                     This only takes effect on the Full Brain path with Realtime TTS. When active, the bot can start
-                    speaking the first sentence before the full LLM reply finishes generating.
+                    speaking once the streamed reply reaches the configured chunk size instead of waiting for the full
+                    LLM reply to finish generating.
                   </p>
                   {Boolean(form.voiceStreamingEnabled) && (
                     <div className="split">
+                      <div>
+                        <label htmlFor="voice-streaming-min-sentences-per-chunk">
+                          Min sentences per chunk
+                        </label>
+                        <input
+                          id="voice-streaming-min-sentences-per-chunk"
+                          type="number"
+                          min={SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.minSentencesPerChunk.min}
+                          max={SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.minSentencesPerChunk.max}
+                          step="1"
+                          value={form.voiceStreamingMinSentencesPerChunk}
+                          onChange={set("voiceStreamingMinSentencesPerChunk")}
+                        />
+                      </div>
                       <div>
                         <label htmlFor="voice-streaming-eager-first-chunk-chars">
                           Eager first chunk chars

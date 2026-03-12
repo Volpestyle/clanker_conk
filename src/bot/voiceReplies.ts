@@ -1,12 +1,11 @@
-import { buildSystemPrompt, buildVoiceTurnPrompt } from "../prompts/index.ts";
+import { buildVoiceSystemPrompt, buildVoiceTurnPrompt } from "../prompts/index.ts";
 import {
   buildHardLimitsSection,
   DEFAULT_PROMPT_VOICE_OPERATIONAL_GUIDANCE,
   getPromptBotName,
   getPromptCapabilityHonestyLine,
   getPromptVoiceOperationalGuidance,
-  getPromptStyle,
-  buildVoiceToneGuardrails
+  getPromptStyle
 } from "../prompts/promptCore.ts";
 import {
   normalizeSkipSentinel,
@@ -1020,13 +1019,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   let usedScreenShareOffer = false;
   let leaveVoiceChannelRequested = false;
 
-  const systemPrompt = [
-    buildSystemPrompt(settings),
-    "You are speaking in live Discord voice chat.",
-    ...buildVoiceToneGuardrails()
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const systemPrompt = buildVoiceSystemPrompt(settings);
   const buildVoiceUserPrompt = ({
     webSearchContext = webSearch,
     allowWebSearch = allowWebSearchToolCall,
@@ -1308,6 +1301,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
 
       const accumulator = new SentenceAccumulator({
         eagerFirstChunk: true,
+        minSentencesPerChunk: Number(voiceConversationPolicy.streaming?.minSentencesPerChunk),
         eagerMinChars: Number(voiceConversationPolicy.streaming?.eagerFirstChunkChars),
         maxBufferChars: Number(voiceConversationPolicy.streaming?.maxBufferChars),
         onSentence(text) {

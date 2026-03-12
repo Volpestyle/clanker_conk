@@ -1,4 +1,5 @@
 import { normalizeVoiceRuntimeEventContext } from "../voice/voiceSessionHelpers.ts";
+import { VOICE_TINY_REPLY_POLICY_LINE } from "./voiceLivePolicy.ts";
 
 type VoiceAdmissionPolicyContext = {
   attentionMode?: "ACTIVE" | "AMBIENT";
@@ -93,6 +94,7 @@ export function buildVoiceAdmissionPolicyLines({
   } else if (normalizedParticipantCount > 1) {
     lines.push("Multi-human room: avoid barging in without clear conversational value.");
   }
+  lines.push(VOICE_TINY_REPLY_POLICY_LINE);
 
   if (normalizedInputKind === "event") {
     lines.push("This is a voice-room event cue, not literal quoted speech.");

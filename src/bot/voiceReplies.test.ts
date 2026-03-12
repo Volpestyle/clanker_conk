@@ -7,12 +7,21 @@ import {
   composeVoiceOperationalMessage,
   generateVoiceTurnReply
 } from "./voiceReplies.ts";
+import {
+  ACTIVE_MUSIC_REPLY_CONTEXT_LINE,
+  MUSIC_REPLY_HANDOFF_POLICY_LINE
+} from "../prompts/voiceLivePolicy.ts";
 import { createTestSettings } from "../testSettings.ts";
 import { createAbortError } from "../tools/browserTaskRuntime.ts";
 import { deepMerge } from "../utils.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function countOccurrences(haystack: string, needle: string) {
+  if (!needle) return 0;
+  return haystack.split(needle).length - 1;
 }
 
 function baseSettings(overrides = {}) {
@@ -74,6 +83,7 @@ function baseSettings(overrides = {}) {
       conversationPolicy: {
         streaming: {
           enabled: true,
+          minSentencesPerChunk: 2,
           eagerFirstChunkChars: 30,
           maxBufferChars: 300
         }
@@ -143,6 +153,7 @@ function baseSettings(overrides = {}) {
       conversationPolicy: {
         streaming: {
           enabled: voice.streamingEnabled,
+          minSentencesPerChunk: voice.streamingMinSentencesPerChunk,
           eagerFirstChunkChars: voice.streamingEagerFirstChunkChars,
           maxBufferChars: voice.streamingMaxBufferChars
         }
@@ -598,7 +609,7 @@ test("generateVoiceTurnReply forwards the latest screen-share frame into the mod
   ]);
 });
 
-test("generateVoiceTurnReply streams sentence chunks when voice streaming is enabled", async () => {
+test("generateVoiceTurnReply waits for the configured minimum sentences before streaming a chunk", async () => {
   const streamed: string[] = [];
   const { bot } = createVoiceBot({
     generationSequence: [
@@ -613,6 +624,7 @@ test("generateVoiceTurnReply streams sentence chunks when voice streaming is ena
     settings: baseSettings({
       voice: {
         streamingEnabled: true,
+        streamingMinSentencesPerChunk: 2,
         streamingEagerFirstChunkChars: 10,
         streamingMaxBufferChars: 120
       }
@@ -620,15 +632,15 @@ test("generateVoiceTurnReply streams sentence chunks when voice streaming is ena
     guildId: "guild-1",
     channelId: "text-1",
     userId: "user-1",
-    transcript: "say it in two parts",
+    transcript: "say it cleanly",
     onSpokenSentence: ({ text }) => {
       streamed.push(text);
     }
   });
 
-  assert.deepEqual(streamed, ["this is the first sentence.", "second sentence."]);
+  assert.deepEqual(streamed, ["this is the first sentence. second sentence."]);
   assert.equal(reply.text, "this is the first sentence. second sentence.");
-  assert.equal(reply.streamedSentenceCount, 2);
+  assert.equal(reply.streamedSentenceCount, 1);
 });
 
 test("generateVoiceTurnReply keeps the first streamed chunk intact until punctuation arrives", async () => {
@@ -1870,6 +1882,48 @@ test("generateVoiceTurnReply injects recent voice effects into the prompt", asyn
     String(generationPayloads[0]?.userPrompt || "").includes("bob played soundboard \"airhorn\" (850ms ago)"),
     true
   );
+});
+
+test("generateVoiceTurnReply includes active-music guidance only once per prompt", async () => {
+  const activeVoiceSession = {
+    id: "voice-session-1",
+    mode: "openai_realtime"
+  };
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "yeah probably"
+    }),
+    activeVoiceSession
+  });
+  assert.ok(bot.voiceSessionManager);
+  bot.voiceSessionManager.getMusicPromptContext = () => ({
+    playbackState: "playing",
+    replyHandoffMode: null,
+    currentTrack: {
+      id: "track-1",
+      title: "Subwoofer Lullaby",
+      artists: ["C418"]
+    },
+    lastTrack: null,
+    queueLength: 0,
+    upcomingTracks: [],
+    lastAction: "play_now",
+    lastQuery: "minecraft soundtrack"
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    sessionId: "voice-session-1",
+    transcript: "if you could play gta would you",
+    voiceToolCallbacks: {}
+  });
+
+  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  assert.equal(countOccurrences(userPrompt, ACTIVE_MUSIC_REPLY_CONTEXT_LINE), 1);
+  assert.equal(countOccurrences(userPrompt, MUSIC_REPLY_HANDOFF_POLICY_LINE), 1);
 });
 
 test("generateVoiceTurnReply logs voice errors when generation fails", async () => {

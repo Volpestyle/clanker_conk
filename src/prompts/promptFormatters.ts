@@ -1,6 +1,7 @@
 import {
   buildHardLimitsSection,
   DEFAULT_PROMPT_TEXT_GUIDANCE,
+  DEFAULT_PROMPT_VOICE_GUIDANCE,
   getPromptBotName,
   getPromptCapabilityHonestyLine,
   getPromptImpossibleActionLine,
@@ -8,7 +9,9 @@ import {
   getPromptMemoryEnabledLine,
   getPromptSkipLine,
   getPromptStyle,
-  getPromptTextGuidance
+  getPromptTextGuidance,
+  getPromptVoiceGuidance,
+  buildVoiceToneGuardrails
 } from "./promptCore.ts";
 import { extractUrlsFromText } from "../bot/botHelpers.ts";
 
@@ -49,6 +52,30 @@ export function buildSystemPrompt(settings) {
     getPromptImpossibleActionLine(settings),
     `=== LIMITS ===`,
     `Discord messages cap at ~1800 characters. Keep replies under that when possible; if you genuinely need more space your message will be automatically split across multiple posts.`,
+    ...buildHardLimitsSection(settings),
+    `=== OUTPUT ===`,
+    getPromptSkipLine(settings)
+  ].join("\n");
+}
+
+export function buildVoiceSystemPrompt(settings) {
+  const memoryEnabled = Boolean(settings?.memory?.enabled);
+  const voiceGuidance = getPromptVoiceGuidance(settings, DEFAULT_PROMPT_VOICE_GUIDANCE);
+
+  return [
+    `=== PERSONA ===`,
+    `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server speaking in live voice chat.`,
+    `Style: ${getPromptStyle(settings)}.`,
+    ...voiceGuidance,
+    ...buildVoiceToneGuardrails(),
+    `=== CAPABILITIES ===`,
+    getPromptCapabilityHonestyLine(settings),
+    memoryEnabled
+      ? getPromptMemoryEnabledLine(settings)
+      : getPromptMemoryDisabledLine(settings),
+    getPromptImpossibleActionLine(settings),
+    `=== LIMITS ===`,
+    `Voice replies should feel like live conversation. A short acknowledgement is often enough; go longer only when you genuinely have more to add.`,
     ...buildHardLimitsSection(settings),
     `=== OUTPUT ===`,
     getPromptSkipLine(settings)

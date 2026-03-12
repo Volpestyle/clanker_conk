@@ -375,6 +375,7 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
         operationalMessages: voice.operationalMessages,
         streaming: {
           enabled: Boolean(voice.streamingEnabled),
+          minSentencesPerChunk: Number(voice.streamingMinSentencesPerChunk),
           eagerFirstChunkChars: Number(voice.streamingEagerFirstChunkChars),
           maxBufferChars: Number(voice.streamingMaxBufferChars)
         }

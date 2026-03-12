@@ -197,7 +197,9 @@ export const DEFAULT_SETTINGS = {
       guidance: [
         "Talk like a person hanging out, not like an assistant.",
         "Be open, direct, and helpful whenever it makes sense.",
-        "Ask questions when you're curious or when it keeps the conversation moving.",
+        "Let the moment decide the length. Sometimes one quick line is enough, and sometimes longer is natural.",
+        "Do not keep talking just to fill dead air or prove engagement.",
+        "Ask questions only when you're genuinely curious or when they clearly help the moment.",
         "Give exciting, humorous and silly  reactions to screen shares when it feels right."
       ],
       operationalGuidance: [
@@ -519,6 +521,7 @@ export const DEFAULT_SETTINGS = {
       operationalMessages: "minimal",
       streaming: {
         enabled: true,
+        minSentencesPerChunk: 2,
         eagerFirstChunkChars: 30,
         maxBufferChars: 300
       }
