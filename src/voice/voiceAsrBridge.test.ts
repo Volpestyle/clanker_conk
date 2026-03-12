@@ -4,6 +4,8 @@ import { OpenAiRealtimeTranscriptionClient } from "./openaiRealtimeTranscription
 import {
   appendAudioToAsr,
   beginAsrUtterance,
+  closeAllPerUserAsrSessions,
+  closeSharedAsrSession,
   commitAsrUtterance,
   createAsrBridgeState,
   ensureAsrSessionConnected,
@@ -11,7 +13,7 @@ import {
   releaseSharedAsrActiveUser,
   tryHandoffSharedAsr
 } from "./voiceAsrBridge.ts";
-import type { AsrBridgeDeps, AsrUtteranceState } from "./voiceAsrBridge.ts";
+import type { AsrBridgeDeps, AsrBridgeState, AsrUtteranceState } from "./voiceAsrBridge.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 
 function createSession(overrides: Partial<VoiceSession> = {}): VoiceSession {
@@ -496,4 +498,50 @@ test("commitAsrUtterance trips the empty-commit circuit breaker after three subs
   assert.equal(closeCalls, 1);
   assert.equal(session.openAiAsrSessions.has("speaker-1"), false);
   assert.equal(logs.some((entry) => entry.content === "openai_realtime_asr_circuit_breaker_reconnect"), true);
+});
+
+test("closeAllPerUserAsrSessions logs per_user scope metadata", async () => {
+  const logs: Array<Record<string, unknown>> = [];
+  const session = createSession();
+  const deps = createDeps(session, logs);
+
+  session.openAiAsrSessions.set("speaker-1", {
+    phase: "ready",
+    idleTimer: null,
+    client: {
+      async close() {}
+    }
+  } as unknown as AsrBridgeState);
+
+  await closeAllPerUserAsrSessions(session, deps, "session_end");
+
+  const closeLog = logs.find((entry) => entry.content === "openai_realtime_asr_session_closed");
+  const metadata = (closeLog?.metadata ?? {}) as Record<string, unknown>;
+  assert.ok(closeLog);
+  assert.equal(metadata.sessionScope, "per_user");
+  assert.equal(metadata.reason, "session_end");
+});
+
+test("closeSharedAsrSession logs shared scope metadata", async () => {
+  const logs: Array<Record<string, unknown>> = [];
+  const session = createSession();
+  const deps = createDeps(session, logs);
+
+  session.openAiSharedAsrState = {
+    phase: "ready",
+    idleTimer: null,
+    pendingCommitResolvers: [],
+    userId: "speaker-2",
+    client: {
+      async close() {}
+    }
+  } as unknown as AsrBridgeState;
+
+  await closeSharedAsrSession(session, deps, "session_end");
+
+  const closeLog = logs.find((entry) => entry.content === "openai_realtime_asr_session_closed");
+  const metadata = (closeLog?.metadata ?? {}) as Record<string, unknown>;
+  assert.ok(closeLog);
+  assert.equal(metadata.sessionScope, "shared");
+  assert.equal(metadata.reason, "session_end");
 });

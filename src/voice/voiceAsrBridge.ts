@@ -1694,6 +1694,7 @@ async function closePerUserAsrSession(
     content: "openai_realtime_asr_session_closed",
     metadata: {
       sessionId: session.id,
+      sessionScope: "per_user",
       reason: String(reason || "manual")
     }
   });
@@ -1751,6 +1752,7 @@ export async function closeSharedAsrSession(
     content: "openai_realtime_asr_session_closed",
     metadata: {
       sessionId: session.id,
+      sessionScope: "shared",
       reason: String(reason || "manual")
     }
   });
