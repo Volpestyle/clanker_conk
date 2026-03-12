@@ -6,9 +6,15 @@ import {
   formatBehaviorMemoryFacts,
   formatWebSearchFindings,
   formatConversationWindows,
-  formatConversationParticipantMemory,
-  formatOpenArticleCandidates
+  formatConversationParticipantMemory
 } from "./promptFormatters.ts";
+import {
+  buildWebSearchPolicyLine,
+  buildWebToolRoutingPolicyLine,
+  BROWSER_BROWSE_POLICY_LINE,
+  CONVERSATION_SEARCH_POLICY_LINE,
+  WEB_SCRAPE_POLICY_LINE
+} from "./toolPolicy.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
 import {
   formatVoiceChannelEffectSummary,
@@ -84,14 +90,12 @@ function collectAvailableVoiceToolNames({
   webSearchAvailable,
   browserBrowseAvailable,
   memoryAvailable,
-  openArticleAvailable,
   screenShareAvailable,
   voiceToolsAvailable
 }: {
   webSearchAvailable: boolean;
   browserBrowseAvailable: boolean;
   memoryAvailable: boolean;
-  openArticleAvailable: boolean;
   screenShareAvailable: boolean;
   voiceToolsAvailable: boolean;
 }): string[] {
@@ -105,7 +109,6 @@ function collectAvailableVoiceToolNames({
   if (memoryAvailable) {
     names.add("memory_write");
   }
-  if (openArticleAvailable) names.add("open_article");
   if (screenShareAvailable) names.add("offer_screen_share_link");
   if (voiceToolsAvailable) {
     for (const name of VOICE_CONTROL_TOOL_NAMES) names.add(name);
@@ -125,8 +128,8 @@ function selectPromptDurableContextEntries(durableContext: unknown): VoiceSessio
       const rawCategory = String(entry?.category || "").trim().toLowerCase();
       const category =
         rawCategory === "plan" ||
-        rawCategory === "preference" ||
-        rawCategory === "relationship"
+          rawCategory === "preference" ||
+          rawCategory === "relationship"
           ? rawCategory
           : "fact";
       return {
@@ -178,11 +181,8 @@ export function buildVoiceTurnPrompt({
   webSearch = null,
   browserBrowse = null,
   recentConversationHistory = [],
-  openArticleCandidates = [],
-  openedArticle = null,
   allowWebSearchToolCall = false,
   allowBrowserBrowseToolCall = false,
-  allowOpenArticleToolCall = false,
   screenShare: _screenShare = null,
   allowScreenShareToolCall = false,
   allowMemoryToolCalls = false,
@@ -223,20 +223,20 @@ export function buildVoiceTurnPrompt({
   const normalizedSessionTiming =
     sessionTiming && typeof sessionTiming === "object"
       ? {
-          maxSecondsRemaining: Number.isFinite(Number(sessionTiming.maxSecondsRemaining))
-            ? Math.max(0, Math.round(Number(sessionTiming.maxSecondsRemaining)))
-            : null,
-          inactivitySecondsRemaining: Number.isFinite(Number(sessionTiming.inactivitySecondsRemaining))
-            ? Math.max(0, Math.round(Number(sessionTiming.inactivitySecondsRemaining)))
-            : null,
-          timeoutWarningActive: Boolean(sessionTiming.timeoutWarningActive),
-          timeoutWarningReason:
-            String(sessionTiming.timeoutWarningReason || "").trim().toLowerCase() === "max_duration"
-              ? "max_duration"
-              : String(sessionTiming.timeoutWarningReason || "").trim().toLowerCase() === "inactivity"
-                ? "inactivity"
-                : "none"
-        }
+        maxSecondsRemaining: Number.isFinite(Number(sessionTiming.maxSecondsRemaining))
+          ? Math.max(0, Math.round(Number(sessionTiming.maxSecondsRemaining)))
+          : null,
+        inactivitySecondsRemaining: Number.isFinite(Number(sessionTiming.inactivitySecondsRemaining))
+          ? Math.max(0, Math.round(Number(sessionTiming.inactivitySecondsRemaining)))
+          : null,
+        timeoutWarningActive: Boolean(sessionTiming.timeoutWarningActive),
+        timeoutWarningReason:
+          String(sessionTiming.timeoutWarningReason || "").trim().toLowerCase() === "max_duration"
+            ? "max_duration"
+            : String(sessionTiming.timeoutWarningReason || "").trim().toLowerCase() === "inactivity"
+              ? "inactivity"
+              : "none"
+      }
       : null;
   const normalizedParticipantRoster = (Array.isArray(participantRoster) ? participantRoster : [])
     .map((entry) => {
@@ -275,112 +275,102 @@ export function buildVoiceTurnPrompt({
     })
     .filter(Boolean)
     .slice(-6);
-  const normalizedOpenArticleCandidates = (Array.isArray(openArticleCandidates) ? openArticleCandidates : [])
-    .map((entry) => ({
-      ref: String(entry?.ref || "").trim(),
-      title: String(entry?.title || "").trim(),
-      url: String(entry?.url || "").trim(),
-      domain: String(entry?.domain || "").trim(),
-      query: String(entry?.query || "").trim()
-    }))
-    .filter((entry) => entry.ref && entry.url)
-    .slice(0, 12);
   const normalizedMusicContext: VoiceMusicPromptContext | null =
     musicContext && typeof musicContext === "object"
       ? {
-          playbackState:
-            String(musicContext?.playbackState || "").trim().toLowerCase() === "playing"
-              ? "playing"
-              : String(musicContext?.playbackState || "").trim().toLowerCase() === "paused"
-                ? "paused"
-                : String(musicContext?.playbackState || "").trim().toLowerCase() === "stopped"
-                  ? "stopped"
-                  : "idle",
-          replyHandoffMode:
-            String(musicContext?.replyHandoffMode || "").trim().toLowerCase() === "pause"
-              ? "pause"
-              : String(musicContext?.replyHandoffMode || "").trim().toLowerCase() === "duck"
-                ? "duck"
-                : null,
-          currentTrack:
-            musicContext?.currentTrack && typeof musicContext.currentTrack === "object"
-              ? {
-                  id: String(musicContext.currentTrack.id || "").trim().slice(0, 180) || null,
-                  title: String(musicContext.currentTrack.title || "").trim().slice(0, 140),
-                  artists: (
-                    Array.isArray(musicContext.currentTrack.artists)
-                      ? musicContext.currentTrack.artists
-                      : []
-                  )
-                    .map((artist) => String(artist || "").trim().slice(0, 80))
-                    .filter(Boolean)
-                    .slice(0, 6)
-                }
+        playbackState:
+          String(musicContext?.playbackState || "").trim().toLowerCase() === "playing"
+            ? "playing"
+            : String(musicContext?.playbackState || "").trim().toLowerCase() === "paused"
+              ? "paused"
+              : String(musicContext?.playbackState || "").trim().toLowerCase() === "stopped"
+                ? "stopped"
+                : "idle",
+        replyHandoffMode:
+          String(musicContext?.replyHandoffMode || "").trim().toLowerCase() === "pause"
+            ? "pause"
+            : String(musicContext?.replyHandoffMode || "").trim().toLowerCase() === "duck"
+              ? "duck"
               : null,
-          lastTrack:
-            musicContext?.lastTrack && typeof musicContext.lastTrack === "object"
-              ? {
-                  id: String(musicContext.lastTrack.id || "").trim().slice(0, 180) || null,
-                  title: String(musicContext.lastTrack.title || "").trim().slice(0, 140),
-                  artists: (
-                    Array.isArray(musicContext.lastTrack.artists)
-                      ? musicContext.lastTrack.artists
-                      : []
-                  )
-                    .map((artist) => String(artist || "").trim().slice(0, 80))
-                    .filter(Boolean)
-                    .slice(0, 6)
-                }
-              : null,
-          queueLength: Number.isFinite(Number(musicContext?.queueLength))
-            ? Math.max(0, Math.round(Number(musicContext.queueLength)))
-            : 0,
-          upcomingTracks: (
-            Array.isArray(musicContext?.upcomingTracks)
-              ? musicContext.upcomingTracks
-              : []
-          )
-            .map((entry) => ({
-              id: String(entry?.id || "").trim().slice(0, 180) || null,
-              title: String(entry?.title || "").trim().slice(0, 140),
-              artist: String(entry?.artist || "").trim().slice(0, 80) || null
-            }))
-            .filter((entry) => entry.title)
-            .slice(0, 3),
-          lastAction:
-            String(musicContext?.lastAction || "").trim().toLowerCase() === "play_now"
-              ? "play_now"
-              : String(musicContext?.lastAction || "").trim().toLowerCase() === "stop"
-                ? "stop"
-                : String(musicContext?.lastAction || "").trim().toLowerCase() === "pause"
-                  ? "pause"
-                  : String(musicContext?.lastAction || "").trim().toLowerCase() === "resume"
-                    ? "resume"
-                    : String(musicContext?.lastAction || "").trim().toLowerCase() === "skip"
-                      ? "skip"
-                      : null,
-          lastQuery: String(musicContext?.lastQuery || "").trim().slice(0, 180) || null
-        }
+        currentTrack:
+          musicContext?.currentTrack && typeof musicContext.currentTrack === "object"
+            ? {
+              id: String(musicContext.currentTrack.id || "").trim().slice(0, 180) || null,
+              title: String(musicContext.currentTrack.title || "").trim().slice(0, 140),
+              artists: (
+                Array.isArray(musicContext.currentTrack.artists)
+                  ? musicContext.currentTrack.artists
+                  : []
+              )
+                .map((artist) => String(artist || "").trim().slice(0, 80))
+                .filter(Boolean)
+                .slice(0, 6)
+            }
+            : null,
+        lastTrack:
+          musicContext?.lastTrack && typeof musicContext.lastTrack === "object"
+            ? {
+              id: String(musicContext.lastTrack.id || "").trim().slice(0, 180) || null,
+              title: String(musicContext.lastTrack.title || "").trim().slice(0, 140),
+              artists: (
+                Array.isArray(musicContext.lastTrack.artists)
+                  ? musicContext.lastTrack.artists
+                  : []
+              )
+                .map((artist) => String(artist || "").trim().slice(0, 80))
+                .filter(Boolean)
+                .slice(0, 6)
+            }
+            : null,
+        queueLength: Number.isFinite(Number(musicContext?.queueLength))
+          ? Math.max(0, Math.round(Number(musicContext.queueLength)))
+          : 0,
+        upcomingTracks: (
+          Array.isArray(musicContext?.upcomingTracks)
+            ? musicContext.upcomingTracks
+            : []
+        )
+          .map((entry) => ({
+            id: String(entry?.id || "").trim().slice(0, 180) || null,
+            title: String(entry?.title || "").trim().slice(0, 140),
+            artist: String(entry?.artist || "").trim().slice(0, 80) || null
+          }))
+          .filter((entry) => entry.title)
+          .slice(0, 3),
+        lastAction:
+          String(musicContext?.lastAction || "").trim().toLowerCase() === "play_now"
+            ? "play_now"
+            : String(musicContext?.lastAction || "").trim().toLowerCase() === "stop"
+              ? "stop"
+              : String(musicContext?.lastAction || "").trim().toLowerCase() === "pause"
+                ? "pause"
+                : String(musicContext?.lastAction || "").trim().toLowerCase() === "resume"
+                  ? "resume"
+                  : String(musicContext?.lastAction || "").trim().toLowerCase() === "skip"
+                    ? "skip"
+                    : null,
+        lastQuery: String(musicContext?.lastQuery || "").trim().slice(0, 180) || null
+      }
       : null;
   const normalizedStreamWatchBrainContext =
     normalizedConversationContext?.streamWatchBrainContext &&
-    typeof normalizedConversationContext.streamWatchBrainContext === "object"
+      typeof normalizedConversationContext.streamWatchBrainContext === "object"
       ? {
-          prompt: String(normalizedConversationContext.streamWatchBrainContext.prompt || "").trim().slice(0, 420),
-          notes: (
-            Array.isArray(normalizedConversationContext.streamWatchBrainContext.notes)
-              ? normalizedConversationContext.streamWatchBrainContext.notes
-              : []
+        prompt: String(normalizedConversationContext.streamWatchBrainContext.prompt || "").trim().slice(0, 420),
+        notes: (
+          Array.isArray(normalizedConversationContext.streamWatchBrainContext.notes)
+            ? normalizedConversationContext.streamWatchBrainContext.notes
+            : []
+        )
+          .map((note) =>
+            String(note || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 240)
           )
-            .map((note) =>
-              String(note || "")
-                .replace(/\s+/g, " ")
-                .trim()
-                .slice(0, 240)
-            )
-            .filter(Boolean)
-            .slice(-12)
-        }
+          .filter(Boolean)
+          .slice(-12)
+      }
       : null;
   const webSearchToolAvailable = Boolean(
     allowWebSearchToolCall &&
@@ -397,12 +387,10 @@ export function buildVoiceTurnPrompt({
     !browserBrowse?.blockedByBudget &&
     browserBrowse?.budget?.canBrowse !== false
   );
-  const openArticleToolAvailable = Boolean(allowOpenArticleToolCall && normalizedOpenArticleCandidates.length > 0);
   const availableToolNames = collectAvailableVoiceToolNames({
     webSearchAvailable: webSearchToolAvailable,
     browserBrowseAvailable: browserBrowseToolAvailable,
     memoryAvailable: allowMemoryToolCalls,
-    openArticleAvailable: openArticleToolAvailable,
     screenShareAvailable: allowScreenShareToolCall,
     voiceToolsAvailable: allowVoiceToolCalls
   });
@@ -529,22 +517,22 @@ export function buildVoiceTurnPrompt({
 
   const normalizedInterruptedAssistantReply =
     normalizedConversationContext?.interruptedAssistantReply &&
-    typeof normalizedConversationContext.interruptedAssistantReply === "object"
+      typeof normalizedConversationContext.interruptedAssistantReply === "object"
       ? {
-          utteranceText:
-            String(normalizedConversationContext.interruptedAssistantReply.utteranceText || "")
-              .replace(/\s+/g, " ")
-              .trim()
-              .slice(0, 240),
-          interruptedBySpeakerName:
-            String(normalizedConversationContext.interruptedAssistantReply.interruptedBySpeakerName || "")
-              .replace(/\s+/g, " ")
-              .trim()
-              .slice(0, 80) || speaker,
-          ageMs: Number.isFinite(Number(normalizedConversationContext.interruptedAssistantReply.ageMs))
-            ? Math.max(0, Math.round(Number(normalizedConversationContext.interruptedAssistantReply.ageMs)))
-            : null
-        }
+        utteranceText:
+          String(normalizedConversationContext.interruptedAssistantReply.utteranceText || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 240),
+        interruptedBySpeakerName:
+          String(normalizedConversationContext.interruptedAssistantReply.interruptedBySpeakerName || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 80) || speaker,
+        ageMs: Number.isFinite(Number(normalizedConversationContext.interruptedAssistantReply.ageMs))
+          ? Math.max(0, Math.round(Number(normalizedConversationContext.interruptedAssistantReply.ageMs)))
+          : null
+      }
       : null;
   if (normalizedInterruptedAssistantReply?.utteranceText) {
     const interruptionAgeSeconds = Number.isFinite(normalizedInterruptedAssistantReply.ageMs)
@@ -628,7 +616,7 @@ export function buildVoiceTurnPrompt({
   }
 
   parts.push(`Tools: ${availableToolNames.join(", ")}.`);
-  parts.push("Speak first on casual turns. Use tools to improve accuracy or execute requested actions. Ground replies in tool results — never claim success before a tool returns.");
+  parts.push("Speak first on casual turns. Use tools to improve accuracy or execute requested actions. You may briefly acknowledge requests before or while calling tools, but ground factual or success claims in tool results — never claim success before a tool returns.");
 
   if (allowMemoryToolCalls) {
     const memLines = [];
@@ -709,18 +697,16 @@ export function buildVoiceTurnPrompt({
     parts.push(musicLines.join("\n"));
   }
 
-  parts.push("conversation_search: look up what was said earlier in text or voice history.");
-
-  if (allowOpenArticleToolCall && normalizedOpenArticleCandidates.length) {
-    parts.push("Cached article refs (open_article to read):\n" + formatOpenArticleCandidates(normalizedOpenArticleCandidates));
-  }
+  parts.push(CONVERSATION_SEARCH_POLICY_LINE);
 
   if (webSearchToolAvailable) {
-    parts.push("web_search: for fresh web info when accuracy requires it. One per turn.");
+    parts.push(buildWebToolRoutingPolicyLine({ includeBrowserBrowse: browserBrowseToolAvailable }));
+    parts.push(buildWebSearchPolicyLine({ onePerTurn: true }));
+    parts.push(WEB_SCRAPE_POLICY_LINE);
   }
 
   if (browserBrowseToolAvailable) {
-    parts.push("browser_browse: interactive browsing, JS-rendered pages, screenshots, site navigation. Use when the speaker wants to visit a site or visual layout matters.");
+    parts.push(BROWSER_BROWSE_POLICY_LINE);
   }
 
   if (allowVoiceToolCalls) {
@@ -754,38 +740,6 @@ export function buildVoiceTurnPrompt({
   if (webSearch?.used && webSearch.results?.length) {
     parts.push(`Live web findings for query: "${webSearch.query}"`);
     parts.push(formatWebSearchFindings(webSearch));
-  }
-
-  if (openedArticle && typeof openedArticle === "object") {
-    const openRef = String(openedArticle?.ref || "").trim();
-    const openTitle = String(openedArticle?.title || "").trim();
-    const openUrl = String(openedArticle?.url || "").trim();
-    const openDomain = String(openedArticle?.domain || "").trim();
-    const openQuery = String(openedArticle?.query || "").trim();
-    const openMethod = String(openedArticle?.extractionMethod || "").trim();
-    const openContent = String(openedArticle?.content || "").trim();
-    const openError = String(openedArticle?.error || "").trim();
-
-    if (openError) {
-      parts.push(`Open-article request failed: ${openError}`);
-      parts.push("Respond naturally without claiming full-article read succeeded.");
-    } else if (openContent) {
-      parts.push("Opened cached article context for this turn:");
-      parts.push(
-        [
-          openRef ? `- ref: ${openRef}` : null,
-          openTitle ? `- title: ${openTitle}` : null,
-          openDomain ? `- domain: ${openDomain}` : null,
-          openUrl ? `- url: ${openUrl}` : null,
-          openQuery ? `- source query: ${openQuery}` : null,
-          openMethod ? `- extraction: ${openMethod}` : null
-        ]
-          .filter(Boolean)
-          .join("\n")
-      );
-      parts.push("Opened article extracted text:");
-      parts.push(openContent);
-    }
   }
 
   parts.push(

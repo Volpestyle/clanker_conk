@@ -74,7 +74,7 @@ type ReplyManagerStoreLike = {
   }) => void;
 };
 
-export interface ReplyManagerHost {
+interface ReplyManagerHost {
   client: {
     user?: {
       id?: string | null;
@@ -562,10 +562,10 @@ export class ReplyManager {
     if (!session || session.ending) return false;
     if (session.activeRealtimeTurn && typeof session.activeRealtimeTurn === "object") return true;
     if (session.inFlightAcceptedBrainTurn && typeof session.inFlightAcceptedBrainTurn === "object") return true;
-    if (Boolean(session.responseFlushTimer)) return true;
-    if (Boolean(session.pendingResponse && typeof session.pendingResponse === "object")) return true;
-    if (Boolean(session.realtimeTurnDrainActive)) return true;
-    if (Boolean(session.fileAsrTurnDrainActive)) return true;
+    if (session.responseFlushTimer) return true;
+    if (session.pendingResponse && typeof session.pendingResponse === "object") return true;
+    if (session.realtimeTurnDrainActive) return true;
+    if (session.fileAsrTurnDrainActive) return true;
     if (Math.max(0, Number(session.pendingRealtimeInputBytes || 0)) > 0) return true;
     if (Array.isArray(session.pendingRealtimeTurns) && session.pendingRealtimeTurns.length > 0) return true;
     if (Array.isArray(session.pendingFileAsrTurnsQueue) && session.pendingFileAsrTurnsQueue.length > 0) return true;
@@ -663,7 +663,7 @@ export class ReplyManager {
       });
     }
 
-    if (Boolean(pendingResponse?.musicWakeRefreshAfterSpeech)) {
+    if (pendingResponse?.musicWakeRefreshAfterSpeech) {
       this.schedulePassiveMusicWakeLatchRefresh(
         session,
         settings,
@@ -770,8 +770,8 @@ export class ReplyManager {
     session.pendingResponse = null;
     if (
       session.music?.replyHandoffMode === "duck" &&
-      !Boolean(session.botTurnOpen) &&
-      !Boolean(session.botSpeechMusicDucked) &&
+      !session.botTurnOpen &&
+      !session.botSpeechMusicDucked &&
       !this.hasBufferedTtsPlayback(session)
     ) {
       session.music.replyHandoffMode = null;

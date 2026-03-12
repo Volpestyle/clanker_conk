@@ -6,6 +6,23 @@ import { isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 
+const BROWSE_AGENT_TOOL_RESULT_TRUNCATE_LEN = 800;
+const BROWSE_AGENT_REASONING_TRUNCATE_LEN = 500;
+
+function truncate(text: string, maxLen: number) {
+  const s = String(text || "").trim();
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen) + `… (${s.length} chars total)`;
+}
+
+function extractTextContent(content: ToolLoopContentBlock[], separator = " ") {
+  return (Array.isArray(content) ? content : [])
+    .filter((block) => block.type === "text")
+    .map((block) => String((block as { text?: string }).text || "").trim())
+    .filter(Boolean)
+    .join(separator);
+}
+
 const BROWSE_AGENT_SYSTEM_PROMPT = `You are a web browsing agent.
 Your goal is to complete the user's instruction by navigating the web, interacting with pages, and extracting the final answer or result.
 
@@ -135,18 +152,43 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
 
       const toolCalls = response.content.filter((block) => block.type === "tool_call");
 
+      const reasoning = extractTextContent(response.content);
       if (toolCalls.length === 0) {
-        const textBlocks = response.content.filter((block) => block.type === "text");
-        finalText = textBlocks
-          .map((block) => block.text.trim())
-          .filter(Boolean)
-          .join("\n\n") || "The agent finished without returning text.";
+        finalText = extractTextContent(response.content, "\n\n") || "The agent finished without returning text.";
+        store.logAction({
+          kind: "browser_agent_final",
+          guildId: trace.guildId || null,
+          channelId: trace.channelId || null,
+          userId: trace.userId || null,
+          content: truncate(finalText, BROWSE_AGENT_REASONING_TRUNCATE_LEN),
+          metadata: {
+            step,
+            sessionKey,
+            fullLength: finalText.length
+          }
+        });
         break;
+      }
+
+      if (reasoning) {
+        store.logAction({
+          kind: "browser_agent_reasoning",
+          guildId: trace.guildId || null,
+          channelId: trace.channelId || null,
+          userId: trace.userId || null,
+          content: truncate(reasoning, BROWSE_AGENT_REASONING_TRUNCATE_LEN),
+          metadata: {
+            step,
+            sessionKey,
+            fullLength: reasoning.length
+          }
+        });
       }
 
       const toolResults: ToolLoopContentBlock[] = [];
 
       for (const toolCall of toolCalls) {
+        const toolInput = toolCall.input as Record<string, unknown>;
         store.logAction({
           kind: "browser_tool_step",
           guildId: trace.guildId || null,
@@ -156,7 +198,8 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
           metadata: {
             step,
             tool: toolCall.name,
-            sessionKey
+            sessionKey,
+            input: toolInput
           }
         });
 
@@ -164,10 +207,26 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
           browserManager,
           sessionKey,
           toolCall.name,
-          toolCall.input as Record<string, unknown>,
+          toolInput,
           stepTimeoutMs,
           signal
         );
+
+        store.logAction({
+          kind: "browser_tool_result",
+          guildId: trace.guildId || null,
+          channelId: trace.channelId || null,
+          userId: trace.userId || null,
+          content: truncate(result.text, BROWSE_AGENT_TOOL_RESULT_TRUNCATE_LEN),
+          metadata: {
+            step,
+            tool: toolCall.name,
+            sessionKey,
+            isError: Boolean(result.isError),
+            fullLength: result.text.length,
+            imageCount: Array.isArray(result.imageInputs) ? result.imageInputs.length : 0
+          }
+        });
 
         appendUniqueImageInputs(capturedImageInputs, result.imageInputs);
 
@@ -208,7 +267,7 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
 // BrowserAgentSession — persistent multi-turn wrapper around the browse agent
 // ---------------------------------------------------------------------------
 
-export interface BrowserAgentSessionOptions {
+interface BrowserAgentSessionOptions {
   scopeKey: string;
   llm: LLMService;
   browserManager: BrowserManager;
@@ -365,14 +424,11 @@ export class BrowserAgentSession implements SubAgentSession {
         this.messages.push({ role: "assistant", content: response.content });
 
         const toolCalls = response.content.filter((block) => block.type === "tool_call");
+        const sessionReasoning = extractTextContent(response.content);
 
         if (toolCalls.length === 0) {
           // No tool calls — this is the yield point
-          const textBlocks = response.content.filter((block) => block.type === "text");
-          const text = textBlocks
-            .map((block) => block.text.trim())
-            .filter(Boolean)
-            .join("\n\n") || "The agent paused without returning text.";
+          const text = extractTextContent(response.content, "\n\n") || "The agent paused without returning text.";
 
           const sessionCompleted = this.browserClosed;
           this.completedByAgent = sessionCompleted;
@@ -426,10 +482,27 @@ export class BrowserAgentSession implements SubAgentSession {
           };
         }
 
+        if (sessionReasoning) {
+          this.store.logAction({
+            kind: "browser_agent_reasoning",
+            guildId: this.trace.guildId || null,
+            channelId: this.trace.channelId || null,
+            userId: this.trace.userId || null,
+            content: truncate(sessionReasoning, BROWSE_AGENT_REASONING_TRUNCATE_LEN),
+            metadata: {
+              step: this.stepCount,
+              sessionKey: this.sessionKey,
+              sessionId: this.id,
+              fullLength: sessionReasoning.length
+            }
+          });
+        }
+
         // Execute tool calls
         const toolResults: ToolLoopContentBlock[] = [];
         let browserClosedThisResponse = false;
         for (const toolCall of toolCalls) {
+          const sessionToolInput = toolCall.input as Record<string, unknown>;
           this.store.logAction({
             kind: "browser_tool_step",
             guildId: this.trace.guildId || null,
@@ -440,7 +513,8 @@ export class BrowserAgentSession implements SubAgentSession {
               step: this.stepCount,
               tool: toolCall.name,
               sessionKey: this.sessionKey,
-              sessionId: this.id
+              sessionId: this.id,
+              input: sessionToolInput
             }
           });
 
@@ -448,10 +522,27 @@ export class BrowserAgentSession implements SubAgentSession {
             this.browserManager,
             this.sessionKey,
             toolCall.name,
-            toolCall.input as Record<string, unknown>,
+            sessionToolInput,
             this.stepTimeoutMs,
             turnSignal
           );
+
+          this.store.logAction({
+            kind: "browser_tool_result",
+            guildId: this.trace.guildId || null,
+            channelId: this.trace.channelId || null,
+            userId: this.trace.userId || null,
+            content: truncate(result.text, BROWSE_AGENT_TOOL_RESULT_TRUNCATE_LEN),
+            metadata: {
+              step: this.stepCount,
+              tool: toolCall.name,
+              sessionKey: this.sessionKey,
+              sessionId: this.id,
+              isError: Boolean(result.isError),
+              fullLength: result.text.length,
+              imageCount: Array.isArray(result.imageInputs) ? result.imageInputs.length : 0
+            }
+          });
 
           if (toolCall.name === "browser_close" && !result.isError) {
             this.browserClosed = true;

@@ -6,9 +6,10 @@ import {
 import { clamp } from "../utils.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { isAbortError } from "../tools/browserTaskRuntime.ts";
-import { shouldAllowSystemSpeechSkipAfterFire } from "./systemSpeechOpportunity.ts";
 import { getMusicWakeFollowupState } from "./musicWakeLatch.ts";
 import {
+  VOICE_GENERATION_ONLY_WATCHDOG_MS,
+  VOICE_GENERATION_SOUNDBOARD_CANDIDATE_TIMEOUT_MS,
   REALTIME_CONTEXT_MEMBER_LIMIT,
   STT_CONTEXT_MAX_MESSAGES,
   STT_REPLY_MAX_CHARS,
@@ -49,7 +50,6 @@ type GeneratedPayload = {
   playedSoundboardRefs?: unknown[];
   streamedRequestedRealtimeUtterance?: boolean;
   usedWebSearchFollowup?: boolean;
-  usedOpenArticleFollowup?: boolean;
   usedScreenShareOffer?: boolean;
   leaveVoiceChannelRequested?: boolean;
   voiceAddressing?: unknown;
@@ -65,7 +65,7 @@ type ContextMessage = {
   content: string;
 };
 
-export interface VoiceReplyPipelineParams {
+interface VoiceReplyPipelineParams {
   session: VoiceSession;
   settings: VoiceRealtimeToolSettings | null;
   userId: string | null;
@@ -78,13 +78,11 @@ export interface VoiceReplyPipelineParams {
   source?: string;
   inputKind?: string;
   latencyContext?: VoicePendingResponseLatencyContext | null;
-  forceSpokenOutput?: boolean;
-  spokenOutputRetryCount?: number;
   frozenFrameSnapshot?: { mimeType: string; dataBase64: string } | null;
   runtimeEventContext?: VoiceRuntimeEventContext | null;
 }
 
-export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
+type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "buildVoiceConversationContext"
   | "buildVoiceReplyPlaybackPlan"
   | "buildVoiceToolCallbacks"
@@ -127,11 +125,62 @@ function toGeneratedPayload(value: unknown): GeneratedPayload {
     text: typeof value === "string" ? value : "",
     playedSoundboardRefs: [],
     usedWebSearchFollowup: false,
-    usedOpenArticleFollowup: false,
     usedScreenShareOffer: false,
     leaveVoiceChannelRequested: false,
     voiceAddressing: null
   };
+}
+
+type VoiceGenerationTimeoutError = Error & {
+  code?: string;
+  stage?: string;
+  timeoutMs?: number;
+};
+
+const VOICE_GENERATION_TIMEOUT_CODE = "voice_generation_timeout";
+
+function createVoiceGenerationTimeoutError(stage: string, timeoutMs: number): VoiceGenerationTimeoutError {
+  const error = new Error(`${stage} timed out after ${timeoutMs}ms.`) as VoiceGenerationTimeoutError;
+  error.name = "TimeoutError";
+  error.code = VOICE_GENERATION_TIMEOUT_CODE;
+  error.stage = String(stage || "").trim() || "unknown";
+  error.timeoutMs = Math.max(0, Math.round(Number(timeoutMs) || 0));
+  return error;
+}
+
+function isVoiceGenerationTimeoutError(error: unknown): error is VoiceGenerationTimeoutError {
+  return String((error as VoiceGenerationTimeoutError | null)?.code || "").trim() === VOICE_GENERATION_TIMEOUT_CODE;
+}
+
+async function waitForVoiceGenerationStage<T>({
+  stage,
+  timeoutMs,
+  task
+}: {
+  stage: string;
+  timeoutMs: number;
+  task: Promise<T>;
+}) {
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(createVoiceGenerationTimeoutError(stage, timeoutMs));
+    }, Math.max(1, Math.round(Number(timeoutMs) || 1)));
+
+    void task.then((value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }).catch((error: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
 }
 
 function normalizeAssistantReplyAddressing(
@@ -227,7 +276,6 @@ function logReplySkipped({
   replyText,
   replyPrompts,
   usedWebSearchFollowup,
-  usedOpenArticleFollowup,
   usedScreenShareOffer,
   generatedVoiceAddressing,
   leaveVoiceChannelRequested,
@@ -241,7 +289,6 @@ function logReplySkipped({
   replyText: string;
   replyPrompts: LoggedVoicePromptBundle | null;
   usedWebSearchFollowup: boolean;
-  usedOpenArticleFollowup: boolean;
   usedScreenShareOffer: boolean;
   generatedVoiceAddressing: ReturnType<VoiceReplyPipelineHost["normalizeVoiceAddressingAnnotation"]>;
   leaveVoiceChannelRequested: boolean;
@@ -265,9 +312,7 @@ function logReplySkipped({
       sessionId: params.session.id,
       mode: params.session.mode,
       source: String(params.source || params.mode),
-      forceSpokenOutput: Boolean(params.forceSpokenOutput),
       usedWebSearchFollowup,
-      usedOpenArticleFollowup,
       usedScreenShareOffer,
       talkingTo: generatedVoiceAddressing?.talkingTo || null,
       directedConfidence: Number.isFinite(Number(generatedVoiceAddressing?.directedConfidence))
@@ -387,6 +432,15 @@ export async function runVoiceReplyPipeline(
     session.inFlightAcceptedBrainTurn.acceptedAt = activeReply.startedAt;
   }
   const generationSignal = activeReply?.abortController.signal;
+  const generationInterrupted = () =>
+    Boolean(
+      session.ending ||
+      generationSignal?.aborted ||
+      (
+        activeReply &&
+        host.activeReplies?.isStale(voiceReplyScopeKey, activeReply.startedAt)
+      )
+    );
 
   const { contextMessages, contextMessageChars, contextTurns } = buildContextMessages(session, normalizedTranscript);
   host.updateModelContextSummary(session, "generation", {
@@ -400,10 +454,70 @@ export async function runVoiceReplyPipeline(
     directAddressed: Boolean(params.directAddressed)
   });
 
-  const soundboardCandidateInfo = await resolveSoundboardCandidatesModule(host, {
-    session,
-    settings: params.settings
+  host.store.logAction({
+    kind: "voice_runtime",
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    userId: params.userId,
+    content: "voice_generation_prep_stage",
+    metadata: {
+      sessionId: session.id,
+      source,
+      stage: "soundboard_candidates",
+      state: "start",
+      timeoutMs: VOICE_GENERATION_SOUNDBOARD_CANDIDATE_TIMEOUT_MS
+    }
   });
+  const soundboardCandidatesStartedAt = Date.now();
+  let soundboardCandidateInfo: Awaited<ReturnType<typeof resolveSoundboardCandidatesModule>> | null = null;
+  try {
+    soundboardCandidateInfo = await waitForVoiceGenerationStage({
+      stage: "soundboard_candidates",
+      timeoutMs: VOICE_GENERATION_SOUNDBOARD_CANDIDATE_TIMEOUT_MS,
+      task: resolveSoundboardCandidatesModule(host, {
+        session,
+        settings: params.settings
+      })
+    });
+    host.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: params.userId,
+      content: "voice_generation_prep_stage",
+      metadata: {
+        sessionId: session.id,
+        source,
+        stage: "soundboard_candidates",
+        state: "ok",
+        elapsedMs: Math.max(0, Date.now() - soundboardCandidatesStartedAt),
+        candidateCount: Array.isArray(soundboardCandidateInfo?.candidates) ? soundboardCandidateInfo.candidates.length : 0
+      }
+    });
+  } catch (error) {
+    if (isAbortError(error) || generationInterrupted()) {
+      throw error;
+    }
+    const timedOut = isVoiceGenerationTimeoutError(error);
+    host.store.logAction({
+      kind: timedOut ? "voice_runtime" : "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: params.userId,
+      content: timedOut ? "voice_generation_prep_stage" : `voice_generation_soundboard_candidates_failed: ${String((error as Error)?.message || error)}`,
+      metadata: {
+        sessionId: session.id,
+        source,
+        stage: "soundboard_candidates",
+        state: timedOut ? "timeout" : "error",
+        elapsedMs: Math.max(0, Date.now() - soundboardCandidatesStartedAt),
+        timeoutMs: VOICE_GENERATION_SOUNDBOARD_CANDIDATE_TIMEOUT_MS,
+        fallbackUsed: true,
+        error: String((error as Error)?.message || error)
+      }
+    });
+    soundboardCandidateInfo = null;
+  }
   const soundboardCandidateLines = (Array.isArray(soundboardCandidateInfo?.candidates)
     ? soundboardCandidateInfo.candidates
     : []
@@ -490,7 +604,7 @@ export async function runVoiceReplyPipeline(
   }
   try {
     const activity = getActivitySettings(params.settings);
-    generatedPayload = toGeneratedPayload(await host.generateVoiceTurn({
+    const generateVoiceTurnPromise = host.generateVoiceTurn({
       settings: params.settings,
       guildId: session.guildId,
       channelId: session.textChannelId,
@@ -502,7 +616,7 @@ export async function runVoiceReplyPipeline(
       sessionId: session.id,
       isEagerTurn:
         !params.directAddressed &&
-        !Boolean(generationConversationContext?.currentSpeakerActive),
+        !generationConversationContext?.currentSpeakerActive,
       voiceAmbientReplyEagerness: Number(voiceConversation.ambientReplyEagerness) || 0,
       responseWindowEagerness: Number(activity.responseWindowEagerness) || 0,
       conversationContext: generationConversationContext,
@@ -526,7 +640,7 @@ export async function runVoiceReplyPipeline(
           index: number;
           voiceAddressing?: { talkingTo: string | null } | null;
         }) => {
-          if (session.ending || generationSignal?.aborted) return false;
+          if (generationInterrupted()) return false;
           const playbackPlan = host.buildVoiceReplyPlaybackPlan({
             replyText: String(text || ""),
             trailingSoundboardRefs: []
@@ -557,6 +671,7 @@ export async function runVoiceReplyPipeline(
           if (playbackPlan.soundboardRefs.length === 0) {
             const normalizedText = normalizeVoiceText(playbackPlan.spokenText, STT_REPLY_MAX_CHARS);
             if (!normalizedText) return false;
+            if (generationInterrupted()) return false;
             const requested = host.requestRealtimeTextUtterance({
               session,
               text: normalizedText,
@@ -588,6 +703,7 @@ export async function runVoiceReplyPipeline(
             latencyContext,
             musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
           });
+          if (generationInterrupted()) return false;
           const accepted = Boolean(playbackResult.completed) &&
             (Boolean(playbackResult.spokeLine) || Number(playbackResult.playedSoundboardCount || 0) > 0);
           if (accepted && streamedReplyRequestedAt === 0) {
@@ -618,7 +734,51 @@ export async function runVoiceReplyPipeline(
         }
         : null,
       signal: generationSignal
-    }));
+    });
+    const generationOnlyWatchdogPromise = new Promise<never>((_, reject) => {
+      const watchdogTimer = setTimeout(() => {
+        const currentPhase = session.inFlightAcceptedBrainTurn?.phase || null;
+        if (
+          session.inFlightAcceptedBrainTurn !== inFlightAcceptedBrainTurn ||
+          currentPhase !== "generation_only" ||
+          generationInterrupted()
+        ) {
+          return;
+        }
+        try {
+          activeReply?.abortController.abort(`voice_generation_only_watchdog_timeout:${VOICE_GENERATION_ONLY_WATCHDOG_MS}`);
+        } catch {
+          // best-effort
+        }
+        host.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: params.userId,
+          content: "voice_generation_watchdog_timeout",
+          metadata: {
+            sessionId: session.id,
+            source,
+            phase: currentPhase,
+            timeoutMs: VOICE_GENERATION_ONLY_WATCHDOG_MS,
+            transcriptChars: normalizedTranscript.length
+          }
+        });
+        reject(createVoiceGenerationTimeoutError("generation_only_watchdog", VOICE_GENERATION_ONLY_WATCHDOG_MS));
+      }, VOICE_GENERATION_ONLY_WATCHDOG_MS);
+      void generateVoiceTurnPromise.then(
+        () => {
+          clearTimeout(watchdogTimer);
+        },
+        () => {
+          clearTimeout(watchdogTimer);
+        }
+      );
+    });
+    generatedPayload = toGeneratedPayload(await Promise.race([
+      generateVoiceTurnPromise,
+      generationOnlyWatchdogPromise
+    ]));
     if (generatedPayload?.generationContextSnapshot) {
       session.lastGenerationContext = {
         ...generatedPayload.generationContextSnapshot,
@@ -628,7 +788,10 @@ export async function runVoiceReplyPipeline(
     }
     generationFinished = true;
   } catch (error) {
-    if (isAbortError(error) || generationSignal?.aborted) {
+    if (isAbortError(error) || generationInterrupted()) {
+      return false;
+    }
+    if (isVoiceGenerationTimeoutError(error)) {
       return false;
     }
     host.store.logAction({
@@ -645,16 +808,12 @@ export async function runVoiceReplyPipeline(
     return false;
   } finally {
     host.activeReplies?.clear(activeReply);
-    if (!generationFinished || generationSignal?.aborted) {
+    if (!generationFinished || generationInterrupted()) {
       clearInFlightAcceptedBrainTurn();
     }
   }
 
-  if (session.ending) {
-    clearInFlightAcceptedBrainTurn();
-    return false;
-  }
-  if (generationSignal?.aborted) {
+  if (generationInterrupted()) {
     clearInFlightAcceptedBrainTurn();
     return false;
   }
@@ -671,7 +830,6 @@ export async function runVoiceReplyPipeline(
   const streamedSentenceCount = Math.max(0, Number(generatedPayload?.streamedSentenceCount || 0));
   const streamedRequestedRealtimeUtterance = Boolean(generatedPayload?.streamedRequestedRealtimeUtterance);
   const usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
-  const usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
   const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
   const leaveVoiceChannelRequested = Boolean(generatedPayload?.leaveVoiceChannelRequested);
   const replyPrompts =
@@ -714,35 +872,6 @@ export async function runVoiceReplyPipeline(
     rawAddressing: generatedPayload?.voiceAddressing
   });
 
-  const shouldRetryForcedSpeech =
-    Boolean(params.forceSpokenOutput) &&
-    !shouldAllowSystemSpeechSkipAfterFire(source) &&
-    Math.max(0, Number(params.spokenOutputRetryCount || 0)) < 1 &&
-    (!replyText || replyText === "[SKIP]");
-  if (shouldRetryForcedSpeech) {
-    host.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: host.client.user?.id || null,
-      content: "realtime_reply_retrying_forced_system_speech",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        source,
-        retryCount: Number(params.spokenOutputRetryCount || 0) + 1
-      }
-    });
-    clearInFlightAcceptedBrainTurn();
-    return await runVoiceReplyPipeline(host, {
-      ...params,
-      source,
-      transcript: `${normalizedTranscript} Respond now with one short spoken line. Do not return [SKIP].`,
-      conversationContext: resolvedConversationContext,
-      spokenOutputRetryCount: Number(params.spokenOutputRetryCount || 0) + 1
-    });
-  }
-
   const playbackPlan = host.buildVoiceReplyPlaybackPlan({
     replyText,
     trailingSoundboardRefs: []
@@ -753,7 +882,6 @@ export async function runVoiceReplyPipeline(
       params: { ...params, source },
       replyText,
       usedWebSearchFollowup,
-      usedOpenArticleFollowup,
       usedScreenShareOffer,
       replyPrompts,
       generatedVoiceAddressing,
@@ -920,7 +1048,6 @@ export async function runVoiceReplyPipeline(
           : [...playedSoundboardRefs, ...playbackPlan.soundboardRefs],
         playedSoundboardCount: Number(playbackResult.playedSoundboardCount || playedSoundboardRefs.length || 0),
         usedWebSearchFollowup,
-        usedOpenArticleFollowup,
         usedScreenShareOffer,
         talkingTo: generatedVoiceAddressing?.talkingTo || null,
         directedConfidence: Number.isFinite(Number(generatedVoiceAddressing?.directedConfidence))

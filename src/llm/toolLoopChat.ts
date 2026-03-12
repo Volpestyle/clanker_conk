@@ -311,6 +311,29 @@ export async function chatWithTools(
     cacheReadTokens: usage.cacheReadTokens
   });
 
+  const responseTextBlocks = content
+    .filter((block) => block.type === "text")
+    .map((block) => String((block as { text?: string }).text || "").trim())
+    .filter(Boolean);
+  const responseToolCalls = content
+    .filter((block) => block.type === "tool_call")
+    .map((block) => {
+      const tc = block as { name?: string; input?: unknown };
+      return { name: tc.name, input: tc.input };
+    });
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+  const lastUserContent = typeof lastUserMessage?.content === "string"
+    ? lastUserMessage.content
+    : Array.isArray(lastUserMessage?.content)
+      ? lastUserMessage.content
+          .filter((block) => block.type === "text" || block.type === "tool_result")
+          .map((block) => {
+            if (block.type === "text") return String((block as { text?: string }).text || "");
+            return `[tool_result:${String((block as { toolCallId?: string }).toolCallId || "").slice(0, 20)}] ${String(block.content || "").slice(0, 2000)}`;
+          })
+          .join("\n")
+      : null;
+
   deps.store.logAction({
     kind: "llm_tool_call",
     guildId: trace.guildId || null,
@@ -321,7 +344,13 @@ export async function chatWithTools(
       provider: resolvedProvider,
       model: resolvedModel,
       usage,
-      source: trace.source || null
+      source: trace.source || null,
+      stopReason,
+      systemPrompt: systemPrompt || null,
+      messageCount: messages.length,
+      lastUserContent: lastUserContent || null,
+      transcript: responseTextBlocks.join("\n\n") || null,
+      toolCalls: responseToolCalls.length > 0 ? responseToolCalls : null
     },
     usdCost: costUsd
   });

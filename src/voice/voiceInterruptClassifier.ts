@@ -61,7 +61,7 @@ type InterruptClassifierHost = {
   } | null;
 };
 
-export type VoiceInterruptClassifierResult = {
+type VoiceInterruptClassifierResult = {
   decision: "interrupt" | "ignore";
   source: string;
   latencyMs: number;
@@ -107,7 +107,7 @@ function isLikelyLowSignalOverlapText(text: string) {
   return countTokens(normalized) <= 2 && normalized.length <= 12;
 }
 
-export function isObviousInterruptTakeoverText(text: string) {
+function isObviousInterruptTakeoverText(text: string) {
   const normalized = normalizeInlineText(text, 200)
     .toLowerCase()
     .replace(/\s+/gu, " ")
@@ -334,7 +334,7 @@ export async function classifyVoiceInterruptBurst(
   }
 }
 
-export function isLowSignalInterruptBurst(entries: VoiceInterruptOverlapBurstEntry[]) {
+function isLowSignalInterruptBurst(entries: VoiceInterruptOverlapBurstEntry[]) {
   const normalizedEntries = Array.isArray(entries) ? entries : [];
   return normalizedEntries.length > 0 &&
     normalizedEntries.every((entry) => isLikelyLowSignalOverlapText(entry.transcript));

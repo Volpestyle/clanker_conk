@@ -19,20 +19,20 @@ import type {
 
 export type AppConfig = typeof appConfig;
 
-export interface DiscordClientUserLike {
+interface DiscordClientUserLike {
   id?: string;
   username?: string;
   tag?: string;
 }
 
-export interface DiscordClientGuildMemberLike {
+interface DiscordClientGuildMemberLike {
   displayName?: string;
   user?: {
     username?: string;
   } | null;
 }
 
-export interface DiscordClientGuildLike {
+interface DiscordClientGuildLike {
   members?: {
     cache?: {
       get: (id: string) => DiscordClientGuildMemberLike | undefined;
@@ -75,11 +75,11 @@ export interface BotContext {
   readonly botUserId?: string | null;
 }
 
-export interface DiscoveryContext extends BotContext {
+interface DiscoveryContext extends BotContext {
   readonly discovery: DiscoveryService;
 }
 
-export interface MediaContext extends BotContext {
+interface MediaContext extends BotContext {
   readonly gifs: GifService;
   readonly video: VideoContextService;
 }
@@ -347,9 +347,10 @@ export interface VoiceReplyRuntime extends BotContext {
   runModelRequestedBrowserBrowse: StripFirstArg<RunModelRequestedBrowserBrowseFn>;
   buildBrowserBrowseContext: StripFirstArg<BuildBrowserBrowseContextFn>;
   runModelRequestedCodeTask: StripFirstArg<RunModelRequestedCodeTaskFn>;
+  buildSubAgentSessionsRuntime?: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
 }
 
-export type TextThoughtLoopPolicyRuntime = {
+type TextThoughtLoopPolicyRuntime = {
   isChannelAllowed: IsChannelAllowedRuntimeFn;
   hasBotMessageInRecentWindow: HasBotMessageInRecentWindowRuntimeFn;
 };

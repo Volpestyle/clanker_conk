@@ -158,7 +158,7 @@ function parseClassifierDecision(rawText: string): "allow" | "deny" | null {
 }
 
 
-export function hasBotNameCueForTranscript(
+function hasBotNameCueForTranscript(
   manager: ReplyDecisionHost,
   { transcript = "", settings = null }: {
     transcript?: string;
@@ -365,7 +365,7 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
   };
 }
 
-export function buildVoiceAddressingState(manager: ReplyDecisionHost, {
+function buildVoiceAddressingState(manager: ReplyDecisionHost, {
   session = null,
   userId = null,
   now = Date.now(),
@@ -379,7 +379,7 @@ export function buildVoiceAddressingState(manager: ReplyDecisionHost, {
   });
 }
 
-export function normalizeVoiceAddressingAnnotation(_manager: ReplyDecisionHost, {
+function normalizeVoiceAddressingAnnotation(_manager: ReplyDecisionHost, {
   rawAddressing = null,
   directAddressed = false,
   directedConfidence = Number.NaN,
@@ -773,7 +773,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   };
 }
 
-export type ClassifierPromptInput = {
+type ClassifierPromptInput = {
   botName: string;
   inputKind?: "transcript" | "event";
   ambientReplyEagerness: number;
@@ -806,7 +806,7 @@ export type ClassifierPromptInput = {
   runtimeEventContext?: VoiceRuntimeEventContext | null;
 };
 
-export function buildClassifierPrompt(input: ClassifierPromptInput): {
+function buildClassifierPrompt(input: ClassifierPromptInput): {
   systemPrompt: string;
   userPrompt: string;
 } {
@@ -1307,7 +1307,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   }
 }
 
-export function isCommandOnlyActive(
+function isCommandOnlyActive(
   manager: ReplyDecisionHost,
   session: ReplyDecisionSessionLike | null | undefined,
   settings: ReplyDecisionSettings = null

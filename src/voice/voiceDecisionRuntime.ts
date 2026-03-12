@@ -27,7 +27,7 @@ export function resolveVoiceReplyDecisionMaxOutputTokens(provider, model) {
   return 2;
 }
 
-export type VoiceTurnTranscriptionPlan = {
+type VoiceTurnTranscriptionPlan = {
   primaryModel: string;
   fallbackModel: string | null;
   reason: string;
@@ -85,7 +85,7 @@ export function resolveTurnTranscriptionPlan({
   };
 }
 
-export const resolveRealtimeTurnTranscriptionPlan = resolveTurnTranscriptionPlan;
+const resolveRealtimeTurnTranscriptionPlan = resolveTurnTranscriptionPlan;
 
 export async function transcribePcmTurnWithPlan<TSession>({
   transcribe,
@@ -179,7 +179,7 @@ export async function transcribePcmTurnWithPlan<TSession>({
   };
 }
 
-export function parseVoiceDecisionContract(rawText) {
+function parseVoiceDecisionContract(rawText) {
   const normalized = String(rawText || "").trim();
   if (!normalized) {
     return {
@@ -346,13 +346,13 @@ export function parseVoiceThoughtDecisionContract(rawText) {
   };
 }
 
-export interface AsrLogprobEntry {
+interface AsrLogprobEntry {
   token: string;
   logprob: number;
   bytes: number[] | null;
 }
 
-export interface AsrTranscriptConfidence {
+interface AsrTranscriptConfidence {
   meanLogprob: number;
   minLogprob: number;
   tokenCount: number;

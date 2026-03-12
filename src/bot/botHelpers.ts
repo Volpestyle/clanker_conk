@@ -21,7 +21,7 @@ const MAX_MEDIA_PROMPT_FLOOR = 120;
 const MAX_MEDIA_PROMPT_CEILING = 2000;
 export const MAX_WEB_QUERY_LEN = 220;
 export const MAX_GIF_QUERY_LEN = 120;
-export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
+const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 export const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
 export const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_REPLY_TEXT_LEN = 3600;
@@ -163,7 +163,7 @@ export const REPLY_OUTPUT_SCHEMA = {
 
 export const REPLY_OUTPUT_JSON_SCHEMA = JSON.stringify(REPLY_OUTPUT_SCHEMA);
 
-export const INITIATIVE_OUTPUT_SCHEMA = {
+const INITIATIVE_OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -172,6 +172,7 @@ export const INITIATIVE_OUTPUT_SCHEMA = {
       enum: ["post_now", "hold", "drop"]
     },
     channelId: { type: ["string", "null"] },
+    replyToMessageId: { type: ["string", "null"] },
     text: { type: "string" },
     mediaDirective: {
       type: "string",
@@ -546,7 +547,7 @@ export function composeReplyVideoPrompt(
     .join("\n");
 }
 
-export function parseDiscoveryMediaDirective(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
+function parseDiscoveryMediaDirective(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   const parsed = {
     text: String(rawText || "").trim(),
     imagePrompt: null,
@@ -666,6 +667,7 @@ export function parseStructuredInitiativeOutput(rawText, maxLen = DEFAULT_MAX_ME
       action: "drop",
       skip: true,
       channelId: null,
+      replyToMessageId: null,
       text: "",
       mediaDirective: "none",
       mediaPrompt: null,
@@ -689,6 +691,9 @@ export function parseStructuredInitiativeOutput(rawText, maxLen = DEFAULT_MAX_ME
   const channelId = skip
     ? null
     : normalizeDirectiveText(parsed?.channelId, MAX_INITIATIVE_CHANNEL_ID_LEN) || null;
+  const replyToMessageId = skip
+    ? null
+    : normalizeDirectiveText(parsed?.replyToMessageId, MAX_INITIATIVE_CHANNEL_ID_LEN) || null;
   const text = skip
     ? ""
     : normalizeDirectiveText(parsed?.text, MAX_INITIATIVE_TEXT_LEN) || "";
@@ -716,6 +721,7 @@ export function parseStructuredInitiativeOutput(rawText, maxLen = DEFAULT_MAX_ME
     action,
     skip,
     channelId: skip ? null : channelId,
+    replyToMessageId: skip ? null : replyToMessageId,
     text,
     mediaDirective,
     mediaPrompt,
@@ -889,7 +895,7 @@ export function pickReplyMediaDirective(parsed) {
   return parsed?.mediaDirective || null;
 }
 
-export function pickDiscoveryMediaDirective(parsed) {
+function pickDiscoveryMediaDirective(parsed) {
   return parsed?.mediaDirective || null;
 }
 

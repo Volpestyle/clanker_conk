@@ -3,7 +3,7 @@ export const SYSTEM_SPEECH_OPPORTUNITY = {
   STREAM_WATCH: "stream_watch"
 } as const;
 
-export type SystemSpeechOpportunityType =
+type SystemSpeechOpportunityType =
   typeof SYSTEM_SPEECH_OPPORTUNITY[keyof typeof SYSTEM_SPEECH_OPPORTUNITY];
 
 export const SYSTEM_SPEECH_SOURCE = {
@@ -12,7 +12,7 @@ export const SYSTEM_SPEECH_SOURCE = {
   STREAM_WATCH: "stream_watch_brain_turn"
 } as const;
 
-export type SystemSpeechReplyAccounting = "none" | "requested" | "spoken";
+type SystemSpeechReplyAccounting = "none" | "requested" | "spoken";
 export const SYSTEM_SPEECH_CLASS = {
   SYSTEM_OPTIONAL: "system_optional",
   REPLY_NORMAL: "reply_normal",
@@ -20,7 +20,7 @@ export const SYSTEM_SPEECH_CLASS = {
   OPERATIONAL_CRITICAL: "operational_critical"
 } as const;
 
-export type SystemSpeechClass =
+type SystemSpeechClass =
   typeof SYSTEM_SPEECH_CLASS[keyof typeof SYSTEM_SPEECH_CLASS];
 
 type SystemSpeechOpportunityDefinition = {

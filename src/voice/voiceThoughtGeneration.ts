@@ -42,7 +42,7 @@ import type {
 
 type ThoughtSettings = Record<string, unknown> | null;
 
-export interface VoiceThoughtEngineConfig {
+interface VoiceThoughtEngineConfig {
   enabled: boolean;
   provider: string;
   model: string;
@@ -52,7 +52,7 @@ export interface VoiceThoughtEngineConfig {
   minSecondsBetweenThoughts: number;
 }
 
-export interface VoiceThoughtTopicalityBias {
+interface VoiceThoughtTopicalityBias {
   silenceSeconds: number;
   topicTetherStrength: number;
   randomInspirationStrength: number;
@@ -62,7 +62,7 @@ export interface VoiceThoughtTopicalityBias {
   promptHint: string;
 }
 
-export interface VoiceThoughtDecision {
+interface VoiceThoughtDecision {
   action: "speak_now" | "hold" | "drop";
   reason: string;
   finalThought: string;
@@ -96,7 +96,7 @@ type ThoughtStoreLike = {
   }) => void;
 };
 
-export interface VoiceThoughtGenerationHost {
+interface VoiceThoughtGenerationHost {
   client: {
     user?: {
       id?: string | null;

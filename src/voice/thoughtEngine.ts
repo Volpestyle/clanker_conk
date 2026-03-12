@@ -54,7 +54,7 @@ type ThoughtStoreLike = {
   }) => void;
 };
 
-export interface ThoughtEngineHost {
+interface ThoughtEngineHost {
   client: {
     user?: {
       id?: string | null;

@@ -181,7 +181,8 @@ export async function offerVoiceScreenShareLink(
     channelId = null,
     requesterUserId = null,
     transcript = "",
-    source = "voice_turn_directive"
+    source = "voice_turn_directive",
+    signal
   }: {
     settings?: Record<string, unknown> | null;
     guildId?: string | null;
@@ -189,8 +190,12 @@ export async function offerVoiceScreenShareLink(
     requesterUserId?: string | null;
     transcript?: string;
     source?: string;
+    signal?: AbortSignal;
   } = {}
 ) {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("AbortError: Screen-share offer cancelled");
+  }
   const manager = runtime.screenShareSessionManager;
   const normalizedGuildId = String(guildId || "").trim();
   const normalizedChannelId = String(channelId || "").trim();
@@ -566,7 +571,7 @@ export async function maybeHandleScreenShareOfferIntent(
   };
 }
 
-export async function composeScreenShareOfferMessage(
+async function composeScreenShareOfferMessage(
   runtime: ScreenShareRuntime,
   {
     message,
@@ -648,7 +653,7 @@ export async function composeScreenShareOfferMessage(
   return normalized;
 }
 
-export async function composeScreenShareUnavailableMessage(
+async function composeScreenShareUnavailableMessage(
   runtime: ScreenShareRuntime,
   {
     message,
@@ -699,7 +704,7 @@ export async function composeScreenShareUnavailableMessage(
   return normalized;
 }
 
-export async function resolveOperationalChannel(
+async function resolveOperationalChannel(
   runtime: ScreenShareRuntime,
   channel: unknown,
   channelId: string | null,
@@ -726,7 +731,7 @@ export async function resolveOperationalChannel(
   });
 }
 
-export async function sendToChannel(
+async function sendToChannel(
   runtime: ScreenShareRuntime,
   channel: unknown,
   text: string,

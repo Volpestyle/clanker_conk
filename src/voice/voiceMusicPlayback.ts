@@ -29,24 +29,24 @@ import { resolveVoiceDirectAddressSignal } from "./voiceAddressing.ts";
 
 // English-only fallback/fast-path heuristics for obvious music control turns.
 // These are lightweight transport shortcuts, not the main conversational brain.
-export const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|halt|end|quit|shut\s*off)\b/i;
-export const EN_MUSIC_PAUSE_VERB_RE = /\b(?:pause)\b/i;
-export const EN_MUSIC_RESUME_VERB_RE = /\b(?:resume|unpause|continue)\b/i;
-export const EN_MUSIC_RESUME_PRONOUN_RE = /\b(?:resume|unpause|continue)\s+it\b/i;
-export const EN_MUSIC_RESUME_PLAY_CURRENT_RE =
+const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|halt|end|quit|shut\s*off)\b/i;
+const EN_MUSIC_PAUSE_VERB_RE = /\b(?:pause)\b/i;
+const EN_MUSIC_RESUME_VERB_RE = /\b(?:resume|unpause|continue)\b/i;
+const EN_MUSIC_RESUME_PRONOUN_RE = /\b(?:resume|unpause|continue)\s+it\b/i;
+const EN_MUSIC_RESUME_PLAY_CURRENT_RE =
   /\bplay\s+(?:it|this(?:\s+(?:song|track|music|playback))?|the\s+(?:song|track|music|playback))(?:\s+(?:again|back(?:\s+up)?))?(?:\s+(?:please|plz|now))?\s*$/i;
-export const EN_MUSIC_SKIP_VERB_RE = /\b(?:skip|next)\b/i;
-export const EN_MUSIC_CUE_RE = /\b(?:music|musik|song|songs|track|tracks|playback|playing)\b/i;
-export const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
-export const EN_MUSIC_PLAY_QUERY_RE =
+const EN_MUSIC_SKIP_VERB_RE = /\b(?:skip|next)\b/i;
+const EN_MUSIC_CUE_RE = /\b(?:music|musik|song|songs|track|tracks|playback|playing)\b/i;
+const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
+const EN_MUSIC_PLAY_QUERY_RE =
   /\b(?:play|start|queue|put\s+on|spin)\s+(.+?)\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz)?$/i;
-export const EN_MUSIC_QUERY_TRAILING_NOISE_RE =
+const EN_MUSIC_QUERY_TRAILING_NOISE_RE =
   /\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz|for\s+me|for\s+us|for\s+everyone|for\s+everybody|for\s+the\s+chat|thanks?)\b/gi;
-export const EN_MUSIC_QUERY_MEDIA_WORD_RE = /\b(?:music|musik|song|songs|track|tracks)\b/gi;
-export const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please|plz)$/i;
-export const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
-export const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
-export const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 5;
+const EN_MUSIC_QUERY_MEDIA_WORD_RE = /\b(?:music|musik|song|songs|track|tracks)\b/gi;
+const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please|plz)$/i;
+const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
+const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
+const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 5;
 const VOICE_MUSIC_BRAIN_MAX_STEPS = 4;
 const VOICE_MUSIC_BRAIN_MAX_OUTPUT_TOKENS = 120;
 const VOICE_MUSIC_BRAIN_RECENT_TURN_MAX_CHARS = 180;
@@ -955,7 +955,7 @@ function hasRecentInterruptedReplyFollowup(
   return Boolean(normalizeInlineText(interrupted.utteranceText || "", STT_TRANSCRIPT_MAX_CHARS));
 }
 
-export function isMusicPlaybackActive(
+function isMusicPlaybackActive(
   manager: MusicPlaybackHost,
   session: MusicRuntimeSessionLike | null | undefined
 ) {
@@ -1322,7 +1322,7 @@ export function isLikelyMusicStopPhrase(
   return EN_MUSIC_STOP_VERB_RE.test(normalizedTranscript) && EN_MUSIC_CUE_RE.test(normalizedTranscript);
 }
 
-export function isLikelyMusicPausePhrase(
+function isLikelyMusicPausePhrase(
   _manager: MusicPlaybackHost,
   { transcript = "" }: {
     transcript?: string;
@@ -1334,7 +1334,7 @@ export function isLikelyMusicPausePhrase(
   return EN_MUSIC_PAUSE_VERB_RE.test(normalizedTranscript) && EN_MUSIC_CUE_RE.test(normalizedTranscript);
 }
 
-export function isLikelyMusicSkipPhrase(
+function isLikelyMusicSkipPhrase(
   _manager: MusicPlaybackHost,
   { transcript = "" }: {
     transcript?: string;
@@ -1349,7 +1349,7 @@ export function isLikelyMusicSkipPhrase(
 // Only checked when music is paused. Keep this conservative: explicit resume
 // verbs are fine, and "play" only counts for current-track phrasings like
 // "play it again" or "play this song".
-export function isLikelyMusicResumePhrase(
+function isLikelyMusicResumePhrase(
   _manager: MusicPlaybackHost,
   { transcript = "" }: {
     transcript?: string;
