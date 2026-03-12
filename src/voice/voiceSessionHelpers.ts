@@ -10,7 +10,7 @@ import {
 } from "../settings/agentStack.ts";
 import type { VoiceRuntimeEventContext } from "./voiceSessionTypes.ts";
 
-export const VOICE_ADDRESSING_ALL_TOKENS = new Set([
+const VOICE_ADDRESSING_ALL_TOKENS = new Set([
   "ALL",
   "EVERYONE",
   "EVERYBODY",
@@ -40,18 +40,28 @@ import {
 type VoiceRuntimeMode = (typeof VOICE_RUNTIME_MODES)[number];
 import { normalizeWhitespaceText } from "../normalization/text.ts";
 
-export const REALTIME_MEMORY_FACT_LIMIT = 8;
+const REALTIME_MEMORY_FACT_LIMIT = 8;
 export const SOUNDBOARD_MAX_CANDIDATES = 40;
 const OPENAI_REALTIME_MIN_COMMIT_AUDIO_MS = 100;
 const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
+const OPENAI_TRANSCRIPT_CONTROL_TOKEN_RE = /<\|[^|>]+?\|>/g;
+const OPENAI_TRANSCRIPT_RESERVED_AUDIO_MARKER_RE =
+  /\b(?:vq_[a-z]+_audio_[a-z0-9_]+|audio_future\d*|end_of_task)\b/gi;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
 const ASR_LANGUAGE_BIAS_PROMPT_MAX_LEN = 280;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
 // English-token wake/vocative fallbacks. These help with cheap fast-path detection only.
 const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 
-export const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
+const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
 export const STT_TRANSCRIPT_MAX_CHARS = 2000;
+
+export interface AsrTranscriptGuardResult {
+  transcript: string;
+  malformed: boolean;
+  controlTokenCount: number;
+  reservedAudioMarkerCount: number;
+}
 
 export function normalizeVoiceRuntimeEventContext(value: unknown): VoiceRuntimeEventContext | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -372,16 +382,16 @@ export function shortError(text) {
     .slice(0, 220);
 }
 
-export function resolveVoiceProvider(settings) {
+function resolveVoiceProvider(settings) {
   return normalizeVoiceProvider(getResolvedVoiceProvider(settings), "openai");
 }
 
-export function resolveBrainProvider(settings) {
+function resolveBrainProvider(settings) {
   const voiceProvider = resolveVoiceProvider(settings);
   return normalizeBrainProvider(getResolvedVoiceGenerationBinding(settings).provider, voiceProvider, "openai");
 }
 
-export function resolveTranscriberProvider(settings) {
+function resolveTranscriberProvider(settings) {
   const voiceProvider = resolveVoiceProvider(settings);
   return normalizeTranscriberProvider(voiceProvider === "elevenlabs" ? "openai" : voiceProvider, "openai");
 }
@@ -641,14 +651,14 @@ export function shouldAllowVoiceNsfwHumor(settings) {
   return false;
 }
 
-export function normalizeVoiceAsrLanguageMode(mode = "", fallback = "auto") {
+function normalizeVoiceAsrLanguageMode(mode = "", fallback = "auto") {
   const normalizedMode = String(mode || fallback || "auto")
     .trim()
     .toLowerCase();
   return VOICE_ASR_LANGUAGE_MODES.has(normalizedMode) ? normalizedMode : "auto";
 }
 
-export function normalizeVoiceAsrLanguageHint(hint = "", fallback = "") {
+function normalizeVoiceAsrLanguageHint(hint = "", fallback = "") {
   if (hint === undefined || hint === null) {
     return normalizeVoiceAsrLanguageHint(fallback, "");
   }
@@ -701,6 +711,32 @@ export function normalizeVoiceText(value, maxChars = 1200) {
     maxLen: maxChars,
     minLen: 40
   });
+}
+
+export function inspectAsrTranscript(value: unknown, maxChars = STT_TRANSCRIPT_MAX_CHARS): AsrTranscriptGuardResult {
+  const transcript = normalizeVoiceText(value, maxChars);
+  if (!transcript) {
+    return {
+      transcript: "",
+      malformed: false,
+      controlTokenCount: 0,
+      reservedAudioMarkerCount: 0
+    };
+  }
+
+  const controlTokenCount = Array.from(
+    transcript.matchAll(OPENAI_TRANSCRIPT_CONTROL_TOKEN_RE)
+  ).length;
+  const reservedAudioMarkerCount = Array.from(
+    transcript.matchAll(OPENAI_TRANSCRIPT_RESERVED_AUDIO_MARKER_RE)
+  ).length;
+
+  return {
+    transcript,
+    malformed: controlTokenCount > 0 || reservedAudioMarkerCount > 0,
+    controlTokenCount,
+    reservedAudioMarkerCount
+  };
 }
 
 export function normalizeInlineText(value: unknown = "", maxChars = STT_TRANSCRIPT_MAX_CHARS) {

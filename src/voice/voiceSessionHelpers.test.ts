@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createTestSettings } from "../testSettings.ts";
 import {
+  inspectAsrTranscript,
   isBotNameAddressed,
   extractSoundboardDirective,
   parseSoundboardDirectiveSequence,
@@ -74,6 +75,23 @@ test("getRealtimeCommitMinimumBytes uses passthrough minimum for non-openai mode
   assert.equal(getRealtimeCommitMinimumBytes("elevenlabs_realtime", 24_000), 1);
 });
 
+test("inspectAsrTranscript preserves normal speech and custom directives", () => {
+  const result = inspectAsrTranscript("[[TO:ALL]] yo [[SOUNDBOARD:airhorn@123]] keep it moving");
+  assert.equal(result.transcript, "[[TO:ALL]] yo [[SOUNDBOARD:airhorn@123]] keep it moving");
+  assert.equal(result.malformed, false);
+  assert.equal(result.controlTokenCount, 0);
+  assert.equal(result.reservedAudioMarkerCount, 0);
+});
+
+test("inspectAsrTranscript flags OpenAI control-token garbage", () => {
+  const result = inspectAsrTranscript(
+    "<|audio_future3|><|vq_lbr_audio_58759|><|end_of_task|>"
+  );
+  assert.equal(result.malformed, true);
+  assert.equal(result.controlTokenCount, 3);
+  assert.equal(result.reservedAudioMarkerCount, 3);
+});
+
 test("resolveVoiceAsrLanguageGuidance supports auto and fixed language modes", () => {
   const autoGuidance = resolveVoiceAsrLanguageGuidance(createTestSettings({
     voice: {
@@ -86,7 +104,6 @@ test("resolveVoiceAsrLanguageGuidance supports auto and fixed language modes", (
   assert.equal(autoGuidance.mode, "auto");
   assert.equal(autoGuidance.hint, "en");
   assert.equal(autoGuidance.language, "");
-  assert.equal(autoGuidance.prompt.includes("Language hint: en"), true);
 
   const fixedGuidance = resolveVoiceAsrLanguageGuidance(createTestSettings({
     voice: {

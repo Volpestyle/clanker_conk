@@ -274,6 +274,51 @@ test("runRealtimeTurn skips stale queued turns when newer backlog exists", async
   assert.equal(Boolean(staleSkipLog), true);
 });
 
+test("runRealtimeTurn drops malformed ASR transcript overrides before reply planning", async () => {
+  const runtimeLogs = [];
+  let decisionCalls = 0;
+  const manager = createVoiceTestManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    decisionCalls += 1;
+    return {
+      allow: true,
+      reason: "generation_decides",
+      participantCount: 1,
+      directAddressed: false,
+      transcript: "should not run"
+    };
+  };
+
+  const session = {
+    id: "session-control-token-drop-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeTurns: [],
+    settingsSnapshot: createVoiceTestSettings()
+  };
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    captureReason: "stream_end",
+    transcriptOverride: "<|audio_future3|><|vq_lbr_audio_58759|>",
+    bridgeUtteranceId: 7
+  });
+
+  assert.equal(decisionCalls, 0);
+  const droppedLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_dropped_asr_control_tokens"
+  );
+  assert.ok(droppedLog);
+  assert.equal(droppedLog?.metadata?.source, "realtime");
+  assert.equal(droppedLog?.metadata?.bridgeUtteranceId, 7);
+});
+
 test("queueRealtimeTurn replays a same-utterance late revision after aborting the old generation", async () => {
   const runtimeLogs = [];
   const seenTranscripts: string[] = [];

@@ -301,7 +301,7 @@ test("resolveCaptureTurnPromotionReason allows strong local promotion without se
     asrUtteranceId: 0,
     bytesSent: Math.ceil((24_000 * 2 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000),
     signalSampleCount: 24_000,
-    signalActiveSampleCount: 2_400,
+    signalActiveSampleCount: 4_200,
     signalPeakAbs: 4096,
     signalSumSquares: 24_000 * 1024 * 1024
   };
@@ -519,22 +519,18 @@ test("startInboundCapture recovers stashed preplay reply when per-user ASR ends 
   );
 });
 
-test("startInboundCapture replays interrupted assistant speech when per-user ASR ends empty", async () => {
+test("startInboundCapture hands empty interrupted ASR turns back to the voice brain", async () => {
   const { manager, logs } = createManager();
   manager.shouldUsePerUserTranscription = () => true;
-  const prompts: string[] = [];
+  const runtimeEvents = [];
+  manager.fireVoiceRuntimeEvent = async (payload) => {
+    runtimeEvents.push(payload);
+    return true;
+  };
   const voxClient = new EventEmitter();
   voxClient.subscribeUser = () => {};
   const session = createSession({
     voxClient,
-    realtimeClient: {
-      requestTextUtterance(prompt: string) {
-        prompts.push(prompt);
-      },
-      isResponseInProgress() {
-        return false;
-      }
-    },
     interruptedAssistantReply: {
       utteranceText: "no, wait, one more thing",
       interruptedByUserId: "speaker-1",
@@ -564,16 +560,15 @@ test("startInboundCapture replays interrupted assistant speech when per-user ASR
   voxClient.emit("userAudioEnd", "speaker-1");
   await new Promise((resolve) => setTimeout(resolve, 2600));
 
-  assert.deepEqual(prompts, [
-    "Speak this exact line verbatim and nothing else: no, wait, one more thing"
-  ]);
-  assert.equal(session.pendingResponse?.utteranceText, "no, wait, one more thing");
+  assert.equal(runtimeEvents.length, 1);
+  assert.equal(runtimeEvents[0]?.source, "unclear_empty_asr_bridge_turn");
+  assert.match(String(runtimeEvents[0]?.transcript || ""), /interrupted you, but their words were unclear/i);
   assert.equal(
     logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"),
     true
   );
   assert.equal(
-    logs.some((entry) => entry?.content === "voice_interrupted_reply_recovered"),
+    logs.some((entry) => entry?.content === "voice_interrupt_unclear_turn_handoff_requested"),
     true
   );
 });
@@ -693,6 +688,57 @@ test("promoting a local-only strong-audio capture does not cancel pending pre-au
     logs.some((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech"),
     false
   );
+});
+
+test("startInboundCapture logs one voice_barge_in_gate for a promoted capture overlapping a pending pre-audio reply", async () => {
+  const { manager, logs } = createManager();
+  manager.shouldUsePerUserTranscription = () => true;
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    voxClient,
+    pendingResponse: {
+      requestId: 7,
+      requestedAt: Date.now(),
+      source: "realtime:speech_1",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "yo",
+      latencyContext: null,
+      userId: null,
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    }
+  });
+  seedReadyPerUserAsr(manager, session, "speaker-1");
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const strongPcm = makeMonoPcm16(
+    Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000),
+    3000
+  );
+  voxClient.emit("userAudio", "speaker-1", strongPcm);
+  await flushMicrotasks();
+  voxClient.emit("userAudio", "speaker-1", strongPcm);
+  await flushMicrotasks();
+
+  const bargeGateLogs = logs.filter((entry) => entry?.content === "voice_barge_in_gate");
+  assert.equal(bargeGateLogs.length, 1);
+  assert.equal(bargeGateLogs[0]?.userId, "speaker-1");
+  assert.equal(bargeGateLogs[0]?.metadata?.allow, false);
+  assert.equal(bargeGateLogs[0]?.metadata?.reason, "pending_response_pre_audio");
+  assert.equal(bargeGateLogs[0]?.metadata?.stage, "barge_in");
+  assert.equal(bargeGateLogs[0]?.metadata?.sessionId, "session-1");
 });
 
 test(

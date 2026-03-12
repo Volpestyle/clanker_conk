@@ -25,11 +25,12 @@ import {
   VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS
 } from "./voiceSessionManager.constants.ts";
 import { getMusicWakeFollowupState } from "./musicWakeLatch.ts";
-import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
-import type { BargeInController } from "./bargeInController.ts";
+import { inspectAsrTranscript, isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import type { BargeInController, BargeInDecisionEvaluation } from "./bargeInController.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
 import type { TurnProcessor } from "./turnProcessor.ts";
 import type { CaptureState, VoiceSession } from "./voiceSessionTypes.ts";
+import { buildRuntimeDecisionCorrelation } from "../services/runtimeCorrelation.ts";
 
 type CaptureManagerSettings = Record<string, unknown> | null;
 
@@ -56,9 +57,14 @@ type CaptureManagerStoreLike = {
   }) => void;
 };
 
-export interface CaptureManagerHost {
+interface CaptureManagerHost {
+  client: {
+    user?: {
+      id?: string | null;
+    } | null;
+  };
   store: CaptureManagerStoreLike;
-  bargeInController: Pick<BargeInController, "getCaptureSignalMetrics" | "shouldBargeIn">;
+  bargeInController: Pick<BargeInController, "getCaptureSignalMetrics" | "evaluateBargeInDecision">;
   turnProcessor: Pick<TurnProcessor, "queueRealtimeTurn" | "queueFileAsrTurn">;
   shouldUsePerUserTranscription: (args: {
     session: VoiceSession;
@@ -128,15 +134,97 @@ export interface CaptureManagerHost {
     reason?: string;
     userId?: string | null;
   }) => boolean;
-  recoverInterruptedAssistantReply: (args: {
+  handoffInterruptedTurnToVoiceBrain: (args: {
     session: VoiceSession;
     reason?: string;
     userId?: string | null;
+    source?: string;
   }) => boolean;
 }
 
 export class CaptureManager {
   constructor(private readonly host: CaptureManagerHost) {}
+
+  private shouldLogBargeInGate(evaluation: BargeInDecisionEvaluation) {
+    return evaluation.outputState.locked ||
+      evaluation.outputState.pendingResponse ||
+      evaluation.outputState.openAiActiveResponse ||
+      evaluation.outputState.botTurnOpen ||
+      evaluation.outputState.bufferedBotSpeech ||
+      evaluation.liveAudioStreaming;
+  }
+
+  private logBargeInGateDecision({
+    session,
+    userId,
+    source = "speaking_data",
+    captureState,
+    evaluation,
+    allow,
+    reason,
+    transcriptOverlapInterruptsEnabled,
+    serverVadConfirmed,
+    localOnlyPromotionStillUnconfirmed
+  }: {
+    session: VoiceSession;
+    userId: string;
+    source?: string;
+    captureState: CaptureState;
+    evaluation: BargeInDecisionEvaluation;
+    allow: boolean;
+    reason: string;
+    transcriptOverlapInterruptsEnabled: boolean;
+    serverVadConfirmed: boolean;
+    localOnlyPromotionStillUnconfirmed: boolean;
+  }) {
+    const now = Date.now();
+    captureState.bargeInGateLoggedAt = now;
+    this.host.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_barge_in_gate",
+      metadata: {
+        ...buildRuntimeDecisionCorrelation({
+          botId: this.host.client.user?.id || null,
+          sessionId: session.id,
+          source,
+          stage: "barge_in",
+          allow,
+          reason
+        }),
+        baseAllow: evaluation.allowed,
+        baseReason: evaluation.reason,
+        pendingRequestId: evaluation.pendingRequestId,
+        minCaptureBytes: evaluation.minCaptureBytes,
+        captureUtteranceId: Math.max(0, Number(captureState.asrUtteranceId || 0)) || null,
+        captureStartedAt: Math.max(0, Number(captureState.startedAt || 0)) || null,
+        capturePromotedAt: Math.max(0, Number(captureState.promotedAt || 0)) || null,
+        captureAgeMs: evaluation.captureAgeMs,
+        captureBytesSent: evaluation.captureBytesSent,
+        promotionReason: String(captureState.promotionReason || "").trim() || null,
+        promotionServerVadConfirmed: serverVadConfirmed,
+        transcriptOverlapInterruptsEnabled,
+        localOnlyPromotionStillUnconfirmed,
+        signalPeak: evaluation.signal.peak,
+        signalRms: evaluation.signal.rms,
+        signalActiveSampleRatio: evaluation.signal.activeSampleRatio,
+        outputLocked: evaluation.outputState.locked,
+        outputLockReason: evaluation.outputState.lockReason,
+        outputMusicActive: evaluation.outputState.musicActive,
+        outputBargeInSuppressed: evaluation.outputState.bargeInSuppressed,
+        outputBotTurnOpen: evaluation.outputState.botTurnOpen,
+        outputBufferedBotSpeech: evaluation.outputState.bufferedBotSpeech,
+        outputPendingResponse: evaluation.outputState.pendingResponse,
+        outputOpenAiActiveResponse: evaluation.outputState.openAiActiveResponse,
+        interruptionPolicyScope: evaluation.interruptionPolicy?.scope || null,
+        interruptionPolicyAllowedUserId: evaluation.interruptionPolicy?.allowedUserId || null,
+        interruptionPolicySource: evaluation.interruptionPolicy?.source || null,
+        interruptionPolicyReason: evaluation.interruptionPolicy?.reason || null
+      }
+    });
+  }
 
   startInboundCapture({
     session,
@@ -166,6 +254,7 @@ export class CaptureManager {
       startedAt: Date.now(),
       promotedAt: 0,
       promotionReason: null,
+      bargeInGateLoggedAt: 0,
       musicWakeFollowupEligibleAtPromotion: false,
       asrUtteranceId: 0,
       bytesSent: 0,
@@ -565,7 +654,11 @@ export class CaptureManager {
         }
       }
 
-      const bargeDecision = this.host.bargeInController.shouldBargeIn({ session, userId, captureState });
+      const bargeEvaluation = this.host.bargeInController.evaluateBargeInDecision({
+        session,
+        userId,
+        captureState
+      });
       const transcriptOverlapInterruptsEnabled = this.host.shouldUseTranscriptOverlapInterrupts({
         session,
         settings: settings || null
@@ -577,16 +670,44 @@ export class CaptureManager {
       const localOnlyPromotionStillUnconfirmed =
         captureState.promotionReason === "strong_local_audio" &&
         !serverVadConfirmed;
+      let bargeInAllowed = bargeEvaluation.allowed;
+      let bargeInReason: string = bargeEvaluation.reason;
+      if (bargeInAllowed && transcriptOverlapInterruptsEnabled) {
+        bargeInAllowed = false;
+        bargeInReason = "transcript_overlap_interrupts_enabled";
+      } else if (bargeInAllowed && localOnlyPromotionStillUnconfirmed) {
+        bargeInAllowed = false;
+        bargeInReason = "local_only_promotion_pending_server_vad";
+      }
+      if (
+        !wasPromoted &&
+        isPromoted &&
+        Number(captureState.bargeInGateLoggedAt || 0) <= 0 &&
+        this.shouldLogBargeInGate(bargeEvaluation)
+      ) {
+        this.logBargeInGateDecision({
+          session,
+          userId,
+          source: "speaking_data",
+          captureState,
+          evaluation: bargeEvaluation,
+          allow: bargeInAllowed,
+          reason: bargeInReason,
+          transcriptOverlapInterruptsEnabled,
+          serverVadConfirmed,
+          localOnlyPromotionStillUnconfirmed
+        });
+      }
       if (
         !transcriptOverlapInterruptsEnabled &&
-        bargeDecision.allowed &&
+        bargeEvaluation.allowed &&
         !localOnlyPromotionStillUnconfirmed
       ) {
         this.host.interruptBotSpeechForBargeIn({
           session,
           userId,
           source: "speaking_data",
-          minCaptureBytes: bargeDecision.minCaptureBytes || 0,
+          minCaptureBytes: bargeEvaluation.minCaptureBytes || 0,
           captureState
         });
       }
@@ -718,7 +839,10 @@ export class CaptureManager {
       allowRevision = false
     ) => {
       if (session.ending) return false;
-      const nextTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
+      const nextTranscript = inspectAsrTranscript(
+        asrResult?.transcript || "",
+        STT_TRANSCRIPT_MAX_CHARS
+      ).transcript;
       if (!nextTranscript) return false;
       if (bridgeForwarded && !allowRevision) return false;
       if (bridgeForwarded && nextTranscript === latestForwardedTranscript) return false;
@@ -762,7 +886,10 @@ export class CaptureManager {
         ? await commitAsrUtterance("per_user", asrDeps, settings || null, userId, captureReason)
         : await commitAsrUtterance("shared", asrDeps, settings || null, userId, captureReason);
       clearTimeout(fallbackTimer);
-      const commitTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
+      const commitTranscript = inspectAsrTranscript(
+        asrResult?.transcript || "",
+        STT_TRANSCRIPT_MAX_CHARS
+      ).transcript;
 
       if (commitTranscript) {
         forwardAsrBridgeTurn(asrResult, asrSource);
@@ -866,10 +993,11 @@ export class CaptureManager {
             userId
           });
           if (!recoveredSupersededPrePlaybackReply) {
-            this.host.recoverInterruptedAssistantReply({
+            this.host.handoffInterruptedTurnToVoiceBrain({
               session,
               reason: "empty_asr_bridge_drop",
-              userId
+              userId,
+              source: "unclear_empty_asr_bridge_turn"
             });
           }
           this.host.deferredActionQueue.recheckDeferredVoiceActions({
@@ -879,7 +1007,10 @@ export class CaptureManager {
           return;
         }
       }
-      const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
+      const lateTranscript = inspectAsrTranscript(
+        asrResult?.transcript || "",
+        STT_TRANSCRIPT_MAX_CHARS
+      ).transcript;
       if (!lateTranscript || lateTranscript === latestForwardedTranscript) return;
       this.host.store.logAction({
         kind: "voice_runtime",

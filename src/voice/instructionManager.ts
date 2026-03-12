@@ -3,6 +3,13 @@ import {
   formatConversationParticipantMemory,
   formatConversationWindows
 } from "../prompts/promptFormatters.ts";
+import {
+  buildWebToolRoutingPolicyLine,
+  BROWSER_BROWSE_POLICY_LINE,
+  BROWSER_SCREENSHOT_POLICY_LINE,
+  CONVERSATION_SEARCH_POLICY_LINE,
+  IMMEDIATE_WEB_SEARCH_POLICY_LINE
+} from "../prompts/toolPolicy.ts";
 import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import {
   loadConversationContinuityContext,
@@ -18,6 +25,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import {
   formatVoiceChannelEffectSummary,
+  inspectAsrTranscript,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
 import {
@@ -200,7 +208,7 @@ interface BuildRealtimeMemorySliceArgs {
   transcript?: string;
 }
 
-export type InstructionManagerHost = VoiceToolCallManager & {
+type InstructionManagerHost = VoiceToolCallManager & {
   store: InstructionStoreLike;
   resolveVoiceSpeakerName: (session: VoiceSession, userId?: string | null) => string;
   getStreamWatchBrainContextForPrompt: (
@@ -243,6 +251,42 @@ export type InstructionManagerHost = VoiceToolCallManager & {
 export class InstructionManager {
   constructor(private readonly host: InstructionManagerHost) {}
 
+  private sanitizeRealtimeContextTranscript({
+    session,
+    userId,
+    transcript = "",
+    maxChars,
+    stage,
+    captureReason = null
+  }: {
+    session: VoiceSession;
+    userId?: string | null;
+    transcript?: string;
+    maxChars: number;
+    stage: string;
+    captureReason?: string | null;
+  }) {
+    const transcriptGuard = inspectAsrTranscript(transcript, maxChars);
+    if (!transcriptGuard.malformed) return transcriptGuard.transcript;
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: String(userId || "").trim() || null,
+      content: "openai_realtime_turn_context_control_token_transcript_dropped",
+      metadata: {
+        sessionId: session.id,
+        stage,
+        captureReason: captureReason ? String(captureReason || "stream_end") : null,
+        transcript: transcriptGuard.transcript,
+        controlTokenCount: transcriptGuard.controlTokenCount,
+        reservedAudioMarkerCount: transcriptGuard.reservedAudioMarkerCount
+      }
+    });
+    return "";
+  }
+
   queueRealtimeTurnContextRefresh({
     session,
     settings,
@@ -257,7 +301,14 @@ export class InstructionManager {
     pendingRefreshState.pending = {
       settings: settings || session.settingsSnapshot || this.store.getSettings(),
       userId: String(userId || "").trim() || null,
-      transcript: normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS),
+      transcript: this.sanitizeRealtimeContextTranscript({
+        session,
+        userId,
+        transcript,
+        maxChars: REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
+        stage: "queue_realtime_turn_context_refresh",
+        captureReason
+      }),
       captureReason: String(captureReason || "stream_end")
     };
     if (pendingRefreshState.inFlight) return;
@@ -324,11 +375,17 @@ export class InstructionManager {
     transcript = "",
     captureReason: _captureReason = "stream_end"
   }: PrepareRealtimeTurnContextArgs) {
-    void _captureReason;
     if (!session || session.ending) return;
     if (!providerSupports(session.mode || "", "updateInstructions")) return;
 
-    const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
+    const normalizedTranscript = this.sanitizeRealtimeContextTranscript({
+      session,
+      userId,
+      transcript,
+      maxChars: REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
+      stage: "prepare_realtime_turn_context",
+      captureReason: _captureReason
+    });
     const transportOnly = isTransportOnlySession({ session, settings });
     const memorySlice = transportOnly
       ? null
@@ -355,7 +412,13 @@ export class InstructionManager {
     userId,
     transcript = ""
   }: BuildRealtimeMemorySliceArgs): Promise<RealtimeInstructionMemorySlice> {
-    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    const normalizedTranscript = this.sanitizeRealtimeContextTranscript({
+      session,
+      userId,
+      transcript,
+      maxChars: STT_TRANSCRIPT_MAX_CHARS,
+      stage: "build_realtime_memory_slice"
+    });
     if (!normalizedTranscript) {
       const factProfile =
         typeof this.host.getSessionFactProfileSlice === "function"
@@ -683,7 +746,13 @@ export class InstructionManager {
   }: BuildRealtimeInstructionsArgs) {
     const baseInstructions = String(session?.baseVoiceInstructions || buildVoiceInstructions(settings)).trim();
     const speakerName = this.host.resolveVoiceSpeakerName(session, speakerUserId);
-    const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
+    const normalizedTranscript = this.sanitizeRealtimeContextTranscript({
+      session,
+      userId: speakerUserId,
+      transcript,
+      maxChars: REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
+      stage: "build_realtime_instructions"
+    });
     const streamWatchBrainContext = this.host.getStreamWatchBrainContextForPrompt(session, settings);
     const hasScreenFrameContext =
       Array.isArray(streamWatchBrainContext?.notes) && streamWatchBrainContext.notes.length > 0;
@@ -907,6 +976,12 @@ export class InstructionManager {
         .map((tool) => String(tool?.name || "").trim())
         .filter(Boolean)
         .slice(0, 16);
+      const localToolNameSet = new Set(localToolNames);
+      const hasWebSearchTool = localToolNameSet.has("web_search");
+      const hasWebScrapeTool = localToolNameSet.has("web_scrape");
+      const hasBrowserBrowseTool = localToolNameSet.has("browser_browse");
+      const hasConversationSearchTool = localToolNameSet.has("conversation_search");
+      const hasMemoryWriteTool = localToolNameSet.has("memory_write");
       const mcpToolNames = configuredTools
         .filter((tool) => tool?.toolType === "mcp")
         .map((tool) => String(tool?.name || "").trim())
@@ -918,11 +993,15 @@ export class InstructionManager {
           localToolNames.length > 0 ? `- Local tools: ${localToolNames.join(", ")}` : null,
           mcpToolNames.length > 0 ? `- MCP tools: ${mcpToolNames.join(", ")}` : null,
           "- Use tools when they improve factuality or action execution. Always call the tool — never just say you will.",
-          "- Choose the web tool that best fits the task. Prefer the lightest sufficient tool, but do not follow a fixed order: use web_search for fresh discovery or current facts, web_scrape when you mainly need page text from a known URL, and browser_browse when the user explicitly wants browser use, asks for a screenshot, asks what the page looks like, when visual layout matters, or when you need JS rendering or page interaction (clicking, scrolling).",
-          "- browser_browse can capture browser screenshots and return them for visual inspection on the follow-up turn. Do not say webpage screenshots are impossible when browser_browse is available.",
-          "- When users ask you to look something up, search for something, find prices, or need current/factual information, call web_search immediately in the same response. Do not respond with only audio saying you will search — include the tool call.",
-          "- Use conversation_search when the speaker asks what was said earlier or asks you to remember a prior exchange.",
-          "- For memory writes, only store concise durable facts and avoid secrets.",
+          hasWebSearchTool || hasWebScrapeTool
+            ? `- ${buildWebToolRoutingPolicyLine({ includeBrowserBrowse: hasBrowserBrowseTool })}`
+            : hasBrowserBrowseTool
+              ? `- ${BROWSER_BROWSE_POLICY_LINE}`
+              : null,
+          hasBrowserBrowseTool ? `- ${BROWSER_SCREENSHOT_POLICY_LINE}` : null,
+          hasWebSearchTool ? `- ${IMMEDIATE_WEB_SEARCH_POLICY_LINE} Do not respond with only audio saying you will search.` : null,
+          hasConversationSearchTool ? `- ${CONVERSATION_SEARCH_POLICY_LINE}` : null,
+          hasMemoryWriteTool ? "- For memory writes, only store concise durable facts and avoid secrets." : null,
           "- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options.",
           "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",
           "- Use music_search only for explicit browsing requests or when you need candidate IDs for queue operations.",

@@ -5,6 +5,7 @@
 import { OpenAiRealtimeTranscriptionClient } from "./openaiRealtimeTranscriptionClient.ts";
 import {
   resolveVoiceAsrLanguageGuidance,
+  inspectAsrTranscript,
   normalizeVoiceText,
   normalizeInlineText,
   getRealtimeCommitMinimumBytes
@@ -26,7 +27,7 @@ export { STT_TRANSCRIPT_MAX_CHARS } from "./voiceSessionHelpers.ts";
 
 // ── Types ────────────────────────────────────────────────────────────
 
-export type AsrBridgeMode = "per_user" | "shared";
+type AsrBridgeMode = "per_user" | "shared";
 
 /**
  * Explicit lifecycle phase for an ASR bridge session.
@@ -47,27 +48,27 @@ export type AsrBridgePhase = "idle" | "connecting" | "ready" | "committing" | "c
 // boolean checks.
 
 /** The bridge can accept audio (connected and not tearing down). */
-export function asrPhaseCanAcceptAudio(phase: AsrBridgePhase): boolean {
+function asrPhaseCanAcceptAudio(phase: AsrBridgePhase): boolean {
   return phase === "ready" || phase === "committing";
 }
 
 /** The bridge has an active WebSocket connection. */
-export function asrPhaseIsConnected(phase: AsrBridgePhase): boolean {
+function asrPhaseIsConnected(phase: AsrBridgePhase): boolean {
   return phase === "ready" || phase === "committing" || phase === "closing";
 }
 
 /** The bridge can start a new commit. */
-export function asrPhaseCanCommit(phase: AsrBridgePhase): boolean {
+function asrPhaseCanCommit(phase: AsrBridgePhase): boolean {
   return phase === "ready";
 }
 
 /** The bridge is tearing down (replaces `closing` boolean). */
-export function asrPhaseIsClosing(phase: AsrBridgePhase): boolean {
+function asrPhaseIsClosing(phase: AsrBridgePhase): boolean {
   return phase === "closing";
 }
 
 /** The bridge is in the middle of a commit (replaces `isCommittingAsr` boolean). */
-export function asrPhaseIsCommitting(phase: AsrBridgePhase): boolean {
+function asrPhaseIsCommitting(phase: AsrBridgePhase): boolean {
   return phase === "committing";
 }
 
@@ -172,6 +173,24 @@ export interface AsrBridgeDeps {
   };
   botUserId: string | null;
   resolveVoiceSpeakerName: (session: VoiceSession, userId: string | null) => string;
+  handleSpeechStarted?: (args: {
+    session: VoiceSession;
+    userId: string | null;
+    speakerName: string;
+    utteranceId: number;
+    audioStartMs?: number | null;
+    itemId?: string | null;
+    eventType?: string | null;
+  }) => void;
+  handleSpeechStopped?: (args: {
+    session: VoiceSession;
+    userId: string | null;
+    speakerName: string;
+    utteranceId: number;
+    audioEndMs?: number | null;
+    itemId?: string | null;
+    eventType?: string | null;
+  }) => void;
   handleTranscriptOverlapSegment?: (args: {
     session: VoiceSession;
     userId: string | null;
@@ -390,7 +409,7 @@ function collectSegmentLogprobs(
 
 // ── Segment ordering (topological sort by previousItemId) ────────────
 
-export function orderAsrFinalSegments(entries: AsrFinalSegmentEntry[]): string[] {
+function orderAsrFinalSegments(entries: AsrFinalSegmentEntry[]): string[] {
   const normalizedEntries = Array.isArray(entries)
     ? entries
       .map((entry, index) => ({
@@ -443,7 +462,7 @@ export function orderAsrFinalSegments(entries: AsrFinalSegmentEntry[]): string[]
 
 // ── Shared-mode: resolve speaker from itemId mapping ─────────────────
 
-export function resolveSharedAsrSpeakerUserId(opts: {
+function resolveSharedAsrSpeakerUserId(opts: {
   asrState: AsrBridgeState;
   itemId: string;
   fallbackUserId: string | null;
@@ -505,7 +524,7 @@ export function trackSharedAsrCommittedItem(
   }
 }
 
-export function trackPerUserAsrCommittedItem(
+function trackPerUserAsrCommittedItem(
   asrState: AsrBridgeState,
   itemId: string
 ) {
@@ -596,7 +615,7 @@ async function waitForSharedAsrTranscriptByItem(
 
 // ── Transcript settle (per-user mode, fallback for shared) ───────────
 
-export async function waitForAsrTranscriptSettle(
+async function waitForAsrTranscriptSettle(
   session: VoiceSession,
   asrState: AsrBridgeState,
   utterance: AsrUtteranceState | null = null
@@ -703,13 +722,51 @@ function wireClientEvents(
 
   client.on("transcript", (payload: Record<string, unknown>) => {
     if (session.ending) return;
-    const transcript = normalizeVoiceText(String(payload?.text || ""), STT_TRANSCRIPT_MAX_CHARS_LOCAL);
+    const transcriptGuard = inspectAsrTranscript(
+      String(payload?.text || ""),
+      STT_TRANSCRIPT_MAX_CHARS_LOCAL
+    );
+    const transcript = transcriptGuard.transcript;
     if (!transcript) return;
 
     const eventType = String(payload?.eventType || "").trim();
     const isFinal = Boolean(payload?.final);
     const itemId = normalizeInlineText(payload?.itemId, 180);
     const previousItemId = normalizeInlineText(payload?.previousItemId, 180) || null;
+
+    let transcriptSpeakerUserId: string | null = userId ? String(userId).trim() : null;
+    if (mode === "shared") {
+      transcriptSpeakerUserId = resolveSharedAsrSpeakerUserId({
+        asrState,
+        itemId,
+        fallbackUserId: asrState.userId,
+        botUserId
+      });
+    }
+
+    const speakerName = resolveSpeaker(session, transcriptSpeakerUserId) || "someone";
+    if (transcriptGuard.malformed) {
+      store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: transcriptSpeakerUserId ? String(transcriptSpeakerUserId).trim() : null,
+        content: "openai_realtime_asr_control_token_transcript_dropped",
+        metadata: {
+          sessionId: session.id,
+          speakerName,
+          transcript,
+          eventType: eventType || null,
+          itemId: itemId || null,
+          previousItemId,
+          final: isFinal,
+          controlTokenCount: transcriptGuard.controlTokenCount,
+          reservedAudioMarkerCount: transcriptGuard.reservedAudioMarkerCount
+        }
+      });
+      return;
+    }
+
     const now = Date.now();
     const targetUtterance = resolveTranscriptTargetUtterance({
       asrState,
@@ -754,19 +811,6 @@ function wireClientEvents(
     } else {
       targetUtterance.partialText = transcript;
     }
-
-    // Resolve speaker: shared mode looks up by itemId mapping, per-user uses the userId directly
-    let transcriptSpeakerUserId: string | null = userId ? String(userId).trim() : null;
-    if (mode === "shared") {
-      transcriptSpeakerUserId = resolveSharedAsrSpeakerUserId({
-        asrState,
-        itemId,
-        fallbackUserId: asrState.userId,
-        botUserId
-      });
-    }
-
-    const speakerName = resolveSpeaker(session, transcriptSpeakerUserId) || "someone";
     const shouldLogPartial =
       !isFinal &&
       transcript !== asrState.lastPartialText &&
@@ -846,6 +890,32 @@ function wireClientEvents(
         itemId: normalizeInlineText(payload?.itemId, 180) || null
       }
     });
+
+    try {
+      deps.handleSpeechStarted?.({
+        session,
+        userId: speechUserId || null,
+        speakerName: deps.resolveVoiceSpeakerName(session, speechUserId || null),
+        utteranceId: utteranceId || 0,
+        audioStartMs: Number.isFinite(Number(payload?.audioStartMs))
+          ? Math.max(0, Math.round(Number(payload.audioStartMs)))
+          : null,
+        itemId: normalizeInlineText(payload?.itemId, 180) || null,
+        eventType: "input_audio_buffer.speech_started"
+      });
+    } catch (error) {
+      store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: speechUserId || null,
+        content: `openai_realtime_asr_speech_started_handler_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          utteranceId: utteranceId || null
+        }
+      });
+    }
   });
 
   client.on("speech_stopped", (payload: Record<string, unknown>) => {
@@ -856,6 +926,7 @@ function wireClientEvents(
     asrState.speechStoppedAt = now;
     asrState.speechStoppedUtteranceId = utteranceId;
     const speechUserId = mode === "shared" ? asrState.userId : (userId ? String(userId).trim() : null);
+    const speakerName = resolveSpeaker(session, speechUserId) || "someone";
     store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -871,6 +942,32 @@ function wireClientEvents(
         itemId: normalizeInlineText(payload?.itemId, 180) || null
       }
     });
+
+    try {
+      deps.handleSpeechStopped?.({
+        session,
+        userId: speechUserId || null,
+        speakerName,
+        utteranceId: utteranceId || 0,
+        audioEndMs: Number.isFinite(Number(payload?.audioEndMs))
+          ? Math.max(0, Math.round(Number(payload.audioEndMs)))
+          : null,
+        itemId: normalizeInlineText(payload?.itemId, 180) || null,
+        eventType: "input_audio_buffer.speech_stopped"
+      });
+    } catch (error) {
+      store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: speechUserId || null,
+        content: `openai_realtime_asr_speech_stopped_handler_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          utteranceId: utteranceId || null
+        }
+      });
+    }
   });
 
   client.on("error_event", (payload: Record<string, unknown>) => {
@@ -998,7 +1095,7 @@ export async function ensureAsrSessionConnected(
 
 // ── Flush pending audio ──────────────────────────────────────────────
 
-export function flushPendingAsrAudio(
+function flushPendingAsrAudio(
   mode: AsrBridgeMode,
   session: VoiceSession,
   deps: AsrBridgeDeps,
@@ -1562,7 +1659,7 @@ export function scheduleAsrIdleClose(
 
 // ── Close sessions ───────────────────────────────────────────────────
 
-export async function closePerUserAsrSession(
+async function closePerUserAsrSession(
   session: VoiceSession,
   deps: AsrBridgeDeps,
   userId: string,

@@ -31,6 +31,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import {
   getRealtimeCommitMinimumBytes,
+  inspectAsrTranscript,
   isRealtimeMode,
   normalizeVoiceText,
   resolveVoiceAsrLanguageGuidance
@@ -218,6 +219,7 @@ interface HandleResolvedVoiceTurnArgs {
   latencyContext?: Record<string, unknown> | null;
   nativeCaptureReason?: string;
   allowReplyDispatch?: boolean;
+  allowAuthorizedOutputLockInterrupt?: boolean;
   shouldAbortStage?: ((stage: "post_decision" | "pre_native_reply" | "pre_brain_forward" | "pre_brain_reply") => boolean) | null;
 }
 
@@ -254,8 +256,6 @@ interface RunRealtimeBrainReplyArgs {
   musicWakeFollowupEligibleAtCapture?: boolean;
   source?: string;
   latencyContext?: Record<string, unknown> | null;
-  forceSpokenOutput?: boolean;
-  spokenOutputRetryCount?: number;
   frozenFrameSnapshot?: { mimeType: string; dataBase64: string } | null;
   runtimeEventContext?: VoiceRuntimeEventContext | null;
 }
@@ -278,7 +278,7 @@ type TurnProcessorLlmLike = {
   synthesizeSpeech?: unknown;
 } | null;
 
-export interface TurnProcessorHost {
+interface TurnProcessorHost {
   store: TurnProcessorStoreLike;
   llm?: TurnProcessorLlmLike;
   replyManager: Pick<
@@ -389,6 +389,11 @@ export interface TurnProcessorHost {
   }) => boolean;
   clearVoiceCommandSession: (session: VoiceSession) => void;
   runRealtimeBrainReply: (args: RunRealtimeBrainReplyArgs) => Promise<boolean>;
+  hasCommittedInterruptedBridgeTurn: (args: {
+    session: VoiceSession;
+    userId?: string | null;
+    bridgeUtteranceId?: number | null;
+  }) => boolean;
   touchActivity: (guildId: string, settings?: TurnProcessorSettings) => void;
   getOutputChannelState: (session: VoiceSession) => OutputChannelState;
   countHumanVoiceParticipants: (session: VoiceSession) => number;
@@ -520,6 +525,7 @@ export class TurnProcessor {
     nativeCaptureReason = captureReason,
     musicWakeFollowupEligibleAtCapture = false,
     allowReplyDispatch = true,
+    allowAuthorizedOutputLockInterrupt = true,
     shouldAbortStage = null
   }: HandleResolvedVoiceTurnArgs) {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
@@ -605,6 +611,7 @@ export class TurnProcessor {
       !directAddressOutputInterrupted &&
       !decision.allow &&
       decision.reason === "bot_turn_open" &&
+      allowAuthorizedOutputLockInterrupt &&
       this.host.isUserAllowedToInterruptReply({
         policy: interruptionPolicy,
         userId
@@ -1751,6 +1758,35 @@ export class TurnProcessor {
         asrCompletedAtMs = Date.now();
       }
 
+      const realtimeTranscriptGuard = inspectAsrTranscript(turnTranscript, STT_TRANSCRIPT_MAX_CHARS);
+      turnTranscript = realtimeTranscriptGuard.transcript;
+      if (realtimeTranscriptGuard.malformed) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_turn_dropped_asr_control_tokens",
+          metadata: {
+            sessionId: session.id,
+            source: "realtime",
+            captureReason: String(captureReason || "stream_end"),
+            transcript: turnTranscript,
+            controlTokenCount: realtimeTranscriptGuard.controlTokenCount,
+            reservedAudioMarkerCount: realtimeTranscriptGuard.reservedAudioMarkerCount,
+            clipDurationMs,
+            hasTranscriptOverride,
+            bridgeUtteranceId: normalizedBridgeUtteranceId
+          }
+        });
+        this.host.recoverSupersededPrePlaybackReply({
+          session,
+          reason: "turn_dropped_control_tokens",
+          userId
+        });
+        return;
+      }
+
       if (isSuperseded("post_transcription")) return;
 
       if (
@@ -1795,30 +1831,59 @@ export class TurnProcessor {
       ) {
         const confidence = computeAsrTranscriptConfidence(transcriptLogprobsOverride);
         if (confidence && confidence.meanLogprob < VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD) {
-          this.store.logAction({
-            kind: "voice_runtime",
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId,
-            content: "voice_turn_dropped_asr_low_confidence",
-            metadata: {
-              sessionId: session.id,
-              source: "realtime",
-              captureReason: String(captureReason || "stream_end"),
-              transcript: turnTranscript,
-              meanLogprob: Number(confidence.meanLogprob.toFixed(4)),
-              minLogprob: Number(confidence.minLogprob.toFixed(4)),
-              tokenCount: confidence.tokenCount,
-              threshold: VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD,
-              clipDurationMs
-            }
-          });
-          this.host.recoverSupersededPrePlaybackReply({
-            session,
-            reason: "turn_dropped_low_confidence",
-            userId
-          });
-          return;
+          const committedInterruptedBridgeTurn =
+            normalizedBridgeUtteranceId &&
+            this.host.hasCommittedInterruptedBridgeTurn({
+              session,
+              userId,
+              bridgeUtteranceId: normalizedBridgeUtteranceId
+            });
+          if (committedInterruptedBridgeTurn) {
+            this.store.logAction({
+              kind: "voice_runtime",
+              guildId: session.guildId,
+              channelId: session.textChannelId,
+              userId,
+              content: "voice_turn_low_confidence_forwarded_after_interrupt",
+              metadata: {
+                sessionId: session.id,
+                source: "realtime",
+                captureReason: String(captureReason || "stream_end"),
+                transcript: turnTranscript,
+                meanLogprob: Number(confidence.meanLogprob.toFixed(4)),
+                minLogprob: Number(confidence.minLogprob.toFixed(4)),
+                tokenCount: confidence.tokenCount,
+                threshold: VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD,
+                clipDurationMs,
+                bridgeUtteranceId: normalizedBridgeUtteranceId
+              }
+            });
+          } else {
+            this.store.logAction({
+              kind: "voice_runtime",
+              guildId: session.guildId,
+              channelId: session.textChannelId,
+              userId,
+              content: "voice_turn_dropped_asr_low_confidence",
+              metadata: {
+                sessionId: session.id,
+                source: "realtime",
+                captureReason: String(captureReason || "stream_end"),
+                transcript: turnTranscript,
+                meanLogprob: Number(confidence.meanLogprob.toFixed(4)),
+                minLogprob: Number(confidence.minLogprob.toFixed(4)),
+                tokenCount: confidence.tokenCount,
+                threshold: VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD,
+                clipDurationMs
+              }
+            });
+            this.host.recoverSupersededPrePlaybackReply({
+              session,
+              reason: "turn_dropped_low_confidence",
+              userId
+            });
+            return;
+          }
         }
       }
 
@@ -1919,6 +1984,9 @@ export class TurnProcessor {
           asrSkippedShortClip: skipShortClipAsr
         },
         bridgeSource: "realtime_transcript_turn",
+        allowAuthorizedOutputLockInterrupt:
+          !this.host.shouldUseRealtimeTranscriptBridge({ session, settings }) &&
+          !hasTranscriptOverride,
         latencyContext: {
           finalizedAtMs,
           asrStartedAtMs,
@@ -2237,11 +2305,34 @@ export class TurnProcessor {
       asrLanguage: asrLanguageGuidance.language,
       asrPrompt: asrLanguageGuidance.prompt
     });
-    const transcript = transcriptionResult.transcript;
+    const fileAsrTranscriptGuard = inspectAsrTranscript(
+      transcriptionResult.transcript,
+      STT_TRANSCRIPT_MAX_CHARS
+    );
+    const transcript = fileAsrTranscriptGuard.transcript;
     const transcriptionModelFallback = transcriptionResult.fallbackModel;
     const transcriptionPlanReason = transcriptionResult.reason;
     const usedFallbackModelForTranscript = transcriptionResult.usedFallbackModel;
     if (!transcript) return;
+    if (fileAsrTranscriptGuard.malformed) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_dropped_asr_control_tokens",
+        metadata: {
+          sessionId: session.id,
+          source: "file_asr",
+          captureReason: String(captureReason || "stream_end"),
+          transcript,
+          controlTokenCount: fileAsrTranscriptGuard.controlTokenCount,
+          reservedAudioMarkerCount: fileAsrTranscriptGuard.reservedAudioMarkerCount,
+          clipDurationMs
+        }
+      });
+      return;
+    }
     if (await this.maybeConsumePendingMusicDisambiguationTurn({
       session,
       settings,
@@ -2374,7 +2465,16 @@ export class TurnProcessor {
 
     if (!Array.isArray(deferredTurns)) {
       const outputChannelState = this.host.getOutputChannelState(session);
-      if (outputChannelState.locked || outputChannelState.captureBlocking) {
+      const hasEagerTurn = pendingQueue.some(
+        (t) => t?.directAddressed || t?.deferReason === "preplay_supersede_recover"
+      );
+      const onlyLockedByMusic =
+        outputChannelState.locked &&
+        outputChannelState.musicActive &&
+        outputChannelState.phase === "idle";
+      const isLocked = outputChannelState.locked && !(onlyLockedByMusic && hasEagerTurn);
+
+      if (isLocked || outputChannelState.captureBlocking) {
         this.host.scheduleDeferredBotTurnOpenFlush({ session, reason });
         return;
       }

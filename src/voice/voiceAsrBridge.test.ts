@@ -425,6 +425,35 @@ test("per-user auto-committed item binds to the active utterance before explicit
   });
 });
 
+test("ASR bridge drops provider control-token transcripts before storing utterance text", async () => {
+  await withPatchedConnect(async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const session = createSession();
+    const deps = createDeps(session, logs);
+
+    assert.equal(beginAsrUtterance("per_user", session, deps, session.settingsSnapshot, "speaker-1"), true);
+    const asrState = await ensureAsrSessionConnected("per_user", deps, session.settingsSnapshot, "speaker-1");
+    assert.ok(asrState?.client);
+
+    asrState!.client!.handleIncoming(JSON.stringify({
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "item_1",
+      delta: "<|vq_lbr_audio_58759|>"
+    }));
+    asrState!.client!.handleIncoming(JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_1",
+      transcript: "<|audio_future3|><|vq_lbr_audio_58759|>"
+    }));
+
+    assert.equal(asrState!.utterance.partialText, "");
+    assert.deepEqual(asrState!.utterance.finalSegments, []);
+    const droppedLogs = logs.filter((entry) => entry.content === "openai_realtime_asr_control_token_transcript_dropped");
+    assert.equal(droppedLogs.length, 2);
+    assert.equal(logs.some((entry) => entry.content === "openai_realtime_asr_final_segment"), false);
+  });
+});
+
 test("commitAsrUtterance trips the empty-commit circuit breaker after three substantial empty commits", async () => {
   const logs: Array<Record<string, unknown>> = [];
   const session = createSession({
