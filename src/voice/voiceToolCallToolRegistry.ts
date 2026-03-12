@@ -210,10 +210,14 @@ export function resolveVoiceRealtimeToolDescriptors(
   const includeMemory = Boolean(getMemorySettings(settings).enabled);
   const includeSoundboard = Boolean(getVoiceSoundboardSettings(settings).enabled);
   const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
+  const computerUseClient =
+    browserTaskConfig.runtime === "openai_computer_use"
+      ? manager.llm?.getComputerUseClient?.(browserTaskConfig.openaiComputerUse.client)
+      : null;
   const includeBrowser = Boolean(
     isBrowserEnabled(settings) &&
       manager.browserManager &&
-      (browserTaskConfig.runtime !== "openai_computer_use" || manager.llm?.openai)
+      (browserTaskConfig.runtime !== "openai_computer_use" || computerUseClient?.client)
   );
   const includeCodeAgent = Boolean(
     isDevTaskEnabled(settings) && ((manager.createCodeAgentSession && manager.subAgentSessions) || manager.runModelRequestedCodeTask)

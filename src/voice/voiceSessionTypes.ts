@@ -792,6 +792,8 @@ export interface VoiceInterruptOverlapBurstState {
     openedAt: number;
     lastTranscriptAt: number;
     assistantUtteranceText: string;
+    assistantRequestId: number | null;
+    assistantItemId: string | null;
     quietTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     maxTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     evaluating: boolean;

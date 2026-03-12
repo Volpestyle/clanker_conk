@@ -1,12 +1,16 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { BROWSER_LLM_PROVIDER_OPTIONS, LlmProviderOptions } from "./LlmProviderOptions";
+import {
+  BROWSER_RUNTIME_SELECTION_OPTIONS,
+  OPENAI_COMPUTER_USE_CLIENT_OPTIONS,
+  getEffectiveBrowserRuntime
+} from "../../settingsFormModel";
 
 export function ResearchBrowsingSettingsSection({
   id,
   form,
   set,
-  showAdvancedOverrides,
   setBrowserLlmProvider,
   selectBrowserLlmPresetModel,
   browserLlmModelOptions,
@@ -15,7 +19,15 @@ export function ResearchBrowsingSettingsSection({
   const searchEnabled = Boolean(form.webSearchEnabled);
   const browserEnabled = Boolean(form.browserEnabled);
   const nativeSearchRuntime = form.stackResolvedResearchRuntime === "openai_native_web_search";
-  const nativeBrowserRuntime = form.stackResolvedBrowserRuntime === "openai_computer_use";
+  const effectiveBrowserRuntime = getEffectiveBrowserRuntime(form);
+  const nativeBrowserRuntime = effectiveBrowserRuntime === "openai_computer_use";
+  const browserRuntimeSelection = String(form.browserRuntimeSelection || "inherit").trim().toLowerCase();
+  const runtimeSummary =
+    browserEnabled
+      ? browserRuntimeSelection === "inherit"
+        ? `${effectiveBrowserRuntime} (preset)`
+        : `${effectiveBrowserRuntime} (override)`
+      : "";
 
   return (
     <SettingsSection id={id} title="Research & Browsing" active={searchEnabled || browserEnabled}>
@@ -59,7 +71,7 @@ export function ResearchBrowsingSettingsSection({
             <span className="vps-advanced-summary-copy">
               {searchEnabled && String(form.stackResolvedResearchRuntime || "")}
               {searchEnabled && browserEnabled && " \u00B7 "}
-              {browserEnabled && String(form.stackResolvedBrowserRuntime || "")}
+              {browserEnabled && runtimeSummary}
             </span>
           </summary>
           <div className="vps-advanced-body">
@@ -200,10 +212,30 @@ export function ResearchBrowsingSettingsSection({
               <div id="sec-browser">
                 <h4>Browser Agent</h4>
                 <p className="status-msg info" style={{ marginTop: 0 }}>
-                  Resolved runtime: {form.stackResolvedBrowserRuntime}
+                  Runtime on save: {effectiveBrowserRuntime}
                 </p>
+                <div className="split">
+                  <div>
+                    <label htmlFor="browser-runtime-selection">Browser runtime</label>
+                    <select
+                      id="browser-runtime-selection"
+                      value={form.browserRuntimeSelection}
+                      onChange={set("browserRuntimeSelection")}
+                    >
+                      {BROWSER_RUNTIME_SELECTION_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option === "inherit"
+                            ? "Use preset default"
+                            : option === "openai_computer_use"
+                              ? "OpenAI computer use"
+                              : "Local browser agent"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
-                {showAdvancedOverrides && !nativeBrowserRuntime && (
+                {!nativeBrowserRuntime && (
                   <div className="split">
                     <div>
                       <label htmlFor="browser-llm-provider">Provider</label>
@@ -232,19 +264,46 @@ export function ResearchBrowsingSettingsSection({
                   </div>
                 )}
 
-                {showAdvancedOverrides && nativeBrowserRuntime && (
-                  <div className="split">
-                    <div>
-                      <label htmlFor="browser-openai-computer-use-model">OpenAI computer use model</label>
-                      <input
-                        id="browser-openai-computer-use-model"
-                        type="text"
-                        value={form.browserOpenAiComputerUseModel}
-                        onChange={set("browserOpenAiComputerUseModel")}
-                        placeholder="gpt-5.4"
-                      />
+                {nativeBrowserRuntime && (
+                  <>
+                    <div className="split">
+                      <div>
+                        <label htmlFor="browser-openai-computer-use-client">Client auth</label>
+                        <select
+                          id="browser-openai-computer-use-client"
+                          value={form.browserOpenAiComputerUseClient}
+                          onChange={set("browserOpenAiComputerUseClient")}
+                        >
+                          {OPENAI_COMPUTER_USE_CLIENT_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                              {option === "auto"
+                                ? "Auto (prefer OpenAI API)"
+                                : option === "openai-oauth"
+                                  ? "OpenAI OAuth"
+                                  : "OpenAI API key"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                  </div>
+                    <div className="split">
+                      <div>
+                        <label htmlFor="browser-openai-computer-use-model">OpenAI computer use model</label>
+                        <input
+                          id="browser-openai-computer-use-model"
+                          type="text"
+                          value={form.browserOpenAiComputerUseModel}
+                          onChange={set("browserOpenAiComputerUseModel")}
+                          placeholder="gpt-5.4"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <p className="status-msg info">
+                        OpenAI computer use keeps the browser tool available even when the main orchestrator uses Claude or another provider.
+                      </p>
+                    </div>
+                  </>
                 )}
 
                 <div className="split">

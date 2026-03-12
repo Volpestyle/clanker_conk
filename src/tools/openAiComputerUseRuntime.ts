@@ -31,6 +31,7 @@ type ComputerUseStore = {
 
 type ComputerUseOptions = {
   openai: OpenAI;
+  provider?: "openai" | "openai-oauth";
   browserManager: BrowserManager;
   store: ComputerUseStore;
   sessionKey: string;
@@ -313,6 +314,7 @@ async function executeComputerAction(
 
 export async function runOpenAiComputerUseTask({
   openai,
+  provider = "openai",
   browserManager,
   store,
   sessionKey,
@@ -335,6 +337,7 @@ export async function runOpenAiComputerUseTask({
   const startedAt = Date.now();
   const initialUrl = resolveInitialUrl(instruction);
   const resolvedModel = String(model || COMPUTER_USE_DEFAULT_MODEL).trim() || COMPUTER_USE_DEFAULT_MODEL;
+  const resolvedProvider = provider === "openai-oauth" ? "openai-oauth" : "openai";
   const toolDefinition = getComputerToolDefinition();
   let step = 0;
   let totalCostUsd = 0;
@@ -376,7 +379,7 @@ export async function runOpenAiComputerUseTask({
       throwIfAborted(signal, "Computer use task cancelled");
       const usage = extractOpenAiResponseUsage(response);
       totalCostUsd += estimateUsdCost({
-        provider: "openai",
+        provider: resolvedProvider,
         model: resolvedModel,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
@@ -453,6 +456,7 @@ export async function runOpenAiComputerUseTask({
       content: String(instruction || "").slice(0, 200),
       metadata: {
         runtime: "openai_computer_use",
+        provider: resolvedProvider,
         model: resolvedModel,
         currentUrl: currentUrl || null,
         steps: step,

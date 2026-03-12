@@ -43,6 +43,7 @@ test("ElevenLabsRealtimeClient buffers audio chunks until commit and can nudge r
 test("ElevenLabsRealtimeClient cancelActiveResponse is a no-op", () => {
   const client = new ElevenLabsRealtimeClient({ apiKey: "test-key" });
   assert.equal(client.cancelActiveResponse(), false);
+  assert.equal(client.getInterruptAcceptanceMode(), "local_cut_async_confirmation");
 });
 
 test("ElevenLabsRealtimeClient handleIncoming maps metadata, audio, transcripts, ping, and interruptions", () => {

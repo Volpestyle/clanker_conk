@@ -528,9 +528,13 @@ export function buildBrowserBrowseContext(
   settings: Settings
 ): BrowserBrowseContextState {
   const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
+  const computerUseClient =
+    browserTaskConfig.runtime === "openai_computer_use"
+      ? ctx.llm?.getComputerUseClient?.(browserTaskConfig.openaiComputerUse.client)
+      : null;
   const configured = Boolean(
     ctx.browserManager &&
-    (browserTaskConfig.runtime !== "openai_computer_use" || ctx.llm.openai)
+    (browserTaskConfig.runtime !== "openai_computer_use" || computerUseClient?.client)
   );
   const enabled = Boolean(getBrowserRuntimeConfig(settings).enabled);
   const budget = getBrowserBudgetState(ctx, settings);

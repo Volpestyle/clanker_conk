@@ -5,15 +5,17 @@ flowchart TD
     D --> E["POST /api/voice/share-session/:token/frame"]
 
     E --> F["Latest frame buffer"]
-    E --> G["Background scanner<br/>note + sceneChanged"]
-    G --> H["Rolling temporal notes"]
+    E --> G{"brainContextEnabled?"}
+    G -->|yes| H["Background scanner<br/>note + sceneChanged"]
+    H --> I["Rolling temporal notes"]
 
-    F --> I["Normal voice brain turn"]
-    H --> I
-    I --> J["Speak or [SKIP]"]
+    F --> J["Normal voice brain turn"]
+    I --> J
+    J --> K["Speak or [SKIP]"]
 
-    G --> K{"Autonomous commentary enabled?"}
-    K -->|first frame / scene change / silence| I
+    F --> L{"Autonomous commentary enabled?"}
+    H --> L
+    L -->|first frame / silence /\nscene change when scanner runs| J
 
-    H --> L["Session recap on share end"]
-    L --> M["One-line memory fact"]
+    I --> M["Session recap on share end"]
+    M --> N["One-line memory fact"]

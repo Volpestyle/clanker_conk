@@ -124,7 +124,7 @@ Interpretation:
 - `outputLockReason=pending_response`: Bun still has a pending reply.
 - `outputLockReason=openai_active_response`: OpenAI realtime still reports an active response.
 - `outputLockReason=awaiting_tool_outputs`: tool execution is the blocker.
-- `outputLockReason=music_playback_active`: this is not a reply-output bug; music is intentionally locking output.
+- `outputLockReason=music_playback_active`: music is the only active lock. If buffered or live assistant speech is also active, the assistant-side reason wins and `musicActive=true` remains as orthogonal context.
 
 Deferred replay rule:
 
@@ -174,17 +174,17 @@ OpenAI cannot see Discord playback position or control Discord output. So we imp
 
 ## 9. Default Interruption Policy
 
-**Default: `"speaker"`** — the person the bot is responding to can interrupt. Others cannot through plain talk-over. A direct wake-word / bot-name turn can still cut in.
+**Default: `"speaker"`** — the person the bot is responding to gets the privileged fast interrupt path. Other speakers do not get plain acoustic talk-over, but in ASR-bridge sessions they can still seize the floor through transcript-overlap arbitration when the overlap looks like a real takeover. A direct wake-word / bot-name turn can still cut in.
 
 | Mode | Effect |
 |------|--------|
-| `"speaker"` | Ordinary talk-over is bound to the assistant reply target. If the reply targets one participant, only that person can interrupt. If the reply targets `ALL` or the target cannot be resolved, ordinary talk-over stays closed. A wake-word / bot-name turn from anyone can still interrupt. |
+| `"speaker"` | Ordinary raw talk-over is bound to the assistant reply target. If the reply targets one participant, that person gets the fast interrupt path. If the reply targets `ALL` or the target cannot be resolved, ordinary raw talk-over stays closed. In ASR-bridge sessions, other speakers can still interrupt through transcript-overlap arbitration when they clearly take the floor. A wake-word / bot-name turn from anyone can still interrupt. |
 | `"anyone"` | Anyone in the channel can interrupt the bot. Wake-word / bot-name turns also interrupt. |
 | `"none"` | Nobody can interrupt the bot, including wake-word / bot-name turns. |
 
 Setting: `voice.conversationPolicy.defaultInterruptionMode`
 
-Rationale: A real person in a conversation can be interrupted by the person they're talking to. That's natural. But random bystanders cutting in mid-sentence is not — it's rude and disruptive in a group setting. `"speaker"` mirrors how human conversations work.
+Rationale: A real person in a conversation is most naturally interrupted by the person they are already talking to. Group conversation still needs that preference, but it also needs a way for someone else to seize the floor when they clearly cut in for a reason. `"speaker"` models that as a privileged target-speaker fast path plus a stricter arbitration path for everyone else.
 
 ### Per-Utterance Override
 
@@ -223,7 +223,7 @@ speaker also gets a preplay supersede chance before any assistant audio has
 begun, so queued reply audio does not jump in front of someone who is already
 taking the floor.
 
-This is intentionally narrower than full `"anyone"` talk-over. In `"speaker"` mode, the current reply target can interrupt with an ordinary finalized follow-up, while a non-speaker still needs an actual wake-word turn.
+This is intentionally narrower than full `"anyone"` talk-over. In `"speaker"` mode, the current reply target gets the ordinary fast path, while a non-speaker still needs either an explicit wake-word turn or transcript-overlap arbitration that looks like a real floor takeover.
 
 ### Agent-Influenced Policy
 
@@ -257,27 +257,30 @@ When a realtime `bridge` or `brain` session is using the OpenAI ASR bridge, live
 
 Flow while assistant speech is active:
 
-1. If Realtime ASR emits `speech_started` for the speaker who is already allowed to interrupt under the current reply policy, the runtime first requires that speaker's live capture to satisfy the same assertive acoustic gate used by raw barge-in. Only then does it arm a sustain window instead of cutting immediately.
-2. If that same utterance keeps the floor through the sustain window while assistant output is still interruptible, the runtime commits the hard cut, stores interruption context, and flushes the staged turn into the normal turn pipeline.
-3. If that same utterance stops before the sustain window closes, the pending interrupt is released and any staged bridge turn flushes normally with no interrupt recorded.
-4. A wake-word or direct-address transcript that is still allowed to seize the floor can cut immediately once the transcript makes that intent explicit.
-5. For everyone else, a non-empty partial or final ASR transcript opens an overlap burst.
-6. Later transcript updates replace the latest text for that utterance while the burst stays open.
-7. The burst closes on either:
+1. If Realtime ASR emits `speech_started` for the speaker who is already allowed to interrupt under the current reply policy, the runtime arms a sustain window instead of cutting immediately.
+2. While that same utterance is still active, the runtime keeps re-checking the same assertive acoustic gate used by raw barge-in. An early `speech_started` event does not permanently lose the interrupt just because the first overlap chunk was still below the byte or signal threshold.
+3. If that same utterance keeps the floor long enough to become interrupt-eligible while assistant output is still interruptible, the runtime commits the hard cut, stores interruption context, and flushes the staged turn into the normal turn pipeline.
+4. If `speech_started` was missed or arrived before the utterance crossed the assertive gate, later same-speaker transcript updates and the final bridge commit can still rescue the interrupt once that same capture becomes eligible while assistant output is still interruptible.
+5. If that same utterance stops before the sustain window closes and never becomes eligible, the pending interrupt is released and any staged bridge turn flushes normally with no interrupt recorded.
+6. A wake-word or direct-address transcript that is still allowed to seize the floor can cut immediately once the transcript makes that intent explicit.
+7. For everyone else, a non-empty partial or final ASR transcript opens an overlap burst.
+8. Later transcript updates replace the latest text for that utterance while the burst stays open.
+9. The burst closes on either:
    - a short quiet gap (`VOICE_INTERRUPT_BURST_QUIET_GAP_MS = 360ms`)
    - the max burst window (`VOICE_INTERRUPT_BURST_MAX_MS = 1500ms`)
-8. Resolution order:
+10. Resolution order:
    - obvious takeover text like `wait`, `hold on`, `stop`, or explicit cancel intent interrupts immediately
    - obvious low-signal text like laughter, backchannel, and tiny acknowledgements is ignored immediately
    - ambiguous short overlap is sent once to the dedicated interrupt classifier, which must answer `INTERRUPT` or `IGNORE`
-9. While the decision is pending, finalized ASR turns for that utterance are staged instead of being forwarded to the normal turn queue.
-10. If the burst resolves to `INTERRUPT`, the runtime executes the normal output-lock interrupt, stores interruption context if the reply was actually cut, and flushes the staged turn into the normal pipeline.
-11. If the burst resolves to `IGNORE`, the staged turn is dropped and no interrupt is recorded. Filler, laughter, and room noise do not become user turns.
+11. While the decision is pending, finalized ASR turns for that utterance are staged instead of being forwarded to the normal turn queue.
+12. If the burst resolves to `INTERRUPT`, the runtime executes the normal output-lock interrupt, stores interruption context if the reply was actually cut, and flushes the staged turn into the normal pipeline.
+13. If the assistant output already moved on to a newer reply before the classifier result returns, the staged turn is forwarded normally and no retroactive cut is applied to the newer output.
+14. If the burst resolves to `IGNORE`, the staged turn is dropped and no interrupt is recorded. Filler, laughter, and room noise do not become user turns.
 
 The interrupt classifier binding comes from `agentStack.overrides.voiceInterruptClassifier` and is exposed in the dashboard as the voice-mode "Interrupt classifier" provider/model controls. If no dedicated override exists, it falls back to the preset interrupt classifier, then the admission classifier, then the orchestrator.
 
 ## 10. Acoustic Gating
-All acoustic gates are deterministic. The agent has no input here. In ASR-bridge sessions, these gates still control capture promotion, echo guards, and whether audio is worth transcribing. The current reply target can arm a same-speaker interrupt once Realtime ASR confirms `speech_started`, but only if that live capture already satisfies the same assertive raw barge-in gate; the hard cut then commits only after the sustain window and only if that same utterance is still actively speaking when the window closes. Transcript bursts remain the floor-transfer path for everyone else trying to seize the floor mid-reply, and wake-word/direct-address transcripts can still seize the floor immediately when policy allows. Raw acoustic barge-in remains the direct interrupt path for sessions that are not using transcript-overlap interrupts.
+All acoustic gates are deterministic. The agent has no input here. In ASR-bridge sessions, these gates still control capture promotion, echo guards, and whether audio is worth transcribing. The current reply target can arm a same-speaker interrupt as soon as Realtime ASR confirms `speech_started`; the hard cut still requires the same assertive raw barge-in gate, but that gate is re-checked through the sustain window instead of being locked to the very first overlap chunk. Transcript bursts remain the floor-transfer path for everyone else trying to seize the floor mid-reply, and wake-word/direct-address transcripts can still seize the floor immediately when policy allows. Raw acoustic barge-in remains the direct interrupt path for sessions that are not using transcript-overlap interrupts.
 
 ### Gate Sequence
 
@@ -357,24 +360,24 @@ Local-only promotion rule:
 - `strong_local_audio` can promote a capture before Realtime VAD confirms speech so the turn can keep collecting audio immediately
 - that local-only promotion still warms ASR state, but it does not supersede preplay reply generation until Realtime VAD confirms the same utterance
 - while assistant audio is already playing, barge-in stays blocked for that capture until Realtime VAD confirms the same utterance
-- once the utterance is VAD-confirmed, the currently authorized interrupter can arm a same-speaker interrupt on `speech_started`; the hard cut commits only after about 700ms of sustained overlap, while other speakers still go through the overlap-burst path
+- once the utterance is VAD-confirmed, the currently authorized interrupter can arm a same-speaker interrupt on `speech_started`; the runtime keeps re-checking the raw acoustic gate during that overlap and commits the hard cut once the utterance is still active and eligible, while other speakers still go through the overlap-burst path
 
 ## 11. Interrupt Execution
 
 When a realtime interrupt is committed, either from the direct acoustic path, from an authorized `speech_started` sustain commit, from a direct-address transcript override, or from a transcript-overlap burst that resolved to `INTERRUPT`:
 
-1. **Cancel generation** — `response.cancel` to OpenAI Realtime API.
-2. **Truncate conversation** — `conversation.item.truncate` so API history only contains what was actually spoken.
-3. **Clear queued utterances** — Pending realtime assistant chunks are dropped so old speech cannot resume after the cut.
-4. **Abort in-flight voice work** — Active voice-generation and voice-tool reply scopes are aborted so stale streamed chunks cannot enqueue new playback after the cut.
-5. **Stop subprocess playback** — `resetBotAudioPlayback()` stops clankvox TTS and clears buffered playback telemetry.
-6. **Close bot turn** — `botTurnOpen = false`, clear reset timer.
-7. **Unduck music** — Release any music volume ducking immediately.
-8. **Interruption context guard** — Check whether the live reply was actually cut:
-   - **`response.cancel` succeeded:** Store interruption context (what was being said, who interrupted, when) on the session for the next turn's prompt.
-   - **`conversation.item.truncate` succeeded but `response.cancel` did not:** Still store interruption context. The spoken reply was cut and is recoverable even if the provider reports the response as already finished server-side.
-   - **Neither cancel nor truncate succeeded:** Do not create interruption recovery state.
-9. **Suppression guard** — Keep the long post-barge-in suppression window only when `response.cancel` succeeded. Truncate-only cuts still fall back to the short echo guard.
+1. **Attempt provider-native cut** — Use the realtime provider's own interruption path when it supports one. On immediate-ack runtimes this is a direct cancel call, and OpenAI-style runtimes may also truncate the assistant output item so history matches spoken audio.
+2. **Clear queued utterances** — Pending realtime assistant chunks are dropped so old speech cannot resume after the cut.
+3. **Abort in-flight voice work** — Active voice-generation and voice-tool reply scopes are aborted so stale streamed chunks cannot enqueue new playback after the cut.
+4. **Stop subprocess playback** — `resetBotAudioPlayback()` stops clankvox TTS and clears buffered playback telemetry.
+5. **Close bot turn** — `botTurnOpen = false`, clear reset timer.
+6. **Unduck music** — Release any music volume ducking immediately.
+7. **Interrupt acceptance guard** — The runtime resolves whether the cut counts as accepted:
+   - **Immediate-ack providers** (`interruptAcceptanceMode = "immediate_provider_ack"`): `interruptAccepted` becomes true only when the provider acknowledges the cut immediately. OpenAI-style `conversation.item.truncate` still counts even when `response.cancel` does not.
+   - **Async-confirmation providers** (`interruptAcceptanceMode = "local_cut_async_confirmation"`): once local playback is authoritatively cut and output state is cleared, `interruptAccepted` becomes true immediately. The later provider-side `response_done` / interruption event is confirmation and observability, not the only source of truth.
+   - **No accepted cut**: do not create interruption recovery state.
+8. **Interruption context storage** — If `interruptAccepted` is true and the runtime still has interrupted utterance text, store interruption context on the session for the next turn's prompt.
+9. **Suppression guard** — Keep the long post-barge-in suppression window only when `response.cancel` succeeded. Truncate-only or local-only accepted cuts still fall back to the short echo guard.
 10. **Interrupted item quarantine** — When `conversation.item.truncate` names a live output item, stash that `item_id` on the session. Any later audio deltas or final assistant transcripts for that exact item are dropped until the short quarantine TTL expires, so already-cancelled speech cannot leak back into local playback or transcript history.
 
 ### Event Loop Race
@@ -382,6 +385,8 @@ When a realtime interrupt is committed, either from the direct acoustic path, fr
 `response_done` (WebSocket) and user audio (IPC) are separate async sources. A user audio chunk can arrive before `response_done` clears `pendingResponse`. The pre-audio and output-present guards catch the "nothing audible left" cases; the post-cancel guard handles the rest.
 
 Late provider chunks for the just-truncated output item are handled separately from barge-in suppression. The runtime drops those stale chunks by exact `item_id`, so the next legitimate reply can start immediately without replaying the cancelled tail.
+
+Transcript-overlap burst decisions are also bound to the assistant output instance they opened against. If the classifier resolves after the room has already moved on to a newer reply, the staged user turn is forwarded normally instead of cutting the newer output.
 
 ## 12. Post-Interruption Recovery (LLM-Driven)
 
@@ -426,6 +431,7 @@ Wake-word / bot-name output-lock interrupts do **not** use this suppression wind
 | `VOICE_INTERRUPT_BURST_MAX_MS` | 1500ms | Max coalescing window for overlap bursts |
 | `VOICE_INTERRUPT_DECISION_TTL_MS` | 30000ms | TTL for recent overlap decisions and staged turn bookkeeping |
 | `VOICE_INTERRUPT_SPEECH_START_SUSTAIN_MS` | 700ms | Same-speaker `speech_started` overlap window before the hard cut commits |
+| `VOICE_INTERRUPT_SPEECH_START_RECHECK_MS` | 200ms | Retry cadence while a pending same-speaker overlap is still active but has not yet met the raw cut gate |
 | `VOICE_GENERATION_SOUNDBOARD_CANDIDATE_TIMEOUT_MS` | 1200ms | Max time to wait on soundboard candidate prompt context before falling back to none |
 | `VOICE_GENERATION_CONTINUITY_TIMEOUT_MS` | 2400ms | Max time to wait on continuity/history prompt context before falling back to empty continuity |
 | `VOICE_GENERATION_BEHAVIORAL_TIMEOUT_MS` | 1800ms | Max time to wait on behavioral memory prompt context before falling back to no behavioral facts |

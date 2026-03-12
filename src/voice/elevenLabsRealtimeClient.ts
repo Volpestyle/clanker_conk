@@ -15,6 +15,7 @@ import {
   DEFAULT_ELEVENLABS_BASE_URL,
   normalizeElevenLabsBaseUrl
 } from "./realtimeProviderNormalization.ts";
+import type { RealtimeInterruptAcceptanceMode } from "./realtimeInterruptAcceptance.ts";
 
 export class ElevenLabsRealtimeClient extends EventEmitter {
   apiKey;
@@ -354,6 +355,10 @@ export class ElevenLabsRealtimeClient extends EventEmitter {
   cancelActiveResponse() {
     // ElevenLabs realtime currently interrupts via inbound audio/activity signaling.
     return false;
+  }
+
+  getInterruptAcceptanceMode(): RealtimeInterruptAcceptanceMode {
+    return "local_cut_async_confirmation";
   }
 
   requestTextUtterance(promptText) {

@@ -163,6 +163,28 @@ test("getReplyOutputLockState locks output while clankvox still has queued speec
   assert.equal(lockState.bufferedBotSpeech, true);
 });
 
+test("getReplyOutputLockState prefers buffered bot speech over music-only lock reason", () => {
+  const { replyManager } = createReplyManagerHarness();
+  const session = createSession({
+    music: {
+      phase: "playing",
+      active: true
+    },
+    voxClient: {
+      ttsBufferDepthSamples: 24_000,
+      getTtsBufferDepthSamples() {
+        return this.ttsBufferDepthSamples;
+      }
+    }
+  });
+
+  const lockState = replyManager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, true);
+  assert.equal(lockState.reason, "bot_audio_buffered");
+  assert.equal(lockState.musicActive, true);
+  assert.equal(lockState.bufferedBotSpeech, true);
+});
+
 test("getReplyOutputLockState ignores stale clankvox buffered telemetry", () => {
   const { replyManager } = createReplyManagerHarness();
   const session = createSession({

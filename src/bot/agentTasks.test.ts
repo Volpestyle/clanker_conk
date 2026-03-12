@@ -82,6 +82,8 @@ test("runModelRequestedBrowserBrowse reports openai computer use unavailable wit
       // Null out the OpenAI client so the guard fires
       // eslint-disable-next-line no-restricted-syntax
       (ctx.llm as any).openai = null;
+      // eslint-disable-next-line no-restricted-syntax
+      (ctx.llm as any).codexOAuth = null;
 
       const settings = createTestSettings({
         agentStack: {
@@ -124,6 +126,96 @@ test("runModelRequestedBrowserBrowse reports openai computer use unavailable wit
       assert.equal(result.query, "investigate this page");
       assert.equal(result.error, "openai_computer_use_unavailable");
       assert.equal(result.used, false);
+    }
+  );
+});
+
+test("runModelRequestedBrowserBrowse uses OpenAI OAuth for hosted computer use when selected", async () => {
+  const browserManager = {
+    configureSession() {
+      return undefined;
+    },
+    async open() {
+      return "ok";
+    },
+    async screenshot() {
+      return "data:image/png;base64,c2NyZWVu";
+    },
+    async currentUrl() {
+      return "https://example.com/current";
+    },
+    async close() {
+      return undefined;
+    },
+    async closeAll() {
+      return undefined;
+    }
+  } as unknown as BrowserManager;
+
+  await withTempAgentContext(
+    {
+      browserManager
+    },
+    async (ctx) => {
+      // eslint-disable-next-line no-restricted-syntax
+      (ctx.llm as any).openai = null;
+      // eslint-disable-next-line no-restricted-syntax
+      (ctx.llm as any).codexOAuth = {
+        tokens: { refreshToken: "test", accessToken: "", idToken: "", expiresAt: 0, accountId: "acct_123" },
+        client: {
+          async post() {
+            return {
+              id: "resp_1",
+              output: [],
+              output_text: "Done via oauth.",
+              usage: {
+                input_tokens: 1,
+                output_tokens: 1,
+                input_tokens_details: { cached_tokens: 0 }
+              }
+            };
+          }
+        }
+      };
+
+      const settings = createTestSettings({
+        agentStack: {
+          runtimeConfig: {
+            browser: {
+              enabled: true,
+              openaiComputerUse: {
+                client: "openai-oauth",
+                model: "gpt-5.4"
+              }
+            }
+          },
+          overrides: {
+            browserRuntime: "openai_computer_use"
+          }
+        }
+      });
+
+      const result = await runModelRequestedBrowserBrowse(ctx, {
+        settings,
+        browserBrowse: {
+          enabled: true,
+          configured: true,
+          budget: {
+            maxPerHour: 5,
+            used: 0,
+            remaining: 5,
+            canBrowse: true
+          }
+        },
+        query: "inspect https://example.com",
+        guildId: "guild-1",
+        channelId: "chan-1",
+        userId: "user-1"
+      });
+
+      assert.equal(result.used, true);
+      assert.equal(result.error, null);
+      assert.equal(result.text, "Done via oauth.");
     }
   );
 });

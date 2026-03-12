@@ -80,6 +80,7 @@ test("GeminiRealtimeClient cancelActiveResponse is a no-op", () => {
   const cancelled = client.cancelActiveResponse();
 
   assert.equal(cancelled, false);
+  assert.equal(client.getInterruptAcceptanceMode(), "local_cut_async_confirmation");
   assert.equal(client.pendingResponseActive, true);
 });
 

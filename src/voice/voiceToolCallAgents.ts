@@ -91,7 +91,11 @@ export async function executeVoiceBrowserBrowseTool(
   const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
   const maxSteps = clamp(Number(browserTaskConfig.maxStepsPerTask) || 15, 1, 30);
   const stepTimeoutMs = clamp(Number(browserTaskConfig.stepTimeoutMs) || 30_000, 5_000, 120_000);
-  if (browserTaskConfig.runtime === "openai_computer_use" && !manager.llm?.openai) {
+  const computerUseClient =
+    browserTaskConfig.runtime === "openai_computer_use"
+      ? manager.llm.getComputerUseClient(browserTaskConfig.openaiComputerUse.client)
+      : null;
+  if (browserTaskConfig.runtime === "openai_computer_use" && !computerUseClient?.client) {
     return { ok: false, text: "", error: "openai_computer_use_unavailable" };
   }
 
@@ -105,7 +109,8 @@ export async function executeVoiceBrowserBrowseTool(
     };
     const result = browserTaskConfig.runtime === "openai_computer_use"
       ? await runOpenAiComputerUseTask({
-          openai: manager.llm?.openai,
+          openai: computerUseClient.client,
+          provider: computerUseClient.provider || "openai",
           browserManager: manager.browserManager,
           store: manager.store,
           sessionKey,

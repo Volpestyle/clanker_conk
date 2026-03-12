@@ -20,6 +20,8 @@ Music behavior crosses several voice subsystems:
 - wake-word interruption
 - bot-speech ducking
 
+Slash music commands that imply VC playback are also voice-entry points. `/music play`, `/music add`, and `/music next` treat the command itself as an explicit invitation to join the requester's current voice channel when no voice session exists yet. If join policy, permissions, or runtime prerequisites block that bootstrap, playback does not start.
+
 This document is the canonical source of truth for the music-specific rules. Other voice docs should summarize only the part that matters to their own state machine and link back here.
 
 ![Music Conversation State](../diagrams/music-conversation-state.png)

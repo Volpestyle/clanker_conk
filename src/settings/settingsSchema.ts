@@ -43,6 +43,12 @@ const BROWSER_RUNTIME_KINDS = [
   "local_browser_agent"
 ] as const;
 
+export const OPENAI_COMPUTER_USE_CLIENT_KINDS = [
+  "auto",
+  "openai",
+  "openai-oauth"
+] as const;
+
 const VOICE_RUNTIME_KINDS = [
   "openai_realtime",
   "voice_agent",
@@ -149,6 +155,7 @@ export const DEFAULT_SETTINGS = {
       "hanky",
       "klanker",
       "klang",
+      "klien",
       "klink",
       "klinker",
       "klinkie",
@@ -291,7 +298,8 @@ export const DEFAULT_SETTINGS = {
         enabled: true,
         headed: false,
         openaiComputerUse: {
-          model: "gpt-5.4"
+          model: "gpt-5.4",
+          client: "auto"
         },
         localBrowserAgent: {
           execution: {

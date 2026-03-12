@@ -828,14 +828,14 @@ export function VoiceModeSettingsSection({
                 value={form.voiceDefaultInterruptionMode}
                 onChange={set("voiceDefaultInterruptionMode")}
               >
-                <option value="speaker">Only the current speaker can interrupt</option>
+                <option value="speaker">Reply target interrupts first</option>
                 <option value="anyone">Anyone can interrupt</option>
                 <option value="none">Nobody can interrupt</option>
               </select>
             </div>
           </div>
           <p>
-            Who can interrupt the bot mid-speech. Speaker mode lets the person the bot is responding to cut in naturally, like a real conversation.
+            Who can interrupt the bot mid-speech. Speaker mode gives the current reply target the privileged fast path, while other speakers can still seize the floor through overlap arbitration when they clearly take over.
           </p>
           <div className="split">
             <div>

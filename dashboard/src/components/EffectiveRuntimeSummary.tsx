@@ -1,5 +1,6 @@
 import React from "react";
 import { AGENT_STACK_PRESET_OPTIONS } from "../../../src/settings/agentStackCatalog.ts";
+import { getEffectiveBrowserRuntime } from "../settingsFormModel";
 
 function RuntimeCell({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
@@ -48,6 +49,7 @@ export function EffectiveRuntimeSummary({ form }: { form: Record<string, unknown
   const presetLabel = AGENT_STACK_PRESET_OPTIONS.find(
     (p) => p.value === form.stackPreset
   )?.label || String(form.stackPreset || "");
+  const browserRuntime = getEffectiveBrowserRuntime(form);
 
   const voiceEnabled = Boolean(form.voiceEnabled);
   const musicBrainOff = String(form.voiceMusicBrainMode || "disabled").trim() === "disabled";
@@ -74,7 +76,7 @@ export function EffectiveRuntimeSummary({ form }: { form: Record<string, unknown
         />
         <RuntimeCell
           label="Browser"
-          value={String(form.stackResolvedBrowserRuntime || "\u2014").replace(/_/g, " ")}
+          value={String(browserRuntime || "\u2014").replace(/_/g, " ")}
         />
         {voiceEnabled && (
           <RuntimeCell

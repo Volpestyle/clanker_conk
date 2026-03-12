@@ -410,6 +410,12 @@ function normalizeResolvedVoiceRuntime(value: unknown, fallback: string) {
   return fallback;
 }
 
+function normalizeComputerUseClientPreference(value: unknown) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "openai" || normalized === "openai-oauth") return normalized;
+  return "auto";
+}
+
 export function getResolvedOrchestratorBinding(settings: unknown) {
   const interaction = getReplyGenerationSettings(settings);
   const agentStack = getAgentStackSettings(settings);
@@ -630,6 +636,7 @@ export function getResolvedBrowserTaskConfig(settings: unknown) {
       model: String(browserBinding?.model || orchestrator.model || "claude-sonnet-4-5-20250929")
     },
     openaiComputerUse: {
+      client: normalizeComputerUseClientPreference(browserRuntime.openaiComputerUse?.client),
       model: String(browserRuntime.openaiComputerUse?.model || "gpt-5.4").trim() || "gpt-5.4"
     }
   };

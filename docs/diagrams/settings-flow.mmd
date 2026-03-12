@@ -5,25 +5,25 @@ sequenceDiagram
     participant Store as Store
     participant Bot as ClankerBot
 
-    UI->>API: PUT settings patch + expectedUpdatedAt
-    API->>Store: patchSettingsWithVersion(patch, expectedUpdatedAt)
-    Store->>Store: deepMerge + normalizeSettings
+    UI->>API: PUT settings snapshot + expectedUpdatedAt
+    API->>Store: patchSettingsWithVersion(snapshot, expectedUpdatedAt)
+    Store->>Store: mergeSettingsPatch + minimizeSettingsIntent + normalizeSettings
     alt settings changed since form load
-        Store-->>API: conflict + latest settings snapshot
-        API-->>UI: 409 conflict + latest settings
+        Store-->>API: conflict + latest settings envelope
+        API-->>UI: 409 intent + effective + bindings + _meta
     else save succeeds
         Store->>Store: UPDATE settings WHERE updated_at = expectedUpdatedAt
-        Store-->>API: saved settings + new updatedAt
+        Store-->>API: saved intent + effective + updatedAt
         API->>Bot: applyRuntimeSettings(saved settings)
         alt runtime apply succeeds
-            API-->>UI: 200 saved + applied=true
+            API-->>UI: 200 settings envelope + saveAppliedToRuntime=true
         else runtime apply fails
-            API-->>UI: 200 saved + applied=false + applyError
+            API-->>UI: 200 settings envelope + saveAppliedToRuntime=false + saveApplyError
         end
     end
 
     UI->>API: POST /api/settings/refresh
     API->>Store: getSettings()
-    Store-->>API: latest saved config
+    Store-->>API: latest saved effective settings
     API->>Bot: applyRuntimeSettings(saved settings)
-    API-->>UI: 200 active VC session sync result
+    API-->>UI: 200 ok + activeVoiceSessions

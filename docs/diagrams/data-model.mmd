@@ -53,6 +53,14 @@ erDiagram
         datetime updated_at
     }
 
+    MESSAGE_VECTORS_NATIVE {
+        string message_id
+        string model
+        int dims
+        blob embedding_blob
+        datetime updated_at
+    }
+
     SHARED_LINKS {
         string url PK
         datetime first_shared_at
@@ -95,9 +103,18 @@ erDiagram
         text metadata
     }
 
+    RESPONSE_TRIGGERS {
+        string trigger_message_id PK
+        int action_id
+        datetime created_at
+    }
+
     MESSAGES ||--o{ ACTIONS : "message_id (context/trigger)"
     MESSAGES ||--o{ MEMORY_FACTS : "source_message_id"
     MEMORY_FACTS ||--o{ MEMORY_FACT_VECTORS_NATIVE : "fact_id"
+    MESSAGES ||--o{ MESSAGE_VECTORS_NATIVE : "message_id"
     MESSAGES ||--o{ MESSAGES : "referenced_message_id"
     AUTOMATIONS ||--o{ AUTOMATION_RUNS : "automation_id"
     MESSAGES ||--o{ AUTOMATION_RUNS : "message_id (automation output)"
+    MESSAGES ||--o| RESPONSE_TRIGGERS : "trigger_message_id"
+    ACTIONS ||--o{ RESPONSE_TRIGGERS : "action_id"

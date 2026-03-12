@@ -41,6 +41,14 @@ function normalizeCodingWorkerName(value: unknown): SettingsCodingWorkerName | u
   return CODING_WORKER_SET.has(normalized) ? normalized : undefined;
 }
 
+function normalizeOpenAiComputerUseClient(value: unknown) {
+  const normalized = normalizeString(value, "auto", 40).trim().toLowerCase();
+  if (normalized === "openai" || normalized === "openai-oauth") {
+    return normalized;
+  }
+  return DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.openaiComputerUse.client;
+}
+
 function normalizeCodingWorkerList(value: unknown) {
   return normalizeStringList(value, 4, 40)
     .map((entry) => normalizeCodingWorkerName(entry))
@@ -207,6 +215,7 @@ export function normalizeAgentStackSection(
         enabled: normalizeBoolean(browser.enabled, DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.enabled),
         headed: normalizeBoolean(browser.headed, DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.headed),
         openaiComputerUse: {
+          client: normalizeOpenAiComputerUseClient(browser.openaiComputerUse.client),
           model: normalizeString(
             browser.openaiComputerUse.model,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.openaiComputerUse.model,

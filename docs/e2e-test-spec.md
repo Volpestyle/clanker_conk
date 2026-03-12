@@ -34,11 +34,11 @@ bun scripts/voiceGoldenHarness.ts \
   --mode live \
   --modes voice_agent,openai_realtime,gemini_realtime,elevenlabs_realtime \
   --iterations 1 \
-  --judge-provider claude-oauth \
-  --judge-model claude-sonnet-4-6 \
-  --decider-provider claude-oauth \
-  --decider-model claude-sonnet-4-6 \
-  --actor-provider claude-oauth \
+  --judge-provider anthropic \
+  --judge-model claude-haiku-4-5 \
+  --decider-provider anthropic \
+  --decider-model claude-haiku-4-5 \
+  --actor-provider anthropic \
   --actor-model claude-sonnet-4-5 \
   --out-json data/voice-golden-report.json
 ```
@@ -66,7 +66,7 @@ For the current authoritative defaults, check `scripts/voiceGoldenHarness.ts` an
 
 - Live mode requires credentials for the providers selected by `--actor-provider` and `--decider-provider`.
 - Judge mode requires credentials for `--judge-provider`.
-- With current defaults (`claude-oauth` actor on `claude-sonnet-4-5`, `claude-oauth` decider/judge on `claude-sonnet-4-6`), set `CLAUDE_OAUTH_REFRESH_TOKEN`.
+- With current defaults (`anthropic` actor on `claude-sonnet-4-5`, `anthropic` decider/judge on `claude-haiku-4-5`), set `ANTHROPIC_API_KEY`.
 - For web-search cases, set at least one search provider key: `BRAVE_SEARCH_API_KEY` and/or `SERPAPI_API_KEY`.
 
 ---
@@ -238,13 +238,15 @@ DASHBOARD_TOKEN=<if_auth_enabled>
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RUN_E2E_VOICE_PHYSICAL` | `0` | Gate for physical voice harness tests |
+| `RUN_E2E_VOICE_PHYSICAL` | `0` | Convenience gate used by `bun run test:e2e:voice` and the explicit smoke check in `voicePhysicalHarness.test.ts` |
 | `RUN_E2E_TEXT` | `0` | Gate for text harness tests |
 | `RUN_E2E_MUSIC` | `0` | Gate for music play-now tests |
 | `RUN_E2E_CROWDED` | `0` | Gate for crowded channel multi-participant tests |
+| `RUN_E2E_INACTIVITY_LEAVE` | `0` | Enables the optional inactivity-leave scenario inside `voicePhysicalHarness.test.ts` |
 | `E2E_MUSIC_ACK_MAX_MS` | `8000` | Max allowed ack latency for music requests |
 | `E2E_MUSIC_DOWNLOAD_WAIT_MS` | `30000` | How long to wait for yt-dlp download |
 | `E2E_RESPONSE_WAIT_MS` | `12000` | General response wait timeout |
+| `E2E_INACTIVITY_TIMEOUT_MS` | `90000` | Expected inactivity timeout used by the optional auto-leave scenario |
 
 ## Test Implementation
 
@@ -263,6 +265,7 @@ tests/
 │   │   └── generate-fixtures.ts  # CLI to create audio fixtures
 │   ├── voicePhysicalHarness.test.ts  # Physical voice layer tests
 │   ├── voiceDialogue.test.ts         # Multi-turn dialogue tests
+│   ├── voiceBargeIn.test.ts          # Reply interruption / barge-in tests
 │   ├── voiceMusicPlay.test.ts        # Non-blocking music play tests
 │   ├── voiceCrowdedChannel.test.ts   # Multi-participant crowded channel tests
 │   └── textHarness.test.ts           # Text channel tests
@@ -366,15 +369,27 @@ Tests use `ensureFixture()` to auto-generate missing fixtures on first run.
 
 ### Physical Voice Harness (`voicePhysicalHarness.test.ts`)
 
-Gate: `RUN_E2E_VOICE_PHYSICAL=1`
+Core requirement: standard E2E env vars.
+
+`RUN_E2E_VOICE_PHYSICAL=1` is only used by the `bun run test:e2e:voice` helper and the explicit smoke test at the bottom of the file. The main suite runs whenever base E2E config is present.
+
+Optional sub-gates:
+
+- `RUN_E2E_INACTIVITY_LEAVE=1` enables the long inactivity auto-leave test
+- `RUN_E2E_MUSIC=1` plus text E2E config enables the text-triggered music smoke inside this file
 
 | Test | Validates |
 |------|-----------|
 | Bot joins voice channel | Gateway connection, voice ready state |
-| Bot hears greeting and replies | Full STT → LLM → TTS pipeline |
-| Bot responds to direct question | Substantive response generation |
-| Bot ignores undirected chatter | Admission gate rejection |
-| Response latency is within SLO | End-to-end under 8s |
+| Bot hears greeting and replies | Basic STT → reply → audio-return path |
+| Bot responds to direct question | Question turn emits reply audio |
+| Bot handles non-directed speech without crashing | Connection health after undirected chatter |
+| Response latency is within SLO | End-to-end first-audio latency under 10s |
+| Bot handles network interruption gracefully | Reconnect and recover after driver disconnect |
+| Bot handles rapid sequential utterances | Superseded-reply behavior plus persisted voice-history evidence |
+| Bot leaves voice after inactivity timeout (optional) | Auto-leave after idle timeout when enabled |
+| Bot responds to text messages (conditional) | Basic text reply path when text E2E config is present |
+| Music playback via text command (conditional) | Text-triggered music ack/playback smoke when music gating is enabled |
 
 ### Music Play (`voiceMusicPlay.test.ts`)
 
@@ -385,8 +400,9 @@ Tests the non-blocking `music_play` flow where the play request returns immediat
 | Test | Validates | Requires |
 |------|-----------|----------|
 | Full lifecycle — fast ack, playback start | Non-blocking ack within 8s, playback starts after background download | Driver A |
-| Double queue backtrack — second request replaces first | Back-to-back requests: second song replaces first, download completes | Driver A |
-| Disambiguation with background chatter | Vague request → disambiguation → chatter overlaps → selection → download completes | Drivers A + B |
+| Song replacement — pre-download backtrack, then mid-playback swap | Replacement before and during playback both ack and converge to the latest requested track | Driver A |
+| Disambiguation with background chatter | Vague request → disambiguation → chatter overlaps → requester selection → download completes | Driver A; Driver B optional but needed for chatter phase |
+| Queue, skip, and playback interruption policy | Queue/skip lifecycle always; cross-speaker interruption policy sub-phase runs when Driver B is available | Driver A; Driver B optional |
 
 #### Chatter timing
 
@@ -395,6 +411,8 @@ Chatter fixtures fire **immediately** (500ms) after the music request or disambi
 ### Crowded Channel (`voiceCrowdedChannel.test.ts`)
 
 Gate: `RUN_E2E_CROWDED=1`
+
+Requires standard E2E env vars plus `E2E_DRIVER_BOT_2_TOKEN`.
 
 Simulates a multi-participant voice channel with overlapping speech, low-signal ASR hallucinations, and interleaved music requests. Validates that the bot correctly ignores garbage, handles rapid-fire direct addresses, and completes music requests despite chatter interference.
 
@@ -408,13 +426,21 @@ Simulates a multi-participant voice channel with overlapping speech, low-signal 
 
 ### Dialogue Tests (`voiceDialogue.test.ts`)
 
-Gate: `RUN_E2E_VOICE_PHYSICAL=1`
+Requires standard E2E env vars plus `E2E_DRIVER_BOT_2_TOKEN`. There is no dedicated `RUN_E2E_*` gate for this suite.
 
-Multi-turn conversation tests with admission decisions.
+Multi-turn conversation tests covering undirected silence, direct-address response, engagement-window follow-ups, redirect/pivot suppression, and stale-window silence.
+
+### Barge-In (`voiceBargeIn.test.ts`)
+
+Requires standard E2E env vars. There is no dedicated `RUN_E2E_*` gate for this suite.
+
+Validates interruption of an in-flight reply, replacement reply generation, and persisted voice-history evidence for the interrupt path.
 
 ### Text Harness (`textHarness.test.ts`)
 
 Gate: `RUN_E2E_TEXT=1`
+
+Requires standard E2E env vars plus `E2E_TEST_TEXT_CHANNEL_ID`.
 
 Text channel message response tests.
 
@@ -433,9 +459,9 @@ The dashboard already exposes persisted voice history:
 - `GET /api/voice/history/sessions?sinceHours=<n>&limit=<n>`
 - `GET /api/voice/history/sessions/:sessionId/events`
 
-These endpoints help disambiguate output events from raw audio-byte detection when needed. The current E2E harness still primarily uses `waitForAudioResponse()` byte presence checks.
+These endpoints help disambiguate output events from raw audio-byte detection when needed. Most E2E cases still primarily use `waitForAudioResponse()` byte presence checks.
 
-In the current harness, this is an optional extension point. Existing suites still use byte-level `waitForAudioResponse()` checks and do not yet include a built-in transcript/history polling helper.
+The harness now also includes `VoiceHistoryAssertionHelper`, and some suites already use persisted session/event polling when byte presence alone is not enough. There is still no automatic TTS-vs-music discriminator built into `waitForAudioResponse()` itself.
 
 ## Pipeline Presets & CLI Flags
 
@@ -523,16 +549,22 @@ bun tests/e2e/scripts/generate-fixtures.ts
 bun run test:e2e
 ```
 
+This runs every file under `tests/e2e/`. Suites that do not have their required env/config simply skip.
+
 ### Run Single Suite
 
 ```sh
-bun run test:e2e:voice
-bun run test:e2e:text
+bun run test:e2e:voice  # physical harness convenience target
+bun run test:e2e:text   # text harness convenience target
+bun run test:e2e -- tests/e2e/voiceDialogue.test.ts
+bun run test:e2e -- tests/e2e/voiceBargeIn.test.ts
 RUN_E2E_MUSIC=1 bun run test:e2e -- tests/e2e/voiceMusicPlay.test.ts
 RUN_E2E_CROWDED=1 bun run test:e2e -- tests/e2e/voiceCrowdedChannel.test.ts
 ```
 
-### Run via NPM Script
+`bun run test:e2e:voice` does not include dialogue, barge-in, music, or crowded-channel suites.
+
+### Convenience Script
 
 ```sh
 bun run test:e2e:voice
@@ -721,6 +753,7 @@ Both are **complementary**:
 
 - **Implementation**: `tests/e2e/driver/DriverBot.ts`
 - **Physical Voice Suite**: `tests/e2e/voicePhysicalHarness.test.ts`
+- **Barge-In Suite**: `tests/e2e/voiceBargeIn.test.ts`
 - **Music Play Suite**: `tests/e2e/voiceMusicPlay.test.ts`
 - **Crowded Channel Suite**: `tests/e2e/voiceCrowdedChannel.test.ts`
 - **Dialogue Suite**: `tests/e2e/voiceDialogue.test.ts`

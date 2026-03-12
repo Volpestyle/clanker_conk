@@ -12,6 +12,7 @@ import {
   safeJsonPreview,
   sendRealtimePayload
 } from "./realtimeClientCore.ts";
+import type { RealtimeInterruptAcceptanceMode } from "./realtimeInterruptAcceptance.ts";
 
 const XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime";
 
@@ -320,6 +321,10 @@ export class XaiRealtimeClient extends EventEmitter {
       });
       return false;
     }
+  }
+
+  getInterruptAcceptanceMode(): RealtimeInterruptAcceptanceMode {
+    return "immediate_provider_ack";
   }
 
   requestTextUtterance(promptText) {

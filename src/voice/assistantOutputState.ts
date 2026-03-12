@@ -325,10 +325,10 @@ export function buildReplyOutputLockState({
   const bufferedBotSpeech = phase === ASSISTANT_OUTPUT_PHASE.SPEAKING_BUFFERED;
 
   let reason: AssistantOutputLockReason = ASSISTANT_OUTPUT_REASON.IDLE;
-  if (musicActive) {
-    reason = "music_playback_active";
-  } else if (normalizedAssistantOutput.reason) {
+  if (phase !== ASSISTANT_OUTPUT_PHASE.IDLE && normalizedAssistantOutput.reason) {
     reason = normalizedAssistantOutput.reason;
+  } else if (musicActive) {
+    reason = "music_playback_active";
   }
 
   return {

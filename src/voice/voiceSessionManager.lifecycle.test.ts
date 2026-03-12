@@ -19,6 +19,7 @@ import {
   BARGE_IN_SUPPRESSION_MAX_MS,
   REALTIME_ASSISTANT_TTS_BACKPRESSURE_PAUSE_SAMPLES,
   REALTIME_ASSISTANT_TTS_BACKPRESSURE_RESUME_SAMPLES,
+  VOICE_INTERRUPT_SPEECH_START_RECHECK_MS,
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
   VOICE_TURN_PROMOTION_MIN_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
@@ -1186,8 +1187,7 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
   assert.equal(truncateCalls.length, 1);
   assert.equal(truncateCalls[0]?.itemId, "item_abc");
   assert.equal(truncateCalls[0]?.contentIndex, 0);
-  // Subprocess manages stream buffer; streamBufferedBytes is always 0
-  assert.equal(truncateCalls[0]?.audioEndMs, 2000);
+  assert.equal(truncateCalls[0]?.audioEndMs, 1500);
   const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
   assert.equal(Boolean(interruptLog), true);
   assert.equal(interruptLog?.metadata?.truncateAttempted, true);
@@ -1256,6 +1256,126 @@ test("interruptBotSpeechForBargeIn stores recovery context when truncate succeed
   const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
   assert.equal(interruptLog?.metadata?.storedInterruptionContext, true);
 });
+
+test("interruptBotSpeechForBargeIn ignores stale clankvox buffered telemetry when truncating provider audio", () => {
+  const { manager } = createManager();
+  const truncateCalls = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    pendingResponse: {
+      requestId: 14,
+      utteranceText: "still speaking"
+    },
+    lastRealtimeAssistantAudioItemId: "item_stale_telemetry",
+    lastRealtimeAssistantAudioItemContentIndex: 0,
+    lastRealtimeAssistantAudioItemReceivedMs: 1600,
+    realtimeClient: {
+      cancelActiveResponse() {
+        return true;
+      },
+      truncateConversationItem(payload) {
+        truncateCalls.push(payload);
+        return true;
+      }
+    },
+    voxClient: {
+      ttsBufferDepthSamples: 24_000,
+      getTtsBufferDepthSamples() {
+        return this.ttsBufferDepthSamples;
+      },
+      getTtsTelemetryUpdatedAt() {
+        return Date.now() - 10_000;
+      }
+    }
+  });
+
+  const interrupted = manager.interruptBotSpeechForBargeIn({
+    session,
+    userId: "user-1",
+    source: "stale_telemetry_test"
+  });
+
+  assert.equal(interrupted, true);
+  assert.equal(truncateCalls.length, 1);
+  assert.equal(truncateCalls[0]?.audioEndMs, 1600);
+});
+
+test("interruptBotSpeechForOutputLockTurn returns false when neither cancel nor truncate succeeds", () => {
+  const { manager, logs } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    pendingResponse: {
+      requestId: 14,
+      utteranceText: "still speaking"
+    },
+    lastRealtimeAssistantAudioItemId: "item_interrupt_failed",
+    lastRealtimeAssistantAudioItemContentIndex: 0,
+    lastRealtimeAssistantAudioItemReceivedMs: 1600,
+    realtimeClient: {
+      cancelActiveResponse() {
+        return false;
+      },
+      truncateConversationItem() {
+        return false;
+      }
+    }
+  });
+
+  const interrupted = manager.interruptBotSpeechForOutputLockTurn({
+    session,
+    userId: "user-1",
+    source: "interrupt_failed_test"
+  });
+
+  assert.equal(interrupted, false);
+  assert.equal(session.interruptedAssistantReply, null);
+  const interruptLog = logs.find((entry) => entry?.content === "voice_output_lock_interrupt");
+  assert.equal(interruptLog?.metadata?.responseCancelSucceeded, false);
+  assert.equal(interruptLog?.metadata?.truncateSucceeded, false);
+  assert.equal(interruptLog?.metadata?.storedInterruptionContext, false);
+});
+
+for (const runtimeMode of ["gemini_realtime", "elevenlabs_realtime"] as const) {
+  test(`interruptBotSpeechForOutputLockTurn accepts local playback cut for ${runtimeMode} async-confirmation runtimes`, () => {
+    const { manager, logs } = createManager();
+    const session = createSession({
+      mode: runtimeMode,
+      botTurnOpen: true,
+      pendingResponse: {
+        requestId: 15,
+        utteranceText: "still speaking"
+      },
+      realtimeClient: {
+        cancelActiveResponse() {
+          return false;
+        },
+        getInterruptAcceptanceMode() {
+          return "local_cut_async_confirmation";
+        }
+      }
+    });
+
+    const interrupted = manager.interruptBotSpeechForOutputLockTurn({
+      session,
+      userId: "user-1",
+      source: `${runtimeMode}_interrupt_test`
+    });
+
+    assert.equal(interrupted, true);
+    assert.equal(session.interruptedAssistantReply?.utteranceText, "still speaking");
+    assert.equal(session.interruptedAssistantReply?.interruptedByUserId, "user-1");
+    const interruptLog = logs.find((entry) => entry?.content === "voice_output_lock_interrupt");
+    assert.equal(interruptLog?.metadata?.responseCancelSucceeded, false);
+    assert.equal(interruptLog?.metadata?.truncateSucceeded, false);
+    assert.equal(interruptLog?.metadata?.interruptAcceptanceMode, "local_cut_async_confirmation");
+    assert.equal(interruptLog?.metadata?.localPlaybackCutCommitted, true);
+    assert.equal(interruptLog?.metadata?.interruptAccepted, true);
+    assert.equal(interruptLog?.metadata?.providerInterruptConfirmationPending, true);
+    assert.equal(interruptLog?.metadata?.storedInterruptionContext, true);
+  });
+}
 
 test("interruptBotSpeechForDirectAddressedTurn skips barge-in suppression while preserving interruption context", () => {
   const { manager, logs } = createManager();
@@ -1709,7 +1829,7 @@ test("commitPendingSpeechStartedInterrupt flushes the staged turn without cuttin
   assert.equal(releaseLog?.metadata?.reason, "speech_no_longer_active");
 });
 
-test("handleAsrBridgeSpeechStarted ignores weak captures that still fail the raw barge-in gate", () => {
+test("handleAsrBridgeSpeechStarted keeps a same-speaker interrupt pending while the capture is still maturing", () => {
   const { manager, logs } = createManager();
   manager.shouldUseTranscriptOverlapInterrupts = () => true;
 
@@ -1764,10 +1884,335 @@ test("handleAsrBridgeSpeechStarted ignores weak captures that still fail the raw
     eventType: "input_audio_buffer.speech_started"
   });
 
-  assert.equal(armed, false);
+  assert.equal(armed, true);
+  assert.equal(session.pendingSpeechStartedInterrupts?.size || 0, 1);
+  const pendingLog = logs.find((entry) => entry?.content === "voice_interrupt_speech_started_pending");
+  assert.equal(pendingLog?.metadata?.initialReason, "insufficient_capture_bytes");
+  assert.equal(pendingLog?.metadata?.captureBytesSent, 20_640);
+  assert.equal(logs.some((entry) => entry?.content === "voice_interrupt_speech_started_ignored"), false);
+});
+
+test("handleAsrBridgeSpeechStarted arms a same-speaker interrupt while buffered bot speech drains over active music", () => {
+  const { manager, logs } = createManager();
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    botTurnOpenAt: 0,
+    assistantOutput: {
+      phase: "speaking_buffered",
+      reason: "bot_audio_buffered",
+      phaseEnteredAt: Date.now() - 1_200,
+      lastSyncedAt: Date.now() - 200,
+      requestId: 26,
+      ttsPlaybackState: "buffered",
+      ttsBufferedSamples: 18_000,
+      lastTrigger: "test_seed"
+    },
+    voxClient: {
+      isAlive: true,
+      getTtsBufferDepthSamples() {
+        return 18_000;
+      },
+      getTtsPlaybackState() {
+        return "buffered";
+      }
+    },
+    pendingResponse: null,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    },
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        createAssertiveCaptureState("speaker-1")
+      ]
+    ])
+  });
+  session.music.phase = "playing";
+  session.music.active = true;
+  session.music.ducked = true;
+
+  const armed = manager.handleAsrBridgeSpeechStarted({
+    session,
+    userId: "speaker-1",
+    speakerName: "speaker one",
+    utteranceId: 92,
+    audioStartMs: 640,
+    itemId: "item_92",
+    eventType: "input_audio_buffer.speech_started"
+  });
+
+  assert.equal(armed, true);
+  assert.equal(session.pendingSpeechStartedInterrupts?.size || 0, 1);
+  assert.equal(logs.some((entry) => entry?.content === "voice_interrupt_speech_started_pending"), true);
+  assert.equal(logs.some((entry) => entry?.content === "voice_interrupt_speech_started_ignored"), false);
+});
+
+test("commitPendingSpeechStartedInterrupt rechecks a same-speaker overlap until it becomes barge-in eligible", () => {
+  const { manager, logs } = createManager();
+  const interruptCalls = [];
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    botTurnOpenAt: Date.now() - 1_800,
+    assistantOutput: {
+      phase: "speaking_live",
+      reason: "bot_audio_live",
+      phaseEnteredAt: Date.now() - 900,
+      lastSyncedAt: Date.now() - 900,
+      requestId: 27,
+      ttsPlaybackState: "playing",
+      ttsBufferedSamples: 18_000,
+      lastTrigger: "test_seed"
+    },
+    pendingResponse: {
+      requestId: 27,
+      requestedAt: Date.now() - 2_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 1_300,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    },
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        createAssertiveCaptureState("speaker-1", {
+          bytesSent: 20_640
+        })
+      ]
+    ])
+  });
+  const asrState = getOrCreatePerUserAsrState(session, "speaker-1");
+  assert.ok(asrState);
+  asrState.speechActive = true;
+  asrState.speechDetectedUtteranceId = 93;
+  asrState.speechDetectedAt = Date.now();
+
+  const armed = manager.handleAsrBridgeSpeechStarted({
+    session,
+    userId: "speaker-1",
+    speakerName: "speaker one",
+    utteranceId: 93,
+    audioStartMs: 640,
+    itemId: "item_93",
+    eventType: "input_audio_buffer.speech_started"
+  });
+
+  assert.equal(armed, true);
+
+  const firstCommit = manager.commitPendingSpeechStartedInterrupt({
+    session,
+    utteranceId: 93,
+    reason: "test_first_commit"
+  });
+
+  assert.equal(firstCommit, false);
+  assert.equal(interruptCalls.length, 0);
+  assert.equal(session.pendingSpeechStartedInterrupts?.size || 0, 1);
+  const retryLog = logs.find((entry) => entry?.content === "voice_interrupt_speech_started_retry_scheduled");
+  assert.equal(retryLog?.metadata?.reason, "insufficient_capture_bytes");
+  assert.equal(retryLog?.metadata?.retryAfterMs, VOICE_INTERRUPT_SPEECH_START_RECHECK_MS);
+
+  const capture = session.userCaptures?.get("speaker-1");
+  assert.ok(capture);
+  if (capture) {
+    capture.bytesSent = 48_000;
+  }
+
+  const secondCommit = manager.commitPendingSpeechStartedInterrupt({
+    session,
+    utteranceId: 93,
+    reason: "test_second_commit"
+  });
+
+  assert.equal(secondCommit, true);
+  assert.equal(interruptCalls.length, 1);
   assert.equal(session.pendingSpeechStartedInterrupts?.size || 0, 0);
-  const ignoredLog = logs.find((entry) => entry?.content === "voice_interrupt_speech_started_ignored");
-  assert.equal(ignoredLog?.metadata?.reason, "insufficient_capture_bytes");
+  assert.equal(logs.some((entry) => entry?.content === "voice_interrupt_on_speech_started_sustain"), true);
+});
+
+test("handleAsrBridgeTranscriptOverlapSegment lets the allowed speaker rescue a missed speech_started interrupt", () => {
+  const { manager, logs } = createManager();
+  const interruptCalls = [];
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    botTurnOpenAt: Date.now() - 1_800,
+    assistantOutput: {
+      phase: "speaking_live",
+      reason: "bot_audio_live",
+      phaseEnteredAt: Date.now() - 900,
+      lastSyncedAt: Date.now() - 900,
+      requestId: 28,
+      ttsPlaybackState: "playing",
+      ttsBufferedSamples: 18_000,
+      lastTrigger: "test_seed"
+    },
+    pendingResponse: {
+      requestId: 28,
+      requestedAt: Date.now() - 2_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 1_300,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    },
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        createAssertiveCaptureState("speaker-1", {
+          bytesSent: 48_000
+        })
+      ]
+    ])
+  });
+
+  manager.handleAsrBridgeTranscriptOverlapSegment({
+    session,
+    userId: "speaker-1",
+    speakerName: "speaker one",
+    transcript: "wait hold on",
+    utteranceId: 94,
+    isFinal: false,
+    eventType: "conversation.item.input_audio_transcription.delta",
+    itemId: "item_94",
+    previousItemId: null
+  });
+
+  assert.equal(interruptCalls.length, 1);
+  assert.equal(interruptCalls[0]?.userId, "speaker-1");
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(94)?.decision, "interrupt");
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(94)?.source, "transcript_allowed_speaker_late_rescue");
+  assert.equal(logs.some((entry) => entry?.content === "voice_interrupt_on_authorized_transcript_rescue"), true);
+});
+
+test("authorized late-transcript rescue discards older staged overlap turns from the superseded burst", () => {
+  const { manager, logs } = createManager();
+  const interruptCalls = [];
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    botTurnOpenAt: Date.now() - 1_800,
+    assistantOutput: {
+      phase: "speaking_live",
+      reason: "bot_audio_live",
+      phaseEnteredAt: Date.now() - 900,
+      lastSyncedAt: Date.now() - 900,
+      requestId: 29,
+      ttsPlaybackState: "playing",
+      ttsBufferedSamples: 18_000,
+      lastTrigger: "test_seed"
+    },
+    pendingResponse: {
+      requestId: 29,
+      requestedAt: Date.now() - 2_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 1_300,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    },
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        createAssertiveCaptureState("speaker-1", {
+          bytesSent: 48_000
+        })
+      ]
+    ])
+  });
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-2",
+    pcmBuffer: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 7),
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    bridgeUtteranceId: 95,
+    asrResult: {
+      transcript: "i need to tell you something important",
+      asrStartedAtMs: 1200,
+      asrCompletedAtMs: 1310
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(session.pendingInterruptBridgeTurns?.size, 1);
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(95)?.decision, "pending");
+
+  manager.handleAsrBridgeTranscriptOverlapSegment({
+    session,
+    userId: "speaker-1",
+    speakerName: "speaker one",
+    transcript: "wait hold on",
+    utteranceId: 96,
+    isFinal: false,
+    eventType: "conversation.item.input_audio_transcription.delta",
+    itemId: "item_96",
+    previousItemId: null
+  });
+
+  assert.equal(interruptCalls.length, 1);
+  assert.equal(interruptCalls[0]?.userId, "speaker-1");
+  assert.equal(session.pendingInterruptBridgeTurns?.size || 0, 0);
+  assert.equal(session.interruptOverlapBurst, null);
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(95)?.decision, "ignore");
+  assert.equal(
+    session.interruptDecisionsByUtteranceId?.get(95)?.source,
+    "transcript_allowed_speaker_late_rescue_superseded"
+  );
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_interrupt_overlap_burst_superseded_by_authorized_rescue"),
+    true
+  );
 });
 
 test("handleAsrBridgeTranscriptOverlapSegment lets a wake-word transcript grab the floor immediately", () => {
@@ -4664,6 +5109,236 @@ test("queueRealtimeTurnFromAsrBridge flushes staged off-policy overlap turns aft
   assert.equal(queuedTurns[0]?.transcriptOverride, "wait hold on");
   assert.equal(session.pendingInterruptBridgeTurns?.size, 0);
   assert.equal(session.interruptDecisionsByUtteranceId?.get(72)?.decision, "interrupt");
+});
+
+test("resolveInterruptOverlapBurst forwards staged turns without cutting when assistant output changed", async () => {
+  const { manager } = createManager();
+  const queuedTurns = [];
+  const interruptCalls = [];
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.hasInterruptibleAssistantOutput = () => true;
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+  manager.llm.generate = async () => ({ text: "INTERRUPT" });
+  const session = createSession({
+    mode: "openai_realtime",
+    pendingResponse: {
+      requestId: 22,
+      requestedAt: Date.now() - 2_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 1_000,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    },
+    assistantOutput: {
+      phase: "speaking_live",
+      reason: "bot_audio_live",
+      phaseEnteredAt: Date.now() - 900,
+      lastSyncedAt: Date.now() - 900,
+      requestId: 22,
+      ttsPlaybackState: "playing",
+      ttsBufferedSamples: 0,
+      lastTrigger: "test_seed"
+    }
+  });
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-2",
+    pcmBuffer: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 5),
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    bridgeUtteranceId: 72,
+    asrResult: {
+      transcript: "wait hold on",
+      asrStartedAtMs: 1200,
+      asrCompletedAtMs: 1310
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(session.pendingInterruptBridgeTurns?.size, 1);
+
+  session.pendingResponse = {
+    ...session.pendingResponse,
+    requestId: 23
+  };
+  session.assistantOutput = {
+    ...session.assistantOutput,
+    requestId: 23
+  };
+
+  await manager.resolveInterruptOverlapBurst(session, "test_stale_output");
+
+  assert.equal(interruptCalls.length, 0);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(72)?.source, "stale_output_forwarded");
+});
+
+test("queueRealtimeTurnFromAsrBridge lets the allowed speaker rescue a missed speech_started interrupt on final commit", () => {
+  const { manager, logs } = createManager();
+  const queuedTurns = [];
+  const interruptCalls = [];
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    botTurnOpenAt: Date.now() - 1_800,
+    assistantOutput: {
+      phase: "speaking_live",
+      reason: "bot_audio_live",
+      phaseEnteredAt: Date.now() - 900,
+      lastSyncedAt: Date.now() - 900,
+      requestId: 23,
+      ttsPlaybackState: "playing",
+      ttsBufferedSamples: 18_000,
+      lastTrigger: "test_seed"
+    },
+    pendingResponse: {
+      requestId: 23,
+      requestedAt: Date.now() - 2_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 1_000,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    },
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        createAssertiveCaptureState("speaker-1", {
+          bytesSent: 48_000
+        })
+      ]
+    ])
+  });
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 7),
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    bridgeUtteranceId: 74,
+    asrResult: {
+      transcript: "hang on a second",
+      asrStartedAtMs: 1200,
+      asrCompletedAtMs: 1310
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, true);
+  assert.equal(interruptCalls.length, 1);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.bridgeUtteranceId, 74);
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(74)?.source, "bridge_commit_allowed_speaker_late_rescue");
+  assert.equal(logs.some((entry) => entry?.content === "voice_interrupt_on_authorized_transcript_rescue"), true);
+});
+
+test("queueRealtimeTurnFromAsrBridge rescues the allowed speaker on final commit even after capture cleanup", () => {
+  const { manager, logs } = createManager();
+  const queuedTurns = [];
+  const interruptCalls = [];
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+
+  const assertivePcm = Buffer.alloc(48_000);
+  for (let offset = 0; offset < assertivePcm.length; offset += 2) {
+    assertivePcm.writeInt16LE(6_000, offset);
+  }
+
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    botTurnOpenAt: Date.now() - 1_800,
+    assistantOutput: {
+      phase: "speaking_live",
+      reason: "bot_audio_live",
+      phaseEnteredAt: Date.now() - 900,
+      lastSyncedAt: Date.now() - 900,
+      requestId: 24,
+      ttsPlaybackState: "playing",
+      ttsBufferedSamples: 18_000,
+      lastTrigger: "test_seed"
+    },
+    pendingResponse: {
+      requestId: 24,
+      requestedAt: Date.now() - 2_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 1_000,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    },
+    userCaptures: new Map()
+  });
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: assertivePcm,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    bridgeUtteranceId: 75,
+    asrResult: {
+      transcript: "hang on a second",
+      asrStartedAtMs: 1200,
+      asrCompletedAtMs: 1310
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, true);
+  assert.equal(interruptCalls.length, 1);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.bridgeUtteranceId, 75);
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(75)?.source, "bridge_commit_allowed_speaker_late_rescue");
+  assert.equal(logs.some((entry) => entry?.content === "voice_interrupt_on_authorized_transcript_rescue"), true);
 });
 
 test("queueRealtimeTurnFromAsrBridge lets overlap classification escalate an off-policy interrupter", async () => {

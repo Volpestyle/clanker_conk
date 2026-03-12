@@ -64,6 +64,7 @@ Current runtime values:
 - `openai_computer_use`
 
 The `openai_native_realtime` preset defaults to `openai_computer_use`. Other presets currently default to the local browser agent unless explicitly overridden.
+The dashboard Browser section can override that preset default directly, so a Claude preset can still route `browser_browse` through OpenAI computer use.
 
 ### 3. Local runtime: `local_browser_agent`
 
@@ -187,15 +188,17 @@ Important fields:
 - `agentStack.runtimeConfig.browser.enabled`
 - `agentStack.runtimeConfig.browser.headed`
 - `agentStack.overrides.browserRuntime` (`local_browser_agent` or `openai_computer_use`)
+- `agentStack.runtimeConfig.browser.openaiComputerUse.client` (`auto`, `openai`, or `openai-oauth`)
 - `agentStack.runtimeConfig.browser.localBrowserAgent.maxStepsPerTask`
 - `agentStack.runtimeConfig.browser.localBrowserAgent.stepTimeoutMs`
 - `agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.provider`
 - `agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.model`
 - `agentStack.runtimeConfig.browser.openaiComputerUse.model`
 
-These are edited in the dashboard Browser Runtime section.
+These are edited in the dashboard Browser Runtime section. The browser runtime override is independent from the main orchestrator preset, so you can keep `claude_oauth` as the conversational brain while routing `browser_browse` through `openai_computer_use`.
 
 The browser agent uses its own configurable LLM provider/model instead of always inheriting the main chat brain model.
+When the hosted runtime is selected, the browser layer resolves its own OpenAI-compatible client separately from the main orchestrator. `openaiComputerUse.client = auto` prefers a direct OpenAI API key and falls back to OpenAI OAuth when available.
 
 ## Limits and Guardrails
 

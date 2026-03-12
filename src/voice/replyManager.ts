@@ -302,8 +302,14 @@ export class ReplyManager {
     return normalizeTtsPlaybackState(playbackState);
   }
 
-  getClankvoxReportedTtsBufferedSamples(session: VoiceSession) {
+  getClankvoxReportedTtsBufferedSamples(
+    session: VoiceSession,
+    { requireFresh = false }: { requireFresh?: boolean } = {}
+  ) {
     if (!session || session.ending) return null;
+    if (requireFresh && !this.isClankvoxTtsTelemetryFresh(session)) {
+      return null;
+    }
     const voxClient = session.voxClient;
     if (!voxClient || typeof voxClient !== "object") return null;
     const rawBufferedSamples =

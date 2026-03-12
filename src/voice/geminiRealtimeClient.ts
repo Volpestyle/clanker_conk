@@ -15,6 +15,7 @@ import {
   DEFAULT_GEMINI_BASE_URL,
   normalizeGeminiBaseUrl
 } from "./realtimeProviderNormalization.ts";
+import type { RealtimeInterruptAcceptanceMode } from "./realtimeInterruptAcceptance.ts";
 
 const GEMINI_LIVE_PATH = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
@@ -318,6 +319,10 @@ export class GeminiRealtimeClient extends EventEmitter {
   cancelActiveResponse() {
     // Gemini Live currently relies on turn completion/interruption events.
     return false;
+  }
+
+  getInterruptAcceptanceMode(): RealtimeInterruptAcceptanceMode {
+    return "local_cut_async_confirmation";
   }
 
   requestVideoCommentary(promptText) {

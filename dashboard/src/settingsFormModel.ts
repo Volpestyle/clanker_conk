@@ -83,12 +83,40 @@ const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   openai: ["gpt-5-mini"]
 });
 
+export const BROWSER_RUNTIME_SELECTION_OPTIONS = Object.freeze([
+  "inherit",
+  "local_browser_agent",
+  "openai_computer_use"
+]);
+
+export const OPENAI_COMPUTER_USE_CLIENT_OPTIONS = Object.freeze([
+  "auto",
+  "openai",
+  "openai-oauth"
+]);
+
 function valueOr<T>(value: T | undefined, fallback: T): T {
   return value !== undefined && value !== null ? value : fallback;
 }
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeBrowserRuntimeSelection(value: unknown) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "local_browser_agent" || normalized === "openai_computer_use") {
+    return normalized;
+  }
+  return "inherit";
+}
+
+function normalizeOpenAiComputerUseClientSelection(value: unknown) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "openai" || normalized === "openai-oauth") {
+    return normalized;
+  }
+  return "auto";
 }
 
 function resolveSettingsEnvelope(settings: unknown): DashboardSettingsEnvelope {
@@ -126,6 +154,7 @@ function buildSettingsFormView(settings: unknown) {
   const memoryBinding = resolved?.memoryBinding || getResolvedMemoryBinding(s);
   const research = valueOr(agentStack.runtimeConfig?.research, d.agentStack.runtimeConfig.research);
   const browser = valueOr(agentStack.runtimeConfig?.browser, d.agentStack.runtimeConfig.browser);
+  const browserRuntimeSelection = normalizeBrowserRuntimeSelection(intent.agentStack?.overrides?.browserRuntime);
   const browserExecution = browser.localBrowserAgent?.execution;
   const browserBinding =
     browserExecution?.mode === "dedicated_model" && browserExecution.model
@@ -233,8 +262,10 @@ function buildSettingsFormView(settings: unknown) {
     memoryLlmInheritTextModel: !memoryOverrideConfigured,
     browser: {
       runtime: resolvedStack?.browserRuntime || "",
+      runtimeSelection: browserRuntimeSelection,
       enabled: browser.enabled,
       headed: browser.headed,
+      openAiComputerUseClient: normalizeOpenAiComputerUseClientSelection(browser.openaiComputerUse?.client),
       openAiComputerUseModel: String(browser.openaiComputerUse?.model || ""),
       maxBrowseCallsPerHour: browser.localBrowserAgent.maxBrowseCallsPerHour,
       llm: browserBinding,
@@ -479,6 +510,9 @@ export function settingsToForm(settings: unknown) {
     browserHeaded: resolved.browser.headed ?? defaults.browser.headed,
     stackResolvedResearchRuntime: resolved.webSearch.runtime ?? defaultWebSearch.runtime,
     stackResolvedBrowserRuntime: resolved.browser.runtime ?? defaults.browser.runtime,
+    browserRuntimeSelection: resolved.browser.runtimeSelection ?? defaults.browser.runtimeSelection,
+    browserOpenAiComputerUseClient:
+      resolved.browser.openAiComputerUseClient ?? defaults.browser.openAiComputerUseClient,
     browserOpenAiComputerUseModel:
       resolved.browser.openAiComputerUseModel ?? defaults.browser.openAiComputerUseModel,
     browserMaxPerHour: resolved.browser.maxBrowseCallsPerHour ?? defaults.browser.maxBrowseCallsPerHour,
@@ -748,6 +782,13 @@ export function settingsToForm(settings: unknown) {
 }
 
 type SettingsForm = ReturnType<typeof settingsToForm>;
+
+export function getEffectiveBrowserRuntime(form: Record<string, unknown> | null | undefined) {
+  const selection = normalizeBrowserRuntimeSelection(form?.browserRuntimeSelection);
+  if (selection !== "inherit") return selection;
+  const resolvedRuntime = String(form?.stackResolvedBrowserRuntime || "").trim().toLowerCase();
+  return resolvedRuntime || "local_browser_agent";
+}
 
 export function getCodeAgentValidationError(form: SettingsForm): string {
   if (!form.stackAdvancedOverridesEnabled || !form.codeAgentEnabled) {
@@ -1177,6 +1218,10 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     String(form.voiceMusicBrainMode || "disabled").trim().toLowerCase() === "disabled"
       ? "disabled"
       : "dedicated_model";
+  const normalizedBrowserRuntimeSelection = normalizeBrowserRuntimeSelection(form.browserRuntimeSelection);
+  const normalizedOpenAiComputerUseClient = normalizeOpenAiComputerUseClientSelection(
+    form.browserOpenAiComputerUseClient
+  );
   const voiceAdmissionClassifierOverride =
     normalizedVoiceAdmissionMode !== "generation_decides"
       ? {
@@ -1299,6 +1344,10 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
               }
             }
           : {}),
+        browserRuntime:
+          normalizedBrowserRuntimeSelection === "inherit"
+            ? undefined
+            : normalizedBrowserRuntimeSelection,
         voiceAdmissionClassifier: voiceAdmissionClassifierOverride,
         voiceInterruptClassifier: shouldPersistVoiceInterruptClassifier
           ? {
@@ -1332,6 +1381,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
           enabled: form.browserEnabled,
           headed: Boolean(form.browserHeaded),
           openaiComputerUse: {
+            client: normalizedOpenAiComputerUseClient,
             model: String(form.browserOpenAiComputerUseModel || "gpt-5.4").trim()
           },
           localBrowserAgent: {

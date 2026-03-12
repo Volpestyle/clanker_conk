@@ -87,6 +87,32 @@ test("resolveProviderAndModel keeps openai-oauth provider when configured", () =
   assert.deepEqual(resolved, { provider: "openai-oauth", model: "gpt-5.4" });
 });
 
+test("getComputerUseClient auto-selects openai oauth when direct OpenAI is unavailable", () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  service.openai = null;
+  service.codexOAuth = {
+    tokens: { refreshToken: "test", accessToken: "", idToken: "", expiresAt: 0, accountId: "acct_123" },
+    client: { tag: "oauth" }
+  } as never;
+
+  const resolved = service.getComputerUseClient();
+  assert.equal(resolved.provider, "openai-oauth");
+  assert.deepEqual(resolved.client, { tag: "oauth" });
+});
+
+test("getComputerUseClient honors explicit openai selection without falling back", () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  service.openai = null;
+  service.codexOAuth = {
+    tokens: { refreshToken: "test", accessToken: "", idToken: "", expiresAt: 0, accountId: "acct_123" },
+    client: { tag: "oauth" }
+  } as never;
+
+  const resolved = service.getComputerUseClient("openai");
+  assert.equal(resolved.provider, null);
+  assert.equal(resolved.client, null);
+});
+
 test("resolveProviderAndModel accepts standard model IDs for claude-oauth", () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key" });
   service.claudeOAuth = { tokens: { refreshToken: "test", accessToken: "", expiresAt: 0 }, client: {} } as never;

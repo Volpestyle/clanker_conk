@@ -11,17 +11,24 @@ flowchart TD
         VoiceThought["Generate voice thought"]
     end
 
-    subgraph Modes["Voice reply paths"]
+    subgraph Modes["Reply-path planning"]
         Native["replyPath=native"]
-        Bridge["replyPath=bridge\nclassifier-first runtime"]
+        Bridge["replyPath=bridge"]
         Brain["replyPath=brain"]
     end
 
-    subgraph SharedBrain["Shared continuity + tool layer"]
+    subgraph Context["Shared continuity context"]
         Continuity["Conversation windows\nfact profiles + guidance facts\nbehavioral memory by relevance"]
-        ToolChoice{"Need a tool?"}
-        SharedTools["conversation_search\nmemory_write\nweb_search\nbrowser_browse\ncode_task"]
-        VoiceOnly["Voice-only tools\nmusic / playback / transport actions"]
+    end
+
+    subgraph Tooling["Planning + tool ownership"]
+        ProviderNative["Provider-native planning + exported realtime tools\n(local + MCP when supported)"]
+        Orchestrator["Full-brain orchestrator reply loop\nshared + voice tools"]
+    end
+
+    subgraph ThoughtPath["Ambient voice path"]
+        ThoughtBinding["initiative.voice.execution binding"]
+        ThoughtOutput["Speak via realtime utterance or API TTS"]
     end
 
     subgraph Controls["Main knobs"]
@@ -43,26 +50,26 @@ flowchart TD
     VoiceReply --> Native
     VoiceReply --> Bridge
     VoiceReply --> Brain
-    VoiceThought --> Native
-    VoiceThought --> Bridge
-    VoiceThought --> Brain
 
-    Native --> Continuity
-    Bridge --> Continuity
-    Brain --> Continuity
+    Continuity --> ProviderNative
+    Continuity --> Orchestrator
+    Continuity --> ThoughtBinding
 
-    Continuity --> ToolChoice
-    ToolChoice -->|No| Output["Answer from context only"]
-    ToolChoice -->|Yes| SharedTools
-    ToolChoice -->|Yes, voice-specific| VoiceOnly
+    Native --> ProviderNative
+    Bridge --> ProviderNative
+    Brain --> Orchestrator
+
+    ProviderNative --> Output["Answer / tool call / playback"]
+    Orchestrator --> Output
+
+    VoiceThought --> ThoughtBinding
+    ThoughtBinding --> ThoughtOutput
 
     Conversation --> TurnDecision
-    Conversation --> Native
-    Conversation --> Bridge
-    Conversation --> Brain
     Admission --> TurnDecision
     Transcription --> Audio
     Runtime --> Native
     Runtime --> Bridge
     Runtime --> Brain
+    Runtime --> ThoughtOutput
     ThoughtKnobs --> ThoughtEligible

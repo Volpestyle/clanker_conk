@@ -233,6 +233,38 @@ export class LLMService {
     return this.openai || this.codexOAuth?.client || null;
   }
 
+  getComputerUseClient(preferredClient: unknown = "auto") {
+    const normalized = String(preferredClient || "auto").trim().toLowerCase();
+    if (normalized === "openai") {
+      return {
+        client: this.openai,
+        provider: this.openai ? "openai" : null
+      } as const;
+    }
+    if (normalized === "openai-oauth") {
+      return {
+        client: this.codexOAuth?.client ?? null,
+        provider: this.codexOAuth?.client ? "openai-oauth" : null
+      } as const;
+    }
+    if (this.openai) {
+      return {
+        client: this.openai,
+        provider: "openai"
+      } as const;
+    }
+    if (this.codexOAuth?.client) {
+      return {
+        client: this.codexOAuth.client,
+        provider: "openai-oauth"
+      } as const;
+    }
+    return {
+      client: null,
+      provider: null
+    } as const;
+  }
+
   async generate({
     settings,
     systemPrompt,

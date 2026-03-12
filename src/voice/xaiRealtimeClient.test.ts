@@ -60,6 +60,7 @@ test("XaiRealtimeClient cancelActiveResponse sends response.cancel", () => {
   const cancelled = client.cancelActiveResponse();
 
   assert.equal(cancelled, true);
+  assert.equal(client.getInterruptAcceptanceMode(), "immediate_provider_ack");
   assert.equal(outbound.length, 1);
   assert.equal(outbound[0]?.type, "response.cancel");
   assert.equal(client.isResponseInProgress(), false);

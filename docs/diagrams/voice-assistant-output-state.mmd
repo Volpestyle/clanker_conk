@@ -12,6 +12,7 @@ stateDiagram-v2
     ResponsePending --> AwaitingToolOutputs: "tool call emitted"
     AwaitingToolOutputs --> ResponsePending: "tool outputs submitted\nfollow-up requested"
     ResponsePending --> SpeakingLive: "audio delta received"
+    ResponsePending --> SpeakingBuffered: "buffered TTS exists\n(API TTS / queued playback)"
     SpeakingLive --> SpeakingBuffered: "live deltas stop\nclankvox still buffered"
     SpeakingLive --> Idle: "reply drained\nno buffered playback"
     SpeakingBuffered --> Idle: "clankvox idle\nbuffer depth = 0"
@@ -29,4 +30,6 @@ stateDiagram-v2
       clankvox contributes
       tts_playback_state and buffer_depth.
       Bun still owns the phase.
+      Buffered playback can enter here
+      without a prior live-delta phase.
     end note

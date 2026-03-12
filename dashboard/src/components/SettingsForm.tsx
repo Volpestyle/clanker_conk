@@ -697,7 +697,6 @@ export default function SettingsForm({
             id="sec-research"
             form={form}
             set={set}
-            showAdvancedOverrides={showAdvancedStackSections}
             setBrowserLlmProvider={setBrowserLlmProvider}
             selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
             browserLlmModelOptions={browserLlmModelOptions}

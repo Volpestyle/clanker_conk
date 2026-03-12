@@ -269,24 +269,29 @@ export class BargeInController {
         outputState
       });
     }
-    if (
-      outputState.musicActive &&
-      !outputState.botTurnOpen &&
-      !outputState.pendingResponse &&
-      !outputState.openAiActiveResponse
-    ) {
-      return buildEvaluation({
-        allowed: false,
-        reason: "music_only_playback",
-        outputState
-      });
-    }
-
     const botTurnOpenAt = Math.max(0, Number(session.botTurnOpenAt || 0));
     const liveAudioStreaming = this.host.replyManager.hasRecentAssistantAudioDelta(session);
     const bufferedBotSpeech = this.host.replyManager.hasBufferedTtsPlayback(session);
     const pendingResponse = this.getPendingResponse(session);
     const pendingRequestId = Math.max(0, Number(pendingResponse?.requestId || 0)) || null;
+
+    if (
+      outputState.musicActive &&
+      !outputState.botTurnOpen &&
+      !outputState.pendingResponse &&
+      !outputState.openAiActiveResponse &&
+      !outputState.bufferedBotSpeech &&
+      !bufferedBotSpeech &&
+      !liveAudioStreaming
+    ) {
+      return buildEvaluation({
+        allowed: false,
+        reason: "music_only_playback",
+        pendingRequestId,
+        liveAudioStreaming,
+        outputState
+      });
+    }
 
     if (!session.botTurnOpen && botTurnOpenAt <= 0 && !liveAudioStreaming && !bufferedBotSpeech) {
       const pendingEverProducedAudio = Math.max(0, Number(pendingResponse?.audioReceivedAt || 0)) > 0;

@@ -159,6 +159,7 @@ test("buildBrowserBrowseContext disables openai computer use when no OpenAI clie
     },
     async (ctx) => {
       ctx.llm.openai = null;
+      ctx.llm.codexOAuth = null;
       const settings = createTestSettings({
         agentStack: {
           runtimeConfig: {
@@ -186,6 +187,46 @@ test("buildBrowserBrowseContext disables openai computer use when no OpenAI clie
 
       assert.equal(browserBrowse.enabled, true);
       assert.equal(browserBrowse.configured, false);
+      assert.equal(browserBrowse.budget.maxPerHour, 5);
+      assert.equal(browserBrowse.budget.canBrowse, true);
+    }
+  );
+});
+
+test("buildBrowserBrowseContext accepts openai computer use through OpenAI OAuth", async () => {
+  await withTempBudgetContext(
+    {
+      browserManager: new BrowserManager()
+    },
+    async (ctx) => {
+      ctx.llm.openai = null;
+      ctx.llm.codexOAuth = {
+        tokens: { refreshToken: "test", accessToken: "", idToken: "", expiresAt: 0, accountId: "acct_123" },
+        client: { post() {} }
+      } as never;
+      const settings = createTestSettings({
+        agentStack: {
+          runtimeConfig: {
+            browser: {
+              enabled: true,
+              openaiComputerUse: {
+                client: "auto"
+              },
+              localBrowserAgent: {
+                maxBrowseCallsPerHour: 5
+              }
+            }
+          },
+          overrides: {
+            browserRuntime: "openai_computer_use"
+          }
+        }
+      });
+
+      const browserBrowse = buildBrowserBrowseContext(ctx, settings);
+
+      assert.equal(browserBrowse.enabled, true);
+      assert.equal(browserBrowse.configured, true);
       assert.equal(browserBrowse.budget.maxPerHour, 5);
       assert.equal(browserBrowse.budget.canBrowse, true);
     }

@@ -1,0 +1,16 @@
+flowchart LR
+    A[Raw actions table<br/>structured runtime logs] --> B[Incident projector]
+    B --> C[Text and multimodal turns]
+    B --> D[Voice sessions]
+    B --> E[Voice turns]
+    B --> F[Artifacts and anomalies]
+
+    C --> G[Debugger API]
+    D --> G
+    E --> G
+    F --> G
+
+    G --> H[Search and incident inbox]
+    G --> I[Turn replay]
+    G --> J[Voice session debugger]
+    G --> K[Saved incident links]

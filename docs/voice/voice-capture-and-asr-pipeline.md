@@ -443,7 +443,7 @@ The `OpenAiRealtimeTranscriptionClient` emits:
 | Event | Handler | Effect on ASR State |
 |---|---|---|
 | `transcript` | `wireClientEvents` | Updates `utterance.finalSegments` / `partialText`, sets `lastTranscriptAt`. Shared mode: populates `finalTranscriptsByItemId`. |
-| `speech_started` | `wireClientEvents` | Sets `speechDetectedAt`, `speechDetectedUtteranceId`, `speechActive = true`. Used by capture promotion (see [Section 4](#4-promotion-signals)) and, in transcript-overlap sessions, can arm a pending same-speaker interrupt sustain window only when the live capture already passes the same assertive acoustic gate used for raw barge-in. The hard cut only commits if that utterance is still active when the sustain window closes. |
+| `speech_started` | `wireClientEvents` | Sets `speechDetectedAt`, `speechDetectedUtteranceId`, `speechActive = true`. Used by capture promotion (see [Section 4](#4-promotion-signals)) and, in transcript-overlap sessions, arms a pending same-speaker interrupt sustain window for the currently authorized interrupter. The runtime keeps re-checking the same assertive acoustic gate used for raw barge-in while that utterance stays active, so an early under-threshold `speech_started` can still mature into a real interrupt. |
 | `speech_stopped` | `wireClientEvents` | Sets `speechActive = false`. In transcript-overlap sessions this also releases an uncommitted pending same-speaker interrupt so the staged turn can flush normally. |
 | `error_event` | `wireClientEvents` | Logs error. May trigger session close depending on severity. |
 | `socket_closed` | `wireClientEvents` | Transitions phase to `idle`. Clears client reference. |

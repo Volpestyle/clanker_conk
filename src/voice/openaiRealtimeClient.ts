@@ -20,6 +20,7 @@ import {
   normalizeOpenAiBaseUrl,
   normalizeOpenAiRealtimeTranscriptionModel
 } from "./realtimeProviderNormalization.ts";
+import type { RealtimeInterruptAcceptanceMode } from "./realtimeInterruptAcceptance.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 
 const COMMENTARY_RESPONSE_STALE_MS = 30_000;
@@ -449,6 +450,10 @@ export class OpenAiRealtimeClient extends EventEmitter {
 
     this.clearActiveResponse("cancelled");
     return true;
+  }
+
+  getInterruptAcceptanceMode(): RealtimeInterruptAcceptanceMode {
+    return "immediate_provider_ack";
   }
 
   truncateConversationItem({

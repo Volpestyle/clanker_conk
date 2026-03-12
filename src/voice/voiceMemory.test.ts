@@ -190,6 +190,41 @@ test("web_search included when settings.webSearch.enabled is true", () => {
   assert.ok(names.includes("web_search"), "web_search should be included");
 });
 
+test("browser_browse stays available for hosted computer use when OpenAI OAuth is configured", () => {
+  const { manager } = createManager();
+  manager.browserManager = {} as never;
+  manager.llm = {
+    getComputerUseClient() {
+      return {
+        client: { post() {} },
+        provider: "openai-oauth"
+      };
+    }
+  } as never;
+
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
+    session: null,
+    settings: createTestSettings({
+      agentStack: {
+        overrides: {
+          browserRuntime: "openai_computer_use"
+        },
+        runtimeConfig: {
+          browser: {
+            enabled: true,
+            openaiComputerUse: {
+              client: "auto"
+            }
+          }
+        }
+      }
+    })
+  });
+
+  const names = tools.map((t: { name: string }) => t.name);
+  assert.ok(names.includes("browser_browse"), "browser_browse should be included");
+});
+
 test("code_task excluded when code agent is enabled but runtime hooks are unavailable", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {

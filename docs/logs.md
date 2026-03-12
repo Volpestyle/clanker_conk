@@ -321,8 +321,13 @@ Operator notes:
 
 - `voice_barge_in_gate` is promotion-scoped, not chunk-scoped. It captures the first summarized interruption decision for a promoted user capture when some assistant output context is active.
 - if `voice_barge_in_gate` shows `allow=false`, treat `reason` as the primary interruption blocker and `outputLockReason` as supporting context about what the assistant was doing.
+- if `voice_barge_in_gate` shows `allow=false reason=music_only_playback`, that means music was the only remaining output lock. Buffered or live bot speech should not resolve to this reason.
 - if `voice_barge_in_gate` shows `allow=false reason=transcript_overlap_interrupts_enabled`, the system intentionally waited for transcript-burst interruption logic instead of cutting audio from raw PCM.
 - if `voice_barge_in_gate` shows `allow=false reason=local_only_promotion_pending_server_vad`, the capture promoted from strong local audio but had not yet been confirmed by server VAD for live interruption.
+- `voice_interrupt_speech_started_pending initialReason=insufficient_capture_bytes` means the authorized same-speaker overlap is still live and the runtime will keep checking whether it matures into a valid interrupt; the first under-threshold chunk is no longer a permanent miss by itself.
+- `voice_interrupt_speech_started_retry_scheduled` means a pending same-speaker overlap stayed active but still had not crossed the raw cut gate on the last sustain check; inspect `captureBytesSent`, `minCaptureBytes`, and signal metrics before blaming policy or music.
+- on `voice_barge_in_interrupt` or `voice_output_lock_interrupt`, read `interruptAcceptanceMode` and `interruptAccepted` separately from `responseCancelSucceeded` / `truncateSucceeded`; async-confirmation providers can accept a locally committed cut before the provider emits its later interruption/completion event.
+- if `providerInterruptConfirmationPending=true`, the runtime already cut local playback and accepted the interrupt, but the provider did not give an immediate ack for that cut path.
 - if `outputLockReason=bot_audio_buffered` persists for more than a couple seconds after `openai_realtime_response_done`, suspect stale `clankvox` playback telemetry rather than real remaining speech
 - if `voice_turn_addressing` shows `reason=bot_turn_open` but a same-moment `voice_direct_address_interrupt` follows, the turn cut through output lock because it was an allowed wake-word / bot-name interruption
 - if a deferred turn keeps rescheduling, inspect whether `voice_activity_started` is followed by `voice_turn_dropped_silence_gate`; silence-only captures should not be treated the same as real live speech

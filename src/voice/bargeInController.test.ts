@@ -326,6 +326,38 @@ test("shouldBargeIn allows buffered subprocess drain interruption after pending 
   assert.ok((result.minCaptureBytes || 0) > 0);
 });
 
+test("shouldBargeIn allows buffered subprocess drain interruption while music stays active", () => {
+  const controller = createController();
+  const session = createSession({
+    botTurnOpen: false,
+    pendingResponse: null,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "user-1"
+    },
+    __testBufferedBotSpeech: true,
+    __testOutputState: createOutputState({
+      phase: "speaking_buffered",
+      lockReason: "music_playback_active",
+      musicActive: true,
+      botTurnOpen: false,
+      bufferedBotSpeech: true,
+      pendingResponse: false
+    })
+  });
+
+  const result = controller.shouldBargeIn({
+    session,
+    userId: "user-1",
+    captureState: createAssertiveCapture()
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(typeof result.minCaptureBytes, "number");
+  assert.ok((result.minCaptureBytes || 0) > 0);
+});
+
 test("shouldBargeIn blocks likely echo during the initial bot audio guard window", () => {
   const controller = createController();
   const session = createSession({

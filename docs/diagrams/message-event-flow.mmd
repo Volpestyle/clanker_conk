@@ -4,7 +4,7 @@ sequenceDiagram
     participant Bot as ClankerBot
     participant Store as Store
     participant Memory as MemoryManager
-    participant Search as SearchService
+    participant Search as Search/Web runtime
     participant LLM as LLMService
 
     Discord->>Bot: messageCreate(message)
@@ -15,38 +15,37 @@ sequenceDiagram
     alt memory enabled
       Bot->>Memory: ingestMessage()
       Memory->>Memory: append entry to memory/YYYY-MM-DD.md
-      Memory->>LLM: extractMemoryFacts() (strict JSON extraction)
-      LLM->>Store: logAction(memory_extract_call / memory_extract_error)
-      Memory->>Store: addMemoryFact() / logAction(memory_fact)
-      Memory->>Memory: queue curated refresh of MEMORY.md
+      Memory->>LLM: embed message for conversation recall (best effort)
+      LLM->>Store: upsert message_vectors_native
+      Memory->>Memory: queue MEMORY.md refresh + text micro-reflection
     end
 
-    par Reaction path
-      Bot->>LLM: generate() for reaction decision
+    Bot->>Memory: loadConversationContinuityContext()
+    Bot->>LLM: generate() structured reply + tool plan
+    LLM->>Store: logAction(llm_call or llm_error)
+    loop bounded reply tool loop
+      opt model emits tool call(s)
+        alt web_search / web_scrape
+          Bot->>Search: execute search or page read
+          Search->>Store: logAction(search_call or search_error)
+        else memory_search
+          Bot->>Memory: searchDurableFacts()
+        else image_lookup
+          Bot->>Store: getRecentMessages() for image candidates
+        else other reply tool
+          Bot->>Bot: execute tool and collect result
+        end
+        Bot->>LLM: generate() continuation from tool results
+        LLM->>Store: logAction(llm_call or llm_error)
+      end
+    end
+
+    opt structured output requests reaction
       LLM->>Store: logAction(llm_call or llm_error)
       Bot->>Discord: message.react(emoji)
       Bot->>Store: logAction(reacted)
-    and Reply path
-      Bot->>Memory: buildPromptMemorySlice() (hybrid fact retrieval)
-      Bot->>LLM: generate() for initial reply / tool plan
-      LLM->>Store: logAction(llm_call or llm_error)
-      loop bounded reply tool loop
-        opt model emits tool call(s)
-          alt web_search
-            Bot->>Search: searchAndRead()
-            Search->>Store: logAction(search_call or search_error)
-          else memory_search
-            Bot->>Memory: searchDurableFacts()
-          else image_lookup
-            Bot->>Store: getRecentMessages() for image candidates
-          else other reply tool
-            Bot->>Bot: execute tool and collect result
-          end
-          Bot->>LLM: generate() continuation from tool results
-          LLM->>Store: logAction(llm_call or llm_error)
-        end
-      end
-      Bot->>Discord: reply() or send()
-      Bot->>Store: recordMessage(outgoing)
-      Bot->>Store: logAction(sent_reply or sent_message)
     end
+
+    Bot->>Discord: reply() or send()
+    Bot->>Store: recordMessage(outgoing)
+    Bot->>Store: logAction(sent_reply or sent_message)

@@ -260,10 +260,128 @@ export interface MusicPlaybackHost {
     clearQueue?: boolean;
     mustNotify?: boolean;
   }) => Promise<unknown>;
+  requestJoin?: (args: {
+    message: {
+      guild: unknown;
+      guildId: string;
+      channel: unknown;
+      channelId: string;
+      id: string | null;
+      author: {
+        id: string;
+        username: string;
+      };
+      member: {
+        id: string;
+        displayName?: string | null;
+        user?: {
+          username?: string | null;
+          bot?: boolean | null;
+        } | null;
+        voice?: {
+          channel?: unknown | null;
+        } | null;
+      } | null;
+    };
+    settings: MusicPlaybackSettings;
+    intentConfidence?: number | null;
+  }) => Promise<boolean>;
   buildVoiceToolCallbacks?: (args: {
     session: VoiceSession;
     settings?: MusicPlaybackSettings;
   }) => NonNullable<ReplyToolRuntime["voiceSession"]>;
+}
+
+type SlashMusicVoiceMemberLike = {
+  id: string;
+  displayName?: string | null;
+  user?: {
+    username?: string | null;
+    bot?: boolean | null;
+  } | null;
+  voice?: {
+    channel?: unknown | null;
+  } | null;
+};
+
+function ephemeralReply(content: string) {
+  return {
+    content,
+    flags: ["Ephemeral"] as const
+  };
+}
+
+async function resolveSlashMusicVoiceMember(
+  interaction: ChatInputCommandInteraction
+): Promise<SlashMusicVoiceMemberLike> {
+  const guild = interaction.guild;
+  const user = interaction.user;
+  const interactionMember = interaction.member;
+  if (interactionMember && typeof interactionMember === "object" && "voice" in interactionMember) {
+    const memberLike = interactionMember as SlashMusicVoiceMemberLike;
+    if (memberLike.voice?.channel) {
+      return {
+        id: String(memberLike.id || user.id),
+        displayName: memberLike.displayName || user.username,
+        user: memberLike.user || {
+          username: user.username,
+          bot: user.bot
+        },
+        voice: {
+          channel: memberLike.voice.channel
+        }
+      };
+    }
+  }
+
+  const cachedMember = guild?.members?.cache?.get?.(user.id) as SlashMusicVoiceMemberLike | undefined;
+  if (cachedMember?.voice?.channel) {
+    return {
+      id: String(cachedMember.id || user.id),
+      displayName: cachedMember.displayName || user.username,
+      user: cachedMember.user || {
+        username: user.username,
+        bot: user.bot
+      },
+      voice: {
+        channel: cachedMember.voice.channel
+      }
+    };
+  }
+
+  if (typeof guild?.members?.fetch === "function") {
+    try {
+      const fetchedMember = await guild.members.fetch(user.id);
+      if (fetchedMember?.voice?.channel) {
+        return {
+          id: String(fetchedMember.id || user.id),
+          displayName: fetchedMember.displayName || user.username,
+          user: fetchedMember.user || {
+            username: user.username,
+            bot: user.bot
+          },
+          voice: {
+            channel: fetchedMember.voice.channel
+          }
+        };
+      }
+    } catch {
+      // Fall through to the voice-state fallback below.
+    }
+  }
+
+  const voiceChannel = guild?.voiceStates?.cache?.get?.(user.id)?.channel || null;
+  return {
+    id: user.id,
+    displayName: user.username,
+    user: {
+      username: user.username,
+      bot: user.bot
+    },
+    voice: {
+      channel: voiceChannel
+    }
+  };
 }
 
 function logMusicAction(
@@ -2614,7 +2732,7 @@ export async function handleMusicSlashCommand(
   const user = interaction.user;
 
   if (!guild) {
-    await interaction.reply({ content: "This command must be used in a server.", ephemeral: true });
+    await interaction.reply(ephemeralReply("This command must be used in a server."));
     return;
   }
 
@@ -2929,27 +3047,76 @@ export async function handleMusicSlashCommand(
   };
 
   const guildId = guild.id;
-  const session = manager.sessions.get(guildId);
   const subcommand = interaction.options.getSubcommand(true);
+  const getActiveSession = () => {
+    const existing = manager.sessions.get(guildId);
+    return existing && !existing.ending ? existing : null;
+  };
+  const ensureSlashPlaybackSession = async () => {
+    const existing = getActiveSession();
+    if (existing) {
+      return existing;
+    }
+    if (typeof manager.requestJoin !== "function" || !interaction.channel) {
+      logMusicAction(manager, {
+        kind: "voice_runtime",
+        guildId,
+        channelId: interaction.channelId,
+        userId: user.id,
+        content: "slash_music_session_bootstrap",
+        metadata: {
+          subcommand,
+          outcome: typeof manager.requestJoin !== "function" ? "join_unavailable" : "channel_unavailable"
+        }
+      });
+      return null;
+    }
 
-  if (!session) {
-    await interaction.reply({ content: "No active voice session in this server.", ephemeral: true });
-    return;
-  }
-
-  if (subcommand === "queue") {
-    await interaction.reply(formatQueueReply(session));
-    return;
-  }
-
-  if (subcommand === "now") {
-    await interaction.reply(formatNowPlayingReply(session));
-    return;
-  }
+    const member = await resolveSlashMusicVoiceMember(interaction);
+    const joinHandled = await manager.requestJoin({
+      message: {
+        guild,
+        guildId,
+        channel: interaction.channel,
+        channelId: interaction.channelId,
+        id: null,
+        author: {
+          id: user.id,
+          username: user.username
+        },
+        member
+      },
+      settings,
+      intentConfidence: 1
+    });
+    const joinedSession = getActiveSession();
+    logMusicAction(manager, {
+      kind: joinedSession ? "voice_runtime" : "voice_error",
+      guildId,
+      channelId: interaction.channelId,
+      userId: user.id,
+      content: "slash_music_session_bootstrap",
+      metadata: {
+        subcommand,
+        joinHandled,
+        joined: Boolean(joinedSession),
+        requesterVoiceChannelId: String((member.voice?.channel as { id?: string | null } | null)?.id || "") || null
+      }
+    });
+    return joinedSession;
+  };
+  let session = getActiveSession();
 
   if (subcommand === "play" || subcommand === "add" || subcommand === "next") {
     const query = interaction.options.getString("query", true);
     await interaction.deferReply();
+    session = session || await ensureSlashPlaybackSession();
+    if (!session) {
+      await interaction.editReply(
+        "I couldn't start a voice session for music playback. Join a voice channel first, or check the channel for the join failure."
+      );
+      return;
+    }
     const result = await runQueryAction({
       session,
       query,
@@ -2964,9 +3131,24 @@ export async function handleMusicSlashCommand(
     return;
   }
 
+  if (!session) {
+    await interaction.reply(ephemeralReply("No active voice session in this server."));
+    return;
+  }
+
+  if (subcommand === "queue") {
+    await interaction.reply(formatQueueReply(session));
+    return;
+  }
+
+  if (subcommand === "now") {
+    await interaction.reply(formatNowPlayingReply(session));
+    return;
+  }
+
   if (subcommand === "stop") {
     if (!isMusicPlaybackActive(manager, session) && ensureToolMusicQueueState(manager, session)?.tracks.length === 0) {
-      await interaction.reply({ content: "Nothing is playing and the queue is empty.", ephemeral: true });
+      await interaction.reply(ephemeralReply("Nothing is playing and the queue is empty."));
       return;
     }
     await interaction.deferReply();
@@ -2988,7 +3170,7 @@ export async function handleMusicSlashCommand(
   if (subcommand === "pause") {
     const phase = getMusicPhase(manager, session);
     if (!musicPhaseCanPause(phase)) {
-      await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
+      await interaction.reply(ephemeralReply("No music is currently playing."));
       return;
     }
     await interaction.deferReply();
@@ -3009,7 +3191,7 @@ export async function handleMusicSlashCommand(
   if (subcommand === "resume") {
     const phase = getMusicPhase(manager, session);
     if (!musicPhaseCanResume(phase)) {
-      await interaction.reply({ content: "No music is currently paused.", ephemeral: true });
+      await interaction.reply(ephemeralReply("No music is currently paused."));
       return;
     }
     manager.musicPlayer?.resume();
@@ -3022,7 +3204,7 @@ export async function handleMusicSlashCommand(
   if (subcommand === "skip") {
     const queueState = ensureToolMusicQueueState(manager, session);
     if (!queueState || queueState.nowPlayingIndex == null) {
-      await interaction.reply({ content: "No queued track is available to skip.", ephemeral: true });
+      await interaction.reply(ephemeralReply("No queued track is available to skip."));
       return;
     }
     await interaction.deferReply();

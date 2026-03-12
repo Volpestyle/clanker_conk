@@ -638,17 +638,77 @@ test("maybeHandleMusicPlaybackTurn still swallows other-speaker chatter while mu
   assert.equal(stopCheckEvent?.metadata?.decisionReason, "swallowed");
 });
 
-function createSlashInteraction(subcommand: string, query?: string) {
+function createSlashInteraction(
+  subcommand: string,
+  query?: string,
+  {
+    voiceChannelId = "voice-1",
+    displayName = "User 1"
+  }: {
+    voiceChannelId?: string | null;
+    displayName?: string;
+  } = {}
+) {
   const replies: string[] = [];
   const edits: string[] = [];
   let deferred = false;
+  const voiceChannel = voiceChannelId
+    ? {
+        id: voiceChannelId,
+        name: `Voice ${voiceChannelId}`
+      }
+    : null;
+  const cachedMember = {
+    id: "user-1",
+    displayName,
+    user: {
+      username: "user-1",
+      bot: false
+    },
+    voice: {
+      channel: voiceChannel
+    }
+  };
 
   const interaction = {
     commandName: "music",
-    guild: { id: "guild-1" },
-    channel: { id: "text-1" },
+    guild: {
+      id: "guild-1",
+      members: {
+        cache: {
+          get(id: string) {
+            return id === "user-1" ? cachedMember : undefined;
+          }
+        },
+        async fetch(id: string) {
+          if (id !== "user-1") throw new Error("missing member");
+          return cachedMember;
+        }
+      },
+      voiceStates: {
+        cache: {
+          get(id: string) {
+            return id === "user-1"
+              ? {
+                  channel: voiceChannel
+                }
+              : undefined;
+          }
+        }
+      }
+    },
+    channel: {
+      id: "text-1",
+      async send() {
+        return null;
+      },
+      isTextBased() {
+        return true;
+      }
+    },
     channelId: "text-1",
-    user: { id: "user-1" },
+    user: { id: "user-1", username: "user-1", bot: false },
+    member: cachedMember,
     options: {
       getSubcommand() {
         return subcommand;
@@ -712,7 +772,7 @@ function createSlashPlaybackHost(searchResults: MusicSelectionResult[], sessionO
   const searchCalls: string[] = [];
   const discordPlayCalls: string[] = [];
   const queuePlayCalls: number[] = [];
-  const logs: Array<{ content: string }> = [];
+  const logs: Array<{ content: string; metadata?: Record<string, unknown> }> = [];
 
   const manager: MusicPlaybackHost = {
     client: {
@@ -730,7 +790,10 @@ function createSlashPlaybackHost(searchResults: MusicSelectionResult[], sessionO
     store: {
       getSettings: () => null,
       logAction: (entry) => {
-        logs.push({ content: entry.content });
+        logs.push({
+          content: entry.content,
+          metadata: entry.metadata
+        });
       }
     },
     llm: null,
@@ -783,6 +846,7 @@ function createSlashPlaybackHost(searchResults: MusicSelectionResult[], sessionO
       return { ok: true };
     },
     requestStopMusic: async () => {},
+    requestJoin: undefined,
     maybeClearActiveReplyInterruptionPolicy: () => {},
     abortActiveInboundCaptures: () => {},
     buildVoiceToolCallbacks: () => ({
@@ -817,6 +881,20 @@ function createSlashPlaybackHost(searchResults: MusicSelectionResult[], sessionO
   };
 }
 
+function createSlashPlaybackHostWithoutSession(
+  searchResults: MusicSelectionResult[],
+  {
+    requestJoin
+  }: {
+    requestJoin?: NonNullable<MusicPlaybackHost["requestJoin"]>;
+  } = {}
+) {
+  const host = createSlashPlaybackHost(searchResults);
+  host.manager.sessions.clear();
+  host.manager.requestJoin = requestJoin;
+  return host;
+}
+
 test("music slash play updates queue state and starts playback through the queue-aware path", async () => {
   const track: MusicSelectionResult = {
     id: "youtube:track-1",
@@ -839,6 +917,76 @@ test("music slash play updates queue state and starts playback through the queue
   assert.equal(session.music?.phase, "playing");
   assert.equal(discordPlayCalls.length, 1);
   assert.equal(slash.edits[0], "Playing: All Caps - MF DOOM");
+});
+
+test("music slash play bootstraps a voice session when the requester is already in voice", async () => {
+  const track: MusicSelectionResult = {
+    id: "youtube:track-1",
+    title: "Accordion",
+    artist: "MF DOOM",
+    platform: "youtube",
+    externalUrl: "https://youtube.com/watch?v=abc123",
+    durationSeconds: 140
+  };
+  const { manager, discordPlayCalls, searchCalls, logs } = createSlashPlaybackHostWithoutSession([track], {
+    requestJoin: async ({ message }) => {
+      const joinedSession = createSlashSession({
+        voiceChannelId: String((message.member?.voice?.channel as { id?: string | null } | null)?.id || "voice-1")
+      });
+      ensureSessionMusicState(manager, joinedSession);
+      manager.sessions.set("guild-1", joinedSession);
+      return true;
+    }
+  });
+  const slash = createSlashInteraction("play", "accordion", { voiceChannelId: "voice-9" });
+
+  await handleMusicSlashCommand(manager, slash.interaction as ChatInputCommandInteraction, null);
+
+  const joinedSession = manager.sessions.get("guild-1");
+  assert.equal(slash.deferred, true);
+  assert.deepEqual(searchCalls, ["accordion"]);
+  assert.equal(String(joinedSession?.voiceChannelId || ""), "voice-9");
+  assert.equal(joinedSession?.musicQueueState?.tracks[0]?.title, "Accordion");
+  assert.equal(discordPlayCalls.length, 1);
+  assert.equal(
+    logs.some(
+      (entry) =>
+        entry.content === "slash_music_session_bootstrap" && entry.metadata?.joined === true
+    ),
+    true
+  );
+  assert.equal(slash.edits[0], "Playing: Accordion - MF DOOM");
+});
+
+test("music slash play reports when voice-session bootstrap does not produce a session", async () => {
+  const track: MusicSelectionResult = {
+    id: "youtube:track-1",
+    title: "Accordion",
+    artist: "MF DOOM",
+    platform: "youtube",
+    externalUrl: "https://youtube.com/watch?v=abc123",
+    durationSeconds: 140
+  };
+  const { manager, searchCalls, logs } = createSlashPlaybackHostWithoutSession([track], {
+    requestJoin: async () => true
+  });
+  const slash = createSlashInteraction("play", "accordion");
+
+  await handleMusicSlashCommand(manager, slash.interaction as ChatInputCommandInteraction, null);
+
+  assert.equal(slash.deferred, true);
+  assert.deepEqual(searchCalls, []);
+  assert.equal(
+    slash.edits[0],
+    "I couldn't start a voice session for music playback. Join a voice channel first, or check the channel for the join failure."
+  );
+  assert.equal(
+    logs.some(
+      (entry) =>
+        entry.content === "slash_music_session_bootstrap" && entry.metadata?.joined === false
+    ),
+    true
+  );
 });
 
 test("music slash add appends to the queue without interrupting current playback", async () => {

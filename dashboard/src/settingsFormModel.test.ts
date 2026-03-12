@@ -102,6 +102,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.replyFollowupMaxMemoryLookupCalls, 2);
   assert.equal(form.replyFollowupMaxImageLookupCalls, 2);
   assert.equal(form.replyFollowupToolTimeoutMs, 10000);
+  assert.equal(form.browserRuntimeSelection, "inherit");
+  assert.equal(form.stackResolvedBrowserRuntime, "openai_computer_use");
+  assert.equal(form.browserOpenAiComputerUseClient, "auto");
   assert.equal(form.browserOpenAiComputerUseModel, "gpt-5.4");
   assert.equal(form.browserHeaded, false);
   assert.equal(form.browserLlmProvider, "claude-oauth");
@@ -522,6 +525,33 @@ test("settingsFormModel round-trips browser headed mode", () => {
 
   const patch = formToSettingsPatch(form);
   assert.equal(patch.agentStack.runtimeConfig.browser.headed, true);
+});
+
+test("settingsFormModel round-trips browser runtime override and hosted client selection", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      overrides: {
+        browserRuntime: "openai_computer_use"
+      },
+      runtimeConfig: {
+        browser: {
+          openaiComputerUse: {
+            client: "openai-oauth",
+            model: "gpt-5.4"
+          }
+        }
+      }
+    }
+  })));
+
+  assert.equal(form.browserRuntimeSelection, "openai_computer_use");
+  assert.equal(form.browserOpenAiComputerUseClient, "openai-oauth");
+  assert.equal(form.browserOpenAiComputerUseModel, "gpt-5.4");
+
+  const { patch, effectivePatch } = serializeForm(form);
+  assert.equal(patch.agentStack.overrides.browserRuntime, "openai_computer_use");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.browser.openaiComputerUse.client, "openai-oauth");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.browser.openaiComputerUse.model, "gpt-5.4");
 });
 
 test("getCodeAgentValidationError requires allowed users when code agent is enabled", () => {

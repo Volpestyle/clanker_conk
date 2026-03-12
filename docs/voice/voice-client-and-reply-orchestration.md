@@ -38,12 +38,12 @@ Code:
 
 ## 2. Client Types and Capabilities
 
-| Mode | Client Class | `textInput` | `updateInstructions` | `updateTools` | `cancelResponse` | `perUserAsr` | `sharedAsr` |
-|---|---|---|---|---|---|---|---|
-| `openai_realtime` | `OpenAiRealtimeClient` | yes | yes | yes | yes | yes | yes |
-| `voice_agent` | `XaiRealtimeClient` | yes | yes | yes | yes | yes | yes |
-| `gemini_realtime` | `GeminiRealtimeClient` | yes | yes (local only) | — | — | — | yes |
-| `elevenlabs_realtime` | `ElevenLabsRealtimeClient` | yes | — | — | — | — | yes |
+| Mode | Client Class | `textInput` | `updateInstructions` | `updateTools` | `cancelResponse` | `interrupt acceptance` | `perUserAsr` | `sharedAsr` |
+|---|---|---|---|---|---|---|---|---|
+| `openai_realtime` | `OpenAiRealtimeClient` | yes | yes | yes | yes | immediate provider ack | yes | yes |
+| `voice_agent` | `XaiRealtimeClient` | yes | yes | yes | yes | immediate provider ack | yes | yes |
+| `gemini_realtime` | `GeminiRealtimeClient` | yes | yes (local only) | — | — | local cut + async confirmation | — | yes |
+| `elevenlabs_realtime` | `ElevenLabsRealtimeClient` | yes | — | — | — | local cut + async confirmation | — | yes |
 
 Capability checks use `providerSupports(mode, capability)` in `src/voice/voiceModes.ts`.
 
@@ -174,11 +174,11 @@ Similar protocol to OpenAI but simpler. Uses boolean `_responseInProgress` inste
 
 ### Gemini
 
-Completely different protocol. Uses `setup` message at connection, then `realtimeInput` with `activityStart`/`activityEnd`/`mediaChunks`. `updateInstructions()` only stores locally (no mid-session WebSocket update). `cancelActiveResponse()` returns false (unsupported).
+Completely different protocol. Uses `setup` message at connection, then `realtimeInput` with `activityStart`/`activityEnd`/`mediaChunks`. `updateInstructions()` only stores locally (no mid-session WebSocket update). `cancelActiveResponse()` returns false (unsupported immediate ack). Interrupt acceptance is `local_cut_async_confirmation`: the runtime can accept a locally committed cut immediately, and the client later emits `response_done` with `status: "interrupted"` when Gemini reports the turn was cut.
 
 ### ElevenLabs
 
-Agent-based model. Uses signed URL auth (`fetchSignedUrl`). Audio sent as `user_audio_chunk`. `ping`/`pong` keepalive. Instructions sent only at connect time; no mid-session updates. `cancelActiveResponse()` returns false.
+Agent-based model. Uses signed URL auth (`fetchSignedUrl`). Audio sent as `user_audio_chunk`. `ping`/`pong` keepalive. Instructions sent only at connect time; no mid-session updates. `cancelActiveResponse()` returns false for immediate ack. Interrupt acceptance is `local_cut_async_confirmation`: the runtime can accept a locally committed cut immediately, and the provider's later `interruption` event is mapped to `response_done` with `status: "interrupted"` for confirmation/observability.
 
 ## 8. Cross-Domain Interactions (Client)
 
@@ -188,7 +188,7 @@ Agent-based model. Uses signed URL auth (`fetchSignedUrl`). Audio sent as `user_
 | Capture → Client | Forward labeled transcript (bridge path) | `realtimeClient.requestTextUtterance()` |
 | Reply Pipeline → Client | Play pre-generated exact-line speech | `requestRealtimeTextUtterance()` → provider playback method (`requestPlaybackUtterance()`) |
 | Client → Output SM | Audio delta, response lifecycle events | `syncAssistantOutputState()` |
-| Client → Barge-In | Cancel active response | `realtimeClient.cancelActiveResponse()`, `realtimeClient.truncateConversationItem()` |
+| Client → Barge-In | Attempt provider cut, then clear local playback/output state | `realtimeClient.cancelActiveResponse()`, `realtimeClient.truncateConversationItem()`, local playback reset |
 | Client → Tool Dispatch | Function call events | `handleRealtimeFunctionCallEvent()` |
 | Client → Subprocess | Audio for Discord playback | `voxClient.appendTtsAudio()` |
 | Instruction Mgr → Client | Updated instructions/tools | `realtimeClient.updateInstructions()`, `session.update` with tools |
@@ -445,7 +445,7 @@ In realtime `bridge` and `brain` sessions that use the ASR bridge, interruption 
 ### Phase 0: Transcript Burst Arbitration
 
 While assistant speech is active:
-1. Partial and final ASR transcripts from authorized speakers are coalesced into a short overlap burst.
+1. Partial and final ASR transcripts from non-target speakers are coalesced into a short overlap burst, while the current reply target keeps the privileged same-speaker interrupt path.
 2. Obvious takeover phrases can resolve the burst immediately to `INTERRUPT`.
 3. Obvious laughter, backchannel, and other low-signal overlap can resolve the burst immediately to `IGNORE`.
 4. Ambiguous overlap is sent once to the interrupt classifier.
@@ -458,18 +458,22 @@ Low-signal overlap therefore never reaches the normal turn queue and never creat
 ### Phase 1: Interrupt
 
 `executeBargeInInterruptCommand`:
-1. Cancel active realtime response
-2. Reset bot audio playback
-3. If cancel succeeded OR truncate succeeded AND utterance text was in progress:
+1. Attempt the provider-native cut path when the runtime supports it (`cancelActiveResponse()`, `truncateConversationItem()`)
+2. Resolve the provider's interrupt acceptance mode:
+   - `immediate_provider_ack` means the interrupt is accepted only when the provider acknowledges the cut immediately
+   - `local_cut_async_confirmation` means the interrupt is accepted once local playback/output state is authoritatively cut, with the later provider event acting as confirmation
+3. Reset bot audio playback and clear output-lock state locally
+4. If `interruptAccepted` is true and utterance text was in progress:
    - Store interruption context on the session: interrupted utterance text, interrupting user ID, timestamp, source
-4. If cancel failed because the provider had already completed:
-   - Keep recovery state when truncate succeeded
-   - Fall back to the short echo guard only
-5. If truncate identified a live assistant output item:
+5. If the provider gave no immediate ack but the runtime still accepted the local cut:
+   - keep recovery state
+   - mark confirmation as pending in runtime logs
+   - still fall back to the short echo guard rather than the long cancel-confirmed suppression window
+6. If truncate identified a live assistant output item:
    - Store that `item_id` in a short-lived ignored-output map on the session
    - Drop any later audio deltas or final output transcripts for that exact item
    - Allow newer assistant output items to play immediately
-6. Set barge-in suppression window
+7. Set barge-in suppression window
 
 ### Phase 2: Normal Turn Processing
 
@@ -653,7 +657,7 @@ When deferred turns never flush:
 When post-barge-in recovery feels wrong:
 
 1. Check `session.interruptedAssistantReply` — was context actually stored?
-2. Check whether either cancel or truncate actually cut the reply — truncate-only interruptions still keep recovery context
+2. Check the interrupt runtime log metadata, especially `interruptAcceptanceMode`, `interruptAccepted`, `responseCancelSucceeded`, `truncateSucceeded`, and `providerInterruptConfirmationPending`
 3. Check whether a newer assistant reply cleared applicability (`lastAssistantReplyAt > interruptedAt`)
 4. If the follow-up ASR was empty or unclear, inspect `voice_interrupt_unclear_turn_handoff_requested` — the runtime should hand interruption context back to the voice brain instead of replaying the cut line directly
 5. Inspect the generated prompt — did it include the interruption recovery section from `buildVoiceTurnPrompt`?
@@ -667,7 +671,7 @@ These cases should remain covered:
 - Active promoted captures block deferred turn flushing
 - Silence-only captures do NOT block deferred turn flushing
 - Coalesced deferred turns re-run the full admission gate
-- Barge-in stores interruption context when cancel succeeds or truncate succeeds
+- Barge-in stores interruption context when `interruptAccepted` is true for both immediate-ack and async-confirmation providers
 - Prompt generation receives interruption recovery context on the interrupting user's next turn
 - Empty or unclear ASR after a committed barge-in hands interruption context back to the voice brain
 - Pre-generation gate skips generation when newer finalized turn exists

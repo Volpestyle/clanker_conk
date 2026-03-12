@@ -151,7 +151,11 @@ export async function runModelRequestedBrowserBrowse(
   const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
   const maxSteps = clamp(Number(browserTaskConfig.maxStepsPerTask) || 15, 1, 30);
   const stepTimeoutMs = clamp(Number(browserTaskConfig.stepTimeoutMs) || 30_000, 5_000, 120_000);
-  if (browserTaskConfig.runtime === "openai_computer_use" && !ctx.llm?.openai) {
+  const computerUseClient =
+    browserTaskConfig.runtime === "openai_computer_use"
+      ? ctx.llm.getComputerUseClient(browserTaskConfig.openaiComputerUse.client)
+      : null;
+  if (browserTaskConfig.runtime === "openai_computer_use" && !computerUseClient?.client) {
     return {
       ...state,
       error: "openai_computer_use_unavailable"
@@ -178,7 +182,8 @@ export async function runModelRequestedBrowserBrowse(
     const result =
       browserTaskConfig.runtime === "openai_computer_use"
         ? await runOpenAiComputerUseTask({
-            openai: ctx.llm?.openai,
+            openai: computerUseClient.client,
+            provider: computerUseClient.provider || "openai",
             browserManager: ctx.browserManager,
             store: ctx.store,
             sessionKey,

@@ -31,4 +31,4 @@ flowchart TD
     X --> Y[Return ranked durable facts]
 
     G -. operator-facing only .-> Z[Dashboard /api/memory view]
-    G -. not prompt input .-> AA[Runtime prompts read SQLite + journals]
+    G -. not prompt input .-> AA[Runtime prompts use SQLite-backed facts + conversation history]
