@@ -13,7 +13,7 @@ export const OPENAI_REALTIME_SESSION_MODEL_OPTIONS = Object.freeze([
 const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS = new Set(OPENAI_REALTIME_SESSION_MODEL_OPTIONS);
 
 export const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-export const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
+const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
   "whisper-1",
   "gpt-4o-transcribe-latest",
   "gpt-4o-transcribe",

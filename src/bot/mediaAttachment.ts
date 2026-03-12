@@ -18,12 +18,12 @@ type MessagePayloadFile = {
   name: string;
 };
 
-export type MessagePayload = {
+type MessagePayload = {
   content: string;
   files?: MessagePayloadFile[];
 };
 
-export type MediaDirectiveType =
+type MediaDirectiveType =
   | "gif"
   | "image_simple"
   | "image_complex"
@@ -68,7 +68,7 @@ type MaybeAttachReplyGifOptions = {
   trace?: MediaAttachmentTrace;
 };
 
-export type MaybeAttachGeneratedImageResult = {
+type MaybeAttachGeneratedImageResult = {
   payload: MessagePayload;
   imageUsed: boolean;
   variant: string | null;
@@ -77,7 +77,7 @@ export type MaybeAttachGeneratedImageResult = {
   budget: ImageBudgetState;
 };
 
-export type MaybeAttachGeneratedVideoResult = {
+type MaybeAttachGeneratedVideoResult = {
   payload: MessagePayload;
   videoUsed: boolean;
   blockedByBudget: boolean;
@@ -85,7 +85,7 @@ export type MaybeAttachGeneratedVideoResult = {
   budget: VideoGenerationBudgetState;
 };
 
-export type MaybeAttachReplyGifResult = {
+type MaybeAttachReplyGifResult = {
   payload: MessagePayload;
   gifUsed: boolean;
   blockedByBudget: boolean;
@@ -93,7 +93,7 @@ export type MaybeAttachReplyGifResult = {
   budget: GifBudgetState;
 };
 
-export type ResolveMediaAttachmentOptions = {
+type ResolveMediaAttachmentOptions = {
   settings: Settings;
   text: string;
   directive?: {
@@ -106,7 +106,7 @@ export type ResolveMediaAttachmentOptions = {
   trace?: MediaAttachmentTrace;
 };
 
-export type ResolveMediaAttachmentResult = {
+type ResolveMediaAttachmentResult = {
   payload: MessagePayload;
   media: { type: MediaDirectiveType } | null;
   imageUsed: boolean;
@@ -166,7 +166,7 @@ export function buildMessagePayloadWithImage(
   };
 }
 
-export function buildMessagePayloadWithVideo(
+function buildMessagePayloadWithVideo(
   text: string,
   video: GenerateVideoResult
 ) {
@@ -186,7 +186,7 @@ export function buildMessagePayloadWithVideo(
   };
 }
 
-export function buildMessagePayloadWithGif(text: string, gifUrl: string) {
+function buildMessagePayloadWithGif(text: string, gifUrl: string) {
   const normalizedUrl = String(gifUrl || "").trim();
   if (!normalizedUrl) {
     return {

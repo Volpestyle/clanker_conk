@@ -142,7 +142,7 @@ export type ToolLoopMessage = {
   content: string | ToolLoopContentBlock[];
 };
 
-export type XaiJsonPrimitive = string | number | boolean | null;
+type XaiJsonPrimitive = string | number | boolean | null;
 export type XaiJsonValue = XaiJsonPrimitive | XaiJsonRecord | XaiJsonValue[];
 export type XaiJsonRecord = {
   [key: string]: XaiJsonValue;
@@ -381,7 +381,7 @@ function normalizeToolLoopResultBlocks(content: string | ToolLoopContentBlock[])
   return content.filter((block): block is ToolLoopToolResult => block?.type === "tool_result");
 }
 
-export function buildAnthropicEphemeralCacheControl(): Anthropic.CacheControlEphemeral {
+function buildAnthropicEphemeralCacheControl(): Anthropic.CacheControlEphemeral {
   return { type: "ephemeral" };
 }
 

@@ -4,7 +4,7 @@ import { clamp } from "../utils.ts";
 
 const DEFAULT_BOT_NAME = "clanker conk";
 const PROMPT_TEMPLATE_TOKEN_RE = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
-export const DEFAULT_PROMPT_STYLE = "playful slang, open, honest, exploratory";
+const DEFAULT_PROMPT_STYLE = "playful slang, open, honest, exploratory";
 export const DEFAULT_PROMPT_TEXT_GUIDANCE = [
   "Write like a person in chat, not like an assistant.",
   "Be open and direct; avoid roleplaying or performative banter.",
@@ -25,7 +25,7 @@ export const DEFAULT_PROMPT_VOICE_OPERATIONAL_GUIDANCE = [
 ];
 
 const PROMPT_CAPABILITY_HONESTY_LINE = "Never claim capabilities you do not have.";
-export const DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE =
+const DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE =
   "If asked to do something impossible, say it plainly and suggest a practical text-only alternative.";
 const DEFAULT_MEMORY_ENABLED_LINE =
   "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero.";

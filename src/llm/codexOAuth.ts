@@ -101,7 +101,7 @@ function base64UrlEncode(buffer: Buffer): string {
   return buffer.toString("base64url");
 }
 
-export function generatePKCE(): PkceChallenge {
+function generatePKCE(): PkceChallenge {
   const verifier = base64UrlEncode(randomBytes(32));
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };

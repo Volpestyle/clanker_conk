@@ -298,7 +298,7 @@ export function createClaudeOAuthClient(envRefreshToken: string): ClaudeOAuthSta
 
 // --- PKCE OAuth setup utilities ---
 
-export function generatePKCE(): { verifier: string; challenge: string } {
+function generatePKCE(): { verifier: string; challenge: string } {
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };

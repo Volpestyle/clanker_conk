@@ -1,10 +1,10 @@
-export const VOICE_PROVIDERS = ["openai", "xai", "gemini", "elevenlabs"] as const;
-export const BRAIN_PROVIDERS = ["native", "openai", "anthropic", "xai", "gemini"] as const;
-export const TRANSCRIBER_PROVIDERS = ["openai"] as const;
+const VOICE_PROVIDERS = ["openai", "xai", "gemini", "elevenlabs"] as const;
+const BRAIN_PROVIDERS = ["native", "openai", "anthropic", "xai", "gemini"] as const;
+const TRANSCRIBER_PROVIDERS = ["openai"] as const;
 
-export type VoiceProvider = (typeof VOICE_PROVIDERS)[number];
-export type BrainProvider = (typeof BRAIN_PROVIDERS)[number];
-export type TranscriberProvider = (typeof TRANSCRIBER_PROVIDERS)[number];
+type VoiceProvider = (typeof VOICE_PROVIDERS)[number];
+type BrainProvider = (typeof BRAIN_PROVIDERS)[number];
+type TranscriberProvider = (typeof TRANSCRIBER_PROVIDERS)[number];
 
 export function normalizeVoiceProvider(value: unknown, fallback: VoiceProvider = "openai"): VoiceProvider {
   const normalized = String(value || fallback || "")
@@ -78,7 +78,7 @@ export function parseVoiceRuntimeMode(value: unknown) {
 // Realtime provider capability map
 // ---------------------------------------------------------------------------
 
-export interface ProviderCapabilities {
+interface ProviderCapabilities {
   textInput: boolean;
   updateInstructions: boolean;
   updateTools: boolean;
@@ -91,7 +91,7 @@ export interface ProviderCapabilities {
  * Declares what each realtime runtime mode supports.
  * Keys are VoiceRuntimeMode values (what `session.mode` holds).
  */
-export const REALTIME_PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
+const REALTIME_PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
   openai_realtime: {
     textInput: true,
     updateInstructions: true,

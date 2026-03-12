@@ -1,5 +1,5 @@
-export const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
-export const MEMORY_FACT_SUBJECTS = ["author", "bot", "lore"];
+const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
+const MEMORY_FACT_SUBJECTS = ["author", "bot", "lore"];
 const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
 import { clamp01, clampInt, clampNumber } from "../normalization/numbers.ts";
@@ -104,7 +104,7 @@ export function parseMemoryExtractionJson(rawText) {
   return extractJsonObjectFromText(raw) || { facts: [] };
 }
 
-export function normalizeExtractedFacts(parsed, maxFacts) {
+function normalizeExtractedFacts(parsed, maxFacts) {
   const facts = Array.isArray(parsed?.facts) ? parsed.facts : [];
   const normalized = [];
 

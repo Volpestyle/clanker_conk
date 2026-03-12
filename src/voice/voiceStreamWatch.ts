@@ -425,7 +425,7 @@ const DIRECT_VISION_PROVIDERS = new Set([
   "xai"
 ]);
 
-export function supportsDirectVisionCommentary(manager: StreamWatchManager, settings = null) {
+function supportsDirectVisionCommentary(manager: StreamWatchManager, settings = null) {
   if (!manager.llm || typeof manager.llm.generate !== "function") return false;
   const voiceBinding = getResolvedVoiceGenerationBinding(settings);
   return DIRECT_VISION_PROVIDERS.has(voiceBinding.provider);

@@ -97,7 +97,7 @@ function resolveFactProfile({
   }
 }
 
-export function filterConversationWindowsAgainstRecentMessages(
+function filterConversationWindowsAgainstRecentMessages(
   windows: unknown,
   recentMessages: Array<Record<string, unknown>> = []
 ) {

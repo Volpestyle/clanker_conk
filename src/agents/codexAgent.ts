@@ -18,7 +18,7 @@ export function getActiveCodexAgentTaskCount(): number {
   return activeCodexTaskCount.current;
 }
 
-export interface CodexAgentSessionOptions {
+interface CodexAgentSessionOptions {
   scopeKey: string;
   model: string;
   costProvider?: string;

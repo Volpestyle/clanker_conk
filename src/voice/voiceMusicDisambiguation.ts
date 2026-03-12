@@ -49,7 +49,7 @@ type MusicRuntimeSnapshot = {
   } | null;
 } | null;
 
-export type VoiceMusicDisambiguationHost = VoiceToolCallManager & {
+type VoiceMusicDisambiguationHost = VoiceToolCallManager & {
   snapshotMusicRuntimeState: (
     session: VoiceToolRuntimeSessionLike | null | undefined
   ) => MusicRuntimeSnapshot;

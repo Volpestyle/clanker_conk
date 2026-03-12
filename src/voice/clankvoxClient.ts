@@ -37,7 +37,7 @@ type ClankvoxSpawnOptions = {
   selfMute?: boolean;
   timeoutMs?: number;
 };
-export type ClankvoxIpcErrorCode =
+type ClankvoxIpcErrorCode =
   | "invalid_request"
   | "invalid_json"
   | "input_too_large"

@@ -1,4 +1,4 @@
-export type NumericConstraint = {
+type NumericConstraint = {
   min: number;
   max: number;
 };

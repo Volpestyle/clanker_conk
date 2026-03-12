@@ -101,7 +101,7 @@ export type RealtimeFunctionTool = {
   continuationPolicy?: "always" | "if_no_spoken_text" | "never";
 };
 
-export interface SubAgentTurnResult {
+interface SubAgentTurnResult {
   isError?: boolean;
   errorMessage?: string | null;
   text: string;

@@ -167,7 +167,7 @@ type OpenAiComputerResponse = {
   };
 };
 
-export type OpenAiComputerUseResult = {
+type OpenAiComputerUseResult = {
   text: string;
   steps: number;
   totalCostUsd: number;

@@ -148,7 +148,7 @@ type VoiceGoldenHarnessReport = {
   };
 };
 
-export type VoiceGoldenCaseProgressEvent = {
+type VoiceGoldenCaseProgressEvent = {
   phase: "start" | "done";
   mode: VoiceGoldenMode;
   iteration: number;

@@ -388,7 +388,7 @@ export function createCodeAgentSession(
   }
 }
 
-export function createBrowserAgentSession(
+function createBrowserAgentSession(
   ctx: AgentContext,
   {
     settings,

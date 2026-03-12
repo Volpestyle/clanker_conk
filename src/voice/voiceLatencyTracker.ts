@@ -20,7 +20,7 @@ type VoiceLatencySessionLike = {
   latencyStages?: VoiceLatencyStageEntry[] | null;
 };
 
-export interface VoiceLatencyTrackerHost {
+interface VoiceLatencyTrackerHost {
   store: VoiceLatencyStoreLike;
 }
 

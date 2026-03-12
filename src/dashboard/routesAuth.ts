@@ -8,7 +8,7 @@ const DASHBOARD_SESSION_COOKIE_NAME = "dashboard_session";
 const DASHBOARD_SESSION_MAX_AGE_SECONDS = 60 * 60 * 12;
 type DashboardCookieContext = Parameters<typeof getSignedCookie>[0];
 
-export interface DashboardAuthState {
+interface DashboardAuthState {
   authenticated: boolean;
   requiresToken: boolean;
   publicHttpsEnabled: boolean;
@@ -16,7 +16,7 @@ export interface DashboardAuthState {
   configurationError: string | null;
 }
 
-export interface AuthRouteDeps {
+interface AuthRouteDeps {
   appConfig: DashboardAppConfig;
   publicHttpsEntrypoint: DashboardPublicHttpsEntrypoint | null;
 }

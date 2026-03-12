@@ -175,7 +175,7 @@ export function normalizeVoiceDefaultInterruptionMode(value: unknown, fallback: 
   return fallback;
 }
 
-export function normalizeReflectionStrategy(value: unknown, fallback: string) {
+function normalizeReflectionStrategy(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 64).toLowerCase();
   if (normalized === "one_pass_main") return "one_pass_main";
   if (normalized === "two_pass_extract_then_main") return "two_pass_extract_then_main";
@@ -220,7 +220,7 @@ export function normalizeDiscoverySourceMap(
   };
 }
 
-export function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
+function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 40).toLowerCase();
   if (normalized === "classifier_gate") return "classifier_gate";
   if (normalized === "generation_decides") return "generation_decides";

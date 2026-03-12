@@ -17,7 +17,7 @@ const VALID_VERBOSITY_LEVELS = ["all", "essential", "minimal", "none"] as const;
 type OperationalMessageVerbosity = (typeof VALID_VERBOSITY_LEVELS)[number];
 
 /** Map (event, reason) to a tier so the verbosity setting can decide what to suppress. */
-export function classifyOperationalMessageTier(
+function classifyOperationalMessageTier(
   event: string,
   reason: string | null
 ): OperationalMessageTier {
@@ -72,7 +72,7 @@ export function classifyOperationalMessageTier(
  *   "allow_skip" — compose + send but LLM may return [SKIP]
  *   "suppress" — skip entirely, no LLM call, no channel message (just log)
  */
-export function resolveMessageDisposition(
+function resolveMessageDisposition(
   mustNotify: boolean,
   tier: OperationalMessageTier,
   verbosity: OperationalMessageVerbosity

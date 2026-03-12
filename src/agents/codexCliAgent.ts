@@ -18,7 +18,7 @@ export function getActiveCodexCliAgentTaskCount(): number {
   return activeCodexCliTaskCount.current;
 }
 
-export interface CodexCliAgentSessionOptions {
+interface CodexCliAgentSessionOptions {
   scopeKey: string;
   cwd: string;
   model: string;

@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import { getConnInfo } from "hono/bun";
 
 export const STREAM_INGEST_API_PATH = "/voice/stream-ingest/frame";
-export const DASHBOARD_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
+const DASHBOARD_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
 
 export type DashboardEnv = {
   Bindings: {

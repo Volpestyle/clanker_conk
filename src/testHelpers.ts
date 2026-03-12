@@ -34,7 +34,7 @@ type TestDashboardServerResult = {
   memoryCalls: unknown[];
 };
 
-export function isListenPermissionError(error: unknown): boolean {
+function isListenPermissionError(error: unknown): boolean {
   const errorLike = (typeof error === "object" && error !== null ? error : {}) as ErrorLike;
   const code = String(errorLike.code || "").toUpperCase();
   const message = String(errorLike.message || "");
@@ -47,11 +47,11 @@ export function isListenPermissionError(error: unknown): boolean {
   );
 }
 
-export function envFlag(name: string, fallback = false): boolean {
+function envFlag(name: string, fallback = false): boolean {
   return parseBooleanFlag(process.env[name], fallback);
 }
 
-export function envNumber(name: string, fallback: number): number {
+function envNumber(name: string, fallback: number): number {
   return parseNumberOrFallback(process.env[name], fallback);
 }
 

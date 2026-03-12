@@ -4,7 +4,7 @@ import type { DashboardApp, DashboardSseClient } from "./shared.ts";
 import type { Store } from "../store/store.ts";
 import { parseBoundedInt } from "./shared.ts";
 
-export interface MetricsRouteDeps {
+interface MetricsRouteDeps {
   store: Store;
   publicHttpsEntrypoint: DashboardPublicHttpsEntrypoint | null;
   getStatsPayload: (guildId?: string | null) => unknown;

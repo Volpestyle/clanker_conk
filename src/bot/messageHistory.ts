@@ -49,7 +49,7 @@ type HistoryMember = {
   } | null;
 };
 
-export type HistoryMessage = {
+type HistoryMessage = {
   id?: string;
   createdTimestamp?: number;
   guildId?: string;
@@ -387,7 +387,7 @@ export function parseHistoryImageReference(rawUrl: string) {
   }
 }
 
-export function normalizeImageContentTypeFromExt(rawExt: string) {
+function normalizeImageContentTypeFromExt(rawExt: string) {
   const ext = String(rawExt || "")
     .trim()
     .toLowerCase()

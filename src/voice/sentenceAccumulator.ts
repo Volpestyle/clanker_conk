@@ -101,7 +101,7 @@ function isTooSmallStandalonePostFirstChunk(text: string) {
   );
 }
 
-export interface SentenceAccumulatorOptions {
+interface SentenceAccumulatorOptions {
   onSentence: (text: string, index: number) => void;
   eagerFirstChunk?: boolean;
   eagerMinChars?: number;

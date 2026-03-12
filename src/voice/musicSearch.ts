@@ -11,12 +11,12 @@ export type MusicSearchResult = {
   externalUrl: string;
 };
 
-export type MusicSearchOptions = {
+type MusicSearchOptions = {
   platform?: MusicPlatform | "auto";
   limit?: number;
 };
 
-export type MusicSearchResponse = {
+type MusicSearchResponse = {
   ok: boolean;
   query: string;
   results: MusicSearchResult[];

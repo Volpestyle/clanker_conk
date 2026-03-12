@@ -124,7 +124,7 @@ export async function generateVoiceTurnReply(
   return await generateVoiceTurnReplyForVoiceReplies(runtime.toVoiceReplyRuntime(), payload);
 }
 
-export function resolveDashboardVoiceJoinRequester(
+function resolveDashboardVoiceJoinRequester(
   guild: DashboardGuildLike | null | undefined,
   requesterUserId = ""
 ) {
@@ -181,7 +181,7 @@ export function resolveDashboardVoiceJoinRequester(
   };
 }
 
-export function resolveDashboardVoiceJoinTextChannel(
+function resolveDashboardVoiceJoinTextChannel(
   runtime: VoiceCoordinationRuntime,
   {
     guild,

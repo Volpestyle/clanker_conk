@@ -13,7 +13,7 @@ import { captionImage } from "./captionImage.ts";
 const DEFAULT_MAX_ENTRIES = 200;
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-export interface CachedCaption {
+interface CachedCaption {
     caption: string;
     captionedAt: number;
     provider: string | null;

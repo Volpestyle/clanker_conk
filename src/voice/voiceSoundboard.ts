@@ -57,7 +57,7 @@ type SoundboardPlayResult = {
   message?: string | null;
 };
 
-export interface VoiceSoundboardHost {
+interface VoiceSoundboardHost {
   client: {
     user?: {
       id?: string | null;

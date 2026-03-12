@@ -489,6 +489,6 @@ export function normalizeCodexCliError(
   };
 }
 
-export function clampCodexCliMaxTurns(value: unknown, fallback = 30) {
+function clampCodexCliMaxTurns(value: unknown, fallback = 30) {
   return clampInt(value, 1, Math.max(1, clampInt(fallback, 1, 10_000)));
 }

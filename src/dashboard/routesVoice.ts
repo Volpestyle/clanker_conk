@@ -4,7 +4,7 @@ import type { DashboardApp, DashboardSseClient } from "./shared.ts";
 import type { Store } from "../store/store.ts";
 import { parseBoundedInt, readDashboardBody, STREAM_INGEST_API_PATH, toRecord } from "./shared.ts";
 
-export interface VoiceRouteDeps {
+interface VoiceRouteDeps {
   store: Store;
   bot: DashboardBot;
   memory: DashboardMemory;

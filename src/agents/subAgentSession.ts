@@ -48,7 +48,7 @@ export interface SubAgentSession {
   close(): void;
 }
 
-export type SubAgentSessionFactory = (opts: {
+type SubAgentSessionFactory = (opts: {
   type: "code" | "browser";
   scopeKey: string;
   config: Record<string, unknown>;

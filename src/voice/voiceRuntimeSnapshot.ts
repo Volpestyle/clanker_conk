@@ -58,7 +58,7 @@ type VoiceRuntimeSnapshotDurableContextEntry = {
   at: string | null;
 };
 
-export interface VoiceRuntimeSnapshotDeps {
+interface VoiceRuntimeSnapshotDeps {
   client?: RuntimeSnapshotClientLike;
   replyManager: RuntimeSnapshotReplyManagerLike;
   deferredActionQueue: RuntimeSnapshotDeferredActionQueueLike;

@@ -34,14 +34,14 @@ type StreamUrlCacheEntry = {
   expiresAt: number;
 };
 
-export type MusicPlayerStatus = {
+type MusicPlayerStatus = {
   playing: boolean;
   paused: boolean;
   currentTrack: MusicSearchResult | null;
   position: number;
 };
 
-export type MusicPlayerResult = {
+type MusicPlayerResult = {
   ok: boolean;
   error: string | null;
   track: MusicSearchResult | null;

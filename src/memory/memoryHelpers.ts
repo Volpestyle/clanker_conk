@@ -194,7 +194,7 @@ export function normalizeHighlightText(text) {
     .trim();
 }
 
-export function parseDailyEntryLine(line) {
+function parseDailyEntryLine(line) {
   if (!String(line).startsWith("- ")) return null;
   const payload = line.slice(2).trim();
   const parts = payload.split(" | ");

@@ -7,7 +7,7 @@ import {
   normalizeMemoryLineInput
 } from "./memoryHelpers.ts";
 
-export type MemoryToolNamespaceScope = {
+type MemoryToolNamespaceScope = {
   ok: boolean;
   reason?: string;
   namespace?: string;

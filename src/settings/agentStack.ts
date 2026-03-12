@@ -19,7 +19,7 @@ type ModelBinding = {
   model?: string;
 };
 
-export type CapabilityExecutionPolicy = {
+type CapabilityExecutionPolicy = {
   mode?: string;
   model?: ModelBinding;
   temperature?: number;
@@ -34,7 +34,7 @@ type DevTeamRoles = {
   research?: SettingsCodingWorkerName;
 };
 
-export type ResolvedAgentStack = {
+type ResolvedAgentStack = {
   preset: string;
   harness: string;
   sessionPolicy?: AgentSessionPolicy;
@@ -163,7 +163,7 @@ function resolveCodingWorkerName(
   return availableWorkers[0] || fallbackWorker || "codex_cli";
 }
 
-export function getIdentitySettings(settings: unknown): Settings["identity"] {
+function getIdentitySettings(settings: unknown): Settings["identity"] {
   return getSettingsSection(settings, (input) => input.identity, DEFAULT_SETTINGS.identity);
 }
 
@@ -202,7 +202,7 @@ export function getDevTaskPermissions(settings: unknown): Settings["permissions"
   );
 }
 
-export function getInteractionSettings(settings: unknown): Settings["interaction"] {
+function getInteractionSettings(settings: unknown): Settings["interaction"] {
   return getSettingsSection(settings, (input) => input.interaction, DEFAULT_SETTINGS.interaction);
 }
 
@@ -238,7 +238,7 @@ export function getStartupSettings(settings: unknown): Settings["interaction"]["
   );
 }
 
-export function getSessionOrchestrationSettings(settings: unknown): Settings["interaction"]["sessions"] {
+function getSessionOrchestrationSettings(settings: unknown): Settings["interaction"]["sessions"] {
   return getSettingsSection(
     settings,
     (input) => input.interaction?.sessions,
@@ -246,7 +246,7 @@ export function getSessionOrchestrationSettings(settings: unknown): Settings["in
   );
 }
 
-export function getAgentStackSettings(settings: unknown): Settings["agentStack"] {
+function getAgentStackSettings(settings: unknown): Settings["agentStack"] {
   return getSettingsSection(settings, (input) => input.agentStack, DEFAULT_SETTINGS.agentStack);
 }
 
@@ -338,7 +338,7 @@ export function getVoiceSoundboardSettings(settings: unknown): Settings["voice"]
   );
 }
 
-export function getMediaSettings(settings: unknown): Settings["media"] {
+function getMediaSettings(settings: unknown): Settings["media"] {
   return getSettingsSection(settings, (input) => input.media, DEFAULT_SETTINGS.media);
 }
 
@@ -358,7 +358,7 @@ export function getVideoContextSettings(settings: unknown): Settings["media"]["v
   );
 }
 
-export function getMusicSettings(settings: unknown): Settings["music"] {
+function getMusicSettings(settings: unknown): Settings["music"] {
   return getSettingsSection(settings, (input) => input.music, DEFAULT_SETTINGS.music);
 }
 
@@ -366,7 +366,7 @@ export function getAutomationsSettings(settings: unknown): Settings["automations
   return getSettingsSection(settings, (input) => input.automations, DEFAULT_SETTINGS.automations);
 }
 
-export function getRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"] {
+function getRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"] {
   const agentStack = getAgentStackSettings(settings);
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig, agentStack.runtimeConfig);
 }
@@ -383,7 +383,7 @@ export function getVoiceRuntimeConfig(settings: unknown): Settings["agentStack"]
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.voice, getRuntimeConfig(settings).voice);
 }
 
-export function getClaudeOAuthSessionRuntimeConfig(
+function getClaudeOAuthSessionRuntimeConfig(
   settings: unknown
 ): Settings["agentStack"]["runtimeConfig"]["claudeOAuthSession"] {
   return mergeWithDefaults(

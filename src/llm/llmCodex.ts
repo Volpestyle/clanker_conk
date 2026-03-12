@@ -18,7 +18,7 @@ type CodexUsage = {
   cacheReadTokens: number;
 };
 
-export interface CodexRunResult {
+interface CodexRunResult {
   responseId: string;
   text: string;
   usage: CodexUsage;
@@ -28,7 +28,7 @@ export interface CodexRunResult {
   status: string;
 }
 
-export interface RunCodexTaskOptions {
+interface RunCodexTaskOptions {
   openai: OpenAI;
   instruction: string;
   model: string;
@@ -37,7 +37,7 @@ export interface RunCodexTaskOptions {
   signal?: AbortSignal;
 }
 
-export interface RunCodexSessionTurnOptions {
+interface RunCodexSessionTurnOptions {
   openai: OpenAI;
   previousResponseId?: string | null;
   input: string;

@@ -31,7 +31,7 @@ type DeferredQueueStoreLike = {
 
 const DEFERRED_FLUSH_RETRY_DELAY_MS = 250;
 
-export interface DeferredActionQueueHost {
+interface DeferredActionQueueHost {
   client: {
     user?: {
       id?: string | null;

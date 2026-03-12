@@ -2,12 +2,12 @@ import { getVoiceAdmissionSettings } from "../settings/agentStack.ts";
 import { clamp } from "../utils.ts";
 import type { MusicPlaybackPhase, VoiceSession } from "./voiceSessionTypes.ts";
 
-export const DEFAULT_MUSIC_WAKE_LATCH_SECONDS = 30;
+const DEFAULT_MUSIC_WAKE_LATCH_SECONDS = 30;
 
 type MusicWakeLatchSettings = Record<string, unknown> | null;
 type MusicWakeLatchSessionLike = Partial<VoiceSession> | null | undefined;
 
-export function resolveMusicWakeLatchSeconds(settings: MusicWakeLatchSettings): number {
+function resolveMusicWakeLatchSeconds(settings: MusicWakeLatchSettings): number {
   return clamp(
     Number(getVoiceAdmissionSettings(settings).musicWakeLatchSeconds) || DEFAULT_MUSIC_WAKE_LATCH_SECONDS,
     5,

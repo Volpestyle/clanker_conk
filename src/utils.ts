@@ -38,7 +38,7 @@ export function deepMerge(base, patch) {
   return out;
 }
 
-export function uniqueIdList(input) {
+function uniqueIdList(input) {
   if (Array.isArray(input)) {
     return [...new Set(input.map((x) => String(x).trim()).filter(Boolean))];
   }

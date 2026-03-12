@@ -1,4 +1,4 @@
-export type MusicPlaybackTrack = {
+type MusicPlaybackTrack = {
   id: string;
   title: string;
   artistNames: string[];

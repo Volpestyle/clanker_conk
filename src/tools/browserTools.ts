@@ -18,7 +18,7 @@ type BrowserToolParams =
   | BrowserExtractParams
   | Record<string, never>;
 
-export type BrowserToolResult = {
+type BrowserToolResult = {
   text: string;
   imageInputs?: ImageInput[];
   isError?: boolean;

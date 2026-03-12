@@ -31,7 +31,7 @@ interface CodeAgentTrace {
   role?: CodeAgentRole | null;
 }
 
-export type CodeAgentProvider = "codex" | "codex-cli" | "claude-code" | "auto";
+type CodeAgentProvider = "codex" | "codex-cli" | "claude-code" | "auto";
 export type CodeAgentRole = "design" | "implementation" | "review" | "research";
 
 const CODE_AGENT_PROVIDER_VALUES = new Set<CodeAgentProvider>(["codex", "codex-cli", "claude-code", "auto"]);
@@ -113,7 +113,7 @@ export function resolveCodeAgentCwd(settingsCwd: string, fallbackBaseDir: string
   return path.resolve(fallbackBaseDir);
 }
 
-export interface CodeAgentConfig {
+interface CodeAgentConfig {
   role: CodeAgentRole;
   worker: "codex" | "codex_cli" | "claude_code";
   cwd: string;
@@ -403,7 +403,7 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
 // CodeAgentSession — persistent multi-turn wrapper around ClaudeCliStreamSession
 // ---------------------------------------------------------------------------
 
-export interface CodeAgentSessionOptions {
+interface CodeAgentSessionOptions {
   scopeKey: string;
   cwd: string;
   model: string;
@@ -419,7 +419,7 @@ export interface CodeAgentSessionOptions {
 
 const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
 
-export class CodeAgentSession implements SubAgentSession {
+class CodeAgentSession implements SubAgentSession {
   readonly id: string;
   readonly type = "code" as const;
   readonly createdAt: number;
@@ -612,7 +612,7 @@ export class CodeAgentSession implements SubAgentSession {
   }
 }
 
-export interface CreateCodeAgentSessionOptions {
+interface CreateCodeAgentSessionOptions {
   scopeKey: string;
   cwd: string;
   provider: CodeAgentProvider;

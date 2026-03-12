@@ -6,14 +6,14 @@ import {
   VOICE_SILENCE_GATE_RMS_MAX
 } from "./voiceSessionManager.constants.ts";
 
-export type MonoPcmSignalAnalysis = {
+type MonoPcmSignalAnalysis = {
   sampleCount: number;
   rms: number;
   peak: number;
   activeSampleRatio: number;
 };
 
-export type PcmSilenceGateEvaluation = MonoPcmSignalAnalysis & {
+type PcmSilenceGateEvaluation = MonoPcmSignalAnalysis & {
   clipDurationMs: number;
   drop: boolean;
 };

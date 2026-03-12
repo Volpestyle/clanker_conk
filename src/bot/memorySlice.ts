@@ -2,7 +2,7 @@ import { collectMemoryFactHints } from "./botHelpers.ts";
 import { clamp } from "../utils.ts";
 import type { BotContext } from "./botContext.ts";
 
-export type MemoryTrace = Record<string, unknown> & {
+type MemoryTrace = Record<string, unknown> & {
   source?: string;
 };
 
@@ -12,7 +12,7 @@ type MemorySettings = {
   };
 } & Record<string, unknown>;
 
-export type FactProfileSlice = {
+type FactProfileSlice = {
   participantProfiles: Array<Record<string, unknown>>;
   selfFacts: Array<Record<string, unknown>>;
   loreFacts: Array<Record<string, unknown>>;

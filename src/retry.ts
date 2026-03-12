@@ -1,9 +1,9 @@
-export const RETRY_BASE_DELAY_MS = 180;
-export const RETRY_MAX_DELAY_MS = 900;
+const RETRY_BASE_DELAY_MS = 180;
+const RETRY_MAX_DELAY_MS = 900;
 
-export const RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
-export const RETRYABLE_FETCH_ERROR_CODES = new Set([
+const RETRYABLE_FETCH_ERROR_CODES = new Set([
   "ECONNRESET",
   "ENOTFOUND",
   "ETIMEDOUT",
@@ -13,7 +13,7 @@ export const RETRYABLE_FETCH_ERROR_CODES = new Set([
   "UND_ERR_BODY_TIMEOUT"
 ]);
 
-export type ErrorWithAttempts = Error & {
+type ErrorWithAttempts = Error & {
   attempts?: number;
 };
 

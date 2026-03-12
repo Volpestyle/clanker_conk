@@ -39,7 +39,7 @@ export type GifBudgetState = {
   canFetch: boolean;
 };
 
-export type MediaGenerationCapabilities = {
+type MediaGenerationCapabilities = {
   simpleImageReady: boolean;
   complexImageReady: boolean;
   videoReady: boolean;
@@ -48,7 +48,7 @@ export type MediaGenerationCapabilities = {
   videoModel: string | null;
 };
 
-export type WebSearchBudgetState = {
+type WebSearchBudgetState = {
   maxPerHour: number;
   used: number;
   successCount: number;
@@ -64,7 +64,7 @@ export type BrowserBudgetState = {
   canBrowse: boolean;
 };
 
-export type VideoContextBudgetState = {
+type VideoContextBudgetState = {
   maxPerHour: number;
   used: number;
   successCount: number;
@@ -117,7 +117,7 @@ type BuildImageLookupContextOptions = {
   excludedUrls?: string[];
 };
 
-export type VideoReplyContextState = {
+type VideoReplyContextState = {
   requested: boolean;
   enabled: boolean;
   used: boolean;
@@ -131,7 +131,7 @@ export type VideoReplyContextState = {
   budget: VideoContextBudgetState;
 };
 
-export type WebSearchContextState = {
+type WebSearchContextState = {
   requested: boolean;
   configured: boolean;
   enabled: boolean;
@@ -163,7 +163,7 @@ export type BrowserBrowseContextState = {
   budget: BrowserBudgetState;
 };
 
-export type MemoryLookupContextState = {
+type MemoryLookupContextState = {
   enabled: boolean;
   requested: boolean;
   used: boolean;
@@ -172,7 +172,7 @@ export type MemoryLookupContextState = {
   error: string | null;
 };
 
-export type ImageLookupContextState = {
+type ImageLookupContextState = {
   enabled: boolean;
   requested: boolean;
   used: boolean;
@@ -300,7 +300,7 @@ export function getWebSearchBudgetState(
   };
 }
 
-export function getBrowserBudgetState(
+function getBrowserBudgetState(
   ctx: BudgetContext,
   settings: Settings
 ): BrowserBudgetState {
@@ -317,7 +317,7 @@ export function getBrowserBudgetState(
   };
 }
 
-export function getVideoContextBudgetState(
+function getVideoContextBudgetState(
   ctx: BudgetContext,
   settings: Settings
 ): VideoContextBudgetState {

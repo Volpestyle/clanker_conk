@@ -45,7 +45,7 @@ export interface AssistantOutputState {
   lastTrigger: string | null;
 }
 
-export interface AssistantOutputSignals {
+interface AssistantOutputSignals {
   liveAudioStreaming: boolean;
   pendingResponse: boolean;
   openAiActiveResponse: boolean;
@@ -74,7 +74,7 @@ function normalizePositiveInteger(value: number | null | undefined): number | nu
   return Math.round(normalized);
 }
 
-export function normalizeAssistantOutputPhase(
+function normalizeAssistantOutputPhase(
   phase: string | null | undefined
 ): AssistantOutputPhase {
   switch (String(phase || "").trim()) {
@@ -99,7 +99,7 @@ export function normalizeTtsPlaybackState(
     : TTS_PLAYBACK_STATE.IDLE;
 }
 
-export function normalizeAssistantOutputReason(
+function normalizeAssistantOutputReason(
   reason: string | null | undefined
 ): AssistantOutputReason | null {
   switch (String(reason || "").trim()) {
@@ -120,7 +120,7 @@ export function normalizeAssistantOutputReason(
   }
 }
 
-export function assistantOutputPhaseToReason(
+function assistantOutputPhaseToReason(
   phase: AssistantOutputPhase,
   {
     pendingResponse = false,

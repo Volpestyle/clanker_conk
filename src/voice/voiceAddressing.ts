@@ -37,7 +37,7 @@ type BuildVoiceAddressingStateRow = {
   ageMs: number | null;
 };
 
-export type VoiceDirectAddressSignal = {
+type VoiceDirectAddressSignal = {
   directAddressed: boolean;
   nameCueDetected: boolean;
   addressedOrNamed: boolean;

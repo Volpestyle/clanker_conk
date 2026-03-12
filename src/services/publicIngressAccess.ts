@@ -9,14 +9,14 @@ const API_ACCESS_KIND = {
   publicSessionToken: "public_session_token"
 };
 
-export function normalizeHost(rawHost) {
+function normalizeHost(rawHost) {
   return String(rawHost || "")
     .trim()
     .toLowerCase()
     .replace(/\.$/, "");
 }
 
-export function getPublicTunnelHost(publicHttpsState) {
+function getPublicTunnelHost(publicHttpsState) {
   const url = String(publicHttpsState?.publicUrl || "").trim();
   if (!url) return "";
   try {

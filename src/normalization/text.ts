@@ -1,9 +1,9 @@
-export type TextReplacement = {
+type TextReplacement = {
   pattern: RegExp;
   replacement: string;
 };
 
-export type NormalizeTextOptions = {
+type NormalizeTextOptions = {
   maxLen?: number;
   minLen?: number;
   ellipsis?: boolean;

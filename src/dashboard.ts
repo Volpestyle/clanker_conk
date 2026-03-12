@@ -194,7 +194,7 @@ export interface DashboardScreenShareSessionManager {
   }): Promise<unknown> | unknown;
 }
 
-export interface DashboardDeps {
+interface DashboardDeps {
   appConfig: DashboardAppConfig;
   store: Store;
   bot: DashboardBot;

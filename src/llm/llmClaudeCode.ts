@@ -43,7 +43,7 @@ export function safeJsonParse(value, fallback = null) {
   return safeJsonParseFromString(value, fallback);
 }
 
-export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", signal = undefined as AbortSignal | undefined }) {
+function runClaudeCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", signal = undefined as AbortSignal | undefined }) {
   return new Promise<ClaudeCliResult>((resolve, reject) => {
     const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = { stdio: ["pipe", "pipe", "pipe"] };
     const normalizedCwd = String(cwd || "").trim();
@@ -755,7 +755,7 @@ export function parseClaudeCodeJsonOutput(rawOutput) {
   });
 }
 
-export function buildCodeAgentCliArgs({ model, maxTurns = 30, instruction = "" }) {
+function buildCodeAgentCliArgs({ model, maxTurns = 30, instruction = "" }) {
   const args = [
     "-p",
     "--verbose",

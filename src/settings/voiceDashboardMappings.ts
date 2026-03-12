@@ -1,13 +1,13 @@
-export const VOICE_RUNTIME_SELECTIONS = [
+const VOICE_RUNTIME_SELECTIONS = [
   "xai",
   "openai",
   "gemini",
   "elevenlabs"
 ] as const;
 
-export type VoiceRuntimeSelection = (typeof VOICE_RUNTIME_SELECTIONS)[number];
+type VoiceRuntimeSelection = (typeof VOICE_RUNTIME_SELECTIONS)[number];
 
-export function normalizeVoiceRuntimeSelection(
+function normalizeVoiceRuntimeSelection(
   value: unknown,
   fallback: VoiceRuntimeSelection = "openai"
 ): VoiceRuntimeSelection {

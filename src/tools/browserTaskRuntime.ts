@@ -13,7 +13,7 @@ type BrowserTaskActionEntry = {
   usdCost?: number;
 };
 
-export type BrowserTaskTrace = {
+type BrowserTaskTrace = {
   guildId?: string | null;
   channelId?: string | null;
   userId?: string | null;
@@ -24,7 +24,7 @@ type BrowserTaskStore = {
   logAction: (entry: BrowserTaskActionEntry) => void;
 };
 
-export type BrowserBrowseTaskOptions = {
+type BrowserBrowseTaskOptions = {
   llm: LLMService;
   browserManager: BrowserManager;
   store: BrowserTaskStore;
@@ -41,7 +41,7 @@ export type BrowserBrowseTaskOptions = {
   signal?: AbortSignal;
 };
 
-export type BrowserBrowseTaskResult = {
+type BrowserBrowseTaskResult = {
   text: string;
   steps: number;
   totalCostUsd: number;
@@ -49,7 +49,7 @@ export type BrowserBrowseTaskResult = {
   imageInputs?: ImageInput[];
 };
 
-export type ActiveBrowserTask = {
+type ActiveBrowserTask = {
   taskId: string;
   scopeKey: string;
   abortController: AbortController;
