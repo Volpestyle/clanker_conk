@@ -78,6 +78,7 @@ test("dashboard api sends same-origin credentials without dashboard token header
     );
 
     assert.equal(seenOptions.method, "PUT");
+    assert.equal(seenOptions.cache, "no-store");
     assert.equal(seenOptions.credentials, "same-origin");
     assert.equal(seenOptions.headers["Content-Type"], "application/json");
     assert.equal("x-dashboard-token" in seenOptions.headers, false);

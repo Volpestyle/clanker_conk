@@ -27,7 +27,7 @@ interface RuntimeSettingsRecord {
   updatedAt: string;
 }
 
-type VersionedSettingsPatchResult =
+type VersionedSettingsWriteResult =
   | {
       ok: true;
       intent: SettingsInput;
@@ -108,7 +108,7 @@ export function patchSettingsWithVersion(
   store: SettingsStore,
   patch: unknown,
   expectedUpdatedAt: string
-): VersionedSettingsPatchResult {
+): VersionedSettingsWriteResult {
   const current = getSettingsRecord(store);
   if (current.updatedAt && expectedUpdatedAt !== current.updatedAt) {
     return {
@@ -118,6 +118,41 @@ export function patchSettingsWithVersion(
   }
 
   const nextIntent = mergeSettingsPatch(current.intent, patch);
+  const nextSettings = normalizeSettings(nextIntent);
+  const nextUpdatedAt = nowIso();
+  const result = store.db
+    .prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = ? AND updated_at = ?")
+    .run(JSON.stringify(nextIntent), nextUpdatedAt, SETTINGS_KEY, current.updatedAt);
+
+  if (Number(result.changes || 0) !== 1) {
+    return {
+      ok: false,
+      ...getSettingsRecord(store)
+    };
+  }
+
+  return {
+    ok: true,
+    intent: nextIntent,
+    settings: nextSettings,
+    updatedAt: nextUpdatedAt
+  };
+}
+
+export function replaceSettingsWithVersion(
+  store: SettingsStore,
+  next: unknown,
+  expectedUpdatedAt: string
+): VersionedSettingsWriteResult {
+  const current = getSettingsRecord(store);
+  if (current.updatedAt && expectedUpdatedAt !== current.updatedAt) {
+    return {
+      ok: false,
+      ...current
+    };
+  }
+
+  const nextIntent = minimizeSettingsIntent(next);
   const nextSettings = normalizeSettings(nextIntent);
   const nextUpdatedAt = nowIso();
   const result = store.db

@@ -9,6 +9,7 @@ export const appConfig = {
   dashboardPort: parseNumberOrFallback(process.env.DASHBOARD_PORT, 8787),
   dashboardHost: normalizeDashboardHost(process.env.DASHBOARD_HOST),
   dashboardToken: process.env.DASHBOARD_TOKEN ?? "",
+  dashboardSettingsSaveDebug: parseBooleanFlag(process.env.DASHBOARD_SETTINGS_SAVE_DEBUG, false),
   publicApiToken: process.env.PUBLIC_API_TOKEN ?? "",
   publicHttpsEnabled: parseBooleanFlag(process.env.PUBLIC_HTTPS_ENABLED, false),
   publicHttpsTargetUrl: process.env.PUBLIC_HTTPS_TARGET_URL ?? "",

@@ -10,6 +10,7 @@ import {
   type DashboardSettingsEnvelope
 } from "../../src/settings/dashboardSettingsState.ts";
 import { minimizeSettingsIntent } from "../../src/settings/settingsIntent.ts";
+import { normalizeSettings } from "../../src/store/settingsNormalization.ts";
 import {
   formatCommaList,
   formatLineList,
@@ -582,6 +583,8 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.ambientReplyEagerness ?? defaultVoice.ambientReplyEagerness,
     voiceStreamingEnabled:
       resolved?.voice?.streaming?.enabled ?? defaultVoiceStreaming.enabled,
+    voiceStreamingMinSentencesPerChunk:
+      resolved?.voice?.streaming?.minSentencesPerChunk ?? defaultVoiceStreaming.minSentencesPerChunk,
     voiceStreamingEagerFirstChunkChars:
       resolved?.voice?.streaming?.eagerFirstChunkChars ?? defaultVoiceStreaming.eagerFirstChunkChars,
     voiceStreamingMaxBufferChars:
@@ -1046,7 +1049,7 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
   return validations[0] || null;
 }
 
-export function formToSettingsPatch(form: SettingsForm): SettingsInput {
+function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
   const discoveryFeedEnabled = Boolean(form.discoveryFeedEnabled);
   const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);
   const normalizedCodeAgentProvider = String(form.codeAgentProvider || "auto").trim().toLowerCase();
@@ -1232,7 +1235,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
           }
         }
       : undefined;
-  return minimizeSettingsIntent({
+  return {
     identity: {
       botName: form.botName.trim(),
       botNameAliases: parseUniqueList(form.botNameAliases)
@@ -1577,6 +1580,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         ambientReplyEagerness: Number(form.voiceAmbientReplyEagerness),
         streaming: {
           enabled: Boolean(form.voiceStreamingEnabled),
+          minSentencesPerChunk: Number(form.voiceStreamingMinSentencesPerChunk),
           eagerFirstChunkChars: Number(form.voiceStreamingEagerFirstChunkChars),
           maxBufferChars: Number(form.voiceStreamingMaxBufferChars)
         },
@@ -1641,7 +1645,15 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     automations: {
       enabled: Boolean(form.automationsEnabled)
     }
-  });
+  };
+}
+
+export function formToSettingsPatch(form: SettingsForm): SettingsInput {
+  return minimizeSettingsIntent(buildSettingsInputFromForm(form));
+}
+
+export function formToSettingsSnapshot(form: SettingsForm) {
+  return normalizeSettings(buildSettingsInputFromForm(form));
 }
 
 export function sanitizeAliasListInput(value: unknown) {

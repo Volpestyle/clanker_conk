@@ -24,12 +24,16 @@ interface SettingsRouteDeps {
 export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps) {
   const { store, bot, appConfig } = deps;
   const providerAuth = resolveProviderAuth(appConfig);
+  const applyNoStore = (c: { header(name: string, value: string): void }) => {
+    c.header("Cache-Control", "no-store");
+  };
 
   app.get("/api/health", (c) => {
     return c.json({ ok: true });
   });
 
   app.get("/api/settings", (c) => {
+    applyNoStore(c);
     const current = store.getSettingsRecord();
     return c.json(buildSettingsResponse({
       intent: current.intent,
@@ -40,6 +44,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   });
 
   app.put("/api/settings", async (c) => {
+    applyNoStore(c);
     const body = await readDashboardBody(c);
     const meta = toRecord(body._meta);
     const expectedUpdatedAt = String(meta.expectedUpdatedAt || "").trim();
@@ -47,6 +52,9 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
 
     const current = store.getSettingsRecord();
     if (!expectedUpdatedAt) {
+      console.warn("Rejected dashboard settings save without version metadata", {
+        currentUpdatedAt: current.updatedAt
+      });
       return c.json(
         {
           error: "settings_version_required",
@@ -63,6 +71,10 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     }
 
     if (current.updatedAt && expectedUpdatedAt !== current.updatedAt) {
+      console.warn("Rejected stale dashboard settings save", {
+        expectedUpdatedAt,
+        currentUpdatedAt: current.updatedAt
+      });
       return c.json(
         {
           error: "settings_conflict",
@@ -78,8 +90,12 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
       );
     }
 
-    const saved = store.patchSettingsWithVersion(body, expectedUpdatedAt);
+    const saved = store.replaceSettingsWithVersion(body, expectedUpdatedAt);
     if (!saved.ok) {
+      console.warn("Rejected dashboard settings save after compare-and-swap conflict", {
+        expectedUpdatedAt,
+        currentUpdatedAt: saved.updatedAt
+      });
       return c.json(
         {
           error: "settings_conflict",
@@ -93,6 +109,13 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
         },
         409
       );
+    }
+
+    if (appConfig.dashboardSettingsSaveDebug) {
+      console.info("Saved dashboard settings snapshot", {
+        previousUpdatedAt: current.updatedAt,
+        updatedAt: saved.updatedAt
+      });
     }
 
     let saveAppliedToRuntime = true;
@@ -118,6 +141,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   });
 
   app.post("/api/settings/preset-defaults", async (c) => {
+    applyNoStore(c);
     const body = await readDashboardBody(c);
     const preset = String(body.preset || "claude_oauth").trim();
     // Full reset for the selected preset.
@@ -141,6 +165,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   });
 
   app.post("/api/settings/refresh", async (c) => {
+    applyNoStore(c);
     if (!bot || typeof bot.applyRuntimeSettings !== "function") {
       return c.json(
         {
@@ -166,6 +191,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   // Legacy reset endpoint — same as preset-defaults with the default preset.
   // Preserves channel permissions, same as preset-defaults.
   app.post("/api/settings/reset", async (c) => {
+    applyNoStore(c);
     const current = store.getSettings();
     const settings = normalizeSettings({
       permissions: current.permissions,

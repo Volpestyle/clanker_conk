@@ -6,6 +6,7 @@ const CONFIG_ENV_KEYS = [
   "DASHBOARD_PORT",
   "DASHBOARD_HOST",
   "DASHBOARD_TOKEN",
+  "DASHBOARD_SETTINGS_SAVE_DEBUG",
   "PUBLIC_API_TOKEN",
   "PUBLIC_HTTPS_ENABLED",
   "PUBLIC_HTTPS_TARGET_URL",
@@ -78,6 +79,7 @@ test("config parses explicit env values", async () => {
       DISCORD_TOKEN: "token-1",
       DASHBOARD_PORT: "9191",
       DASHBOARD_HOST: "0.0.0.0",
+      DASHBOARD_SETTINGS_SAVE_DEBUG: "true",
       PUBLIC_HTTPS_ENABLED: "YES",
       PUBLIC_SHARE_SESSION_TTL_MINUTES: "25",
       DEFAULT_PROVIDER: "claude-oauth",
@@ -97,6 +99,7 @@ test("config parses explicit env values", async () => {
       assert.equal(appConfig.discordToken, "token-1");
       assert.equal(appConfig.dashboardPort, 9191);
       assert.equal(appConfig.dashboardHost, "0.0.0.0");
+      assert.equal(appConfig.dashboardSettingsSaveDebug, true);
       assert.equal(appConfig.publicHttpsEnabled, true);
       assert.equal(appConfig.publicShareSessionTtlMinutes, 25);
       assert.equal(appConfig.defaultProvider, "claude-oauth");
@@ -129,6 +132,7 @@ test("config falls back for invalid values", async () => {
       const { appConfig, ensureRuntimeEnv } = await importFreshConfig("fallbacks");
       assert.equal(appConfig.dashboardPort, 8787);
       assert.equal(appConfig.dashboardHost, "127.0.0.1");
+      assert.equal(appConfig.dashboardSettingsSaveDebug, false);
       assert.equal(appConfig.publicHttpsEnabled, false);
       assert.equal(appConfig.publicShareSessionTtlMinutes, 12);
       assert.equal(appConfig.defaultProvider, "anthropic");

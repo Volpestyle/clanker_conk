@@ -37,6 +37,7 @@ export async function api<T = unknown>(url: string, options: ApiOptions = {}): P
   const headers = options.body ? { "Content-Type": "application/json" } : undefined;
   const res = await fetch(url, {
     method: options.method || "GET",
+    cache: "no-store",
     credentials: "same-origin",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined

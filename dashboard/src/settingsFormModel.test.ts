@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   formToSettingsPatch,
+  formToSettingsSnapshot,
   getCodeAgentValidationError,
   getSettingsValidationError,
   resolveBrowserProviderModelOptions,
@@ -45,6 +46,97 @@ function serializeForm(form: ReturnType<typeof settingsToForm>) {
   };
 }
 
+test("settingsFormModel emits a full replacement snapshot for dashboard saves", () => {
+  const effectiveSettings = normalizeSettings({
+    permissions: {
+      replies: {
+        replyChannelIds: ["1", "2"]
+      }
+    },
+    interaction: {
+      activity: {
+        responseWindowEagerness: 60
+      },
+      startup: {
+        catchupEnabled: false
+      }
+    },
+    agentStack: {
+      advancedOverridesEnabled: true,
+      overrides: {
+        browserRuntime: "openai_computer_use",
+        devTeam: {
+          roles: {
+            design: "claude_code",
+            implementation: "claude_code",
+            review: "claude_code",
+            research: "claude_code"
+          }
+        },
+        voiceAdmissionClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: "claude-oauth",
+            model: "claude-sonnet-4-6"
+          }
+        },
+        voiceInterruptClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: "claude-oauth",
+            model: "claude-haiku-4-5"
+          }
+        }
+      },
+      runtimeConfig: {
+        browser: {
+          headed: true
+        },
+        voice: {
+          musicBrain: {
+            mode: "dedicated_model",
+            model: {
+              provider: "claude-oauth",
+              model: "claude-haiku-4-5"
+            }
+          },
+          generation: {
+            mode: "dedicated_model",
+            model: {
+              provider: "claude-oauth",
+              model: "claude-opus-4-6"
+            }
+          }
+        }
+      }
+    },
+    initiative: {
+      text: {
+        eagerness: 50
+      }
+    },
+    voice: {
+      conversationPolicy: {
+        replyPath: "bridge"
+      },
+      admission: {
+        mode: "classifier_gate"
+      }
+    }
+  });
+  const form = settingsToForm(withResolved(effectiveSettings));
+  form.voiceReplyPath = "brain";
+
+  const patch = formToSettingsPatch(form);
+  const snapshot = formToSettingsSnapshot(form);
+
+  assert.equal(patch.voice?.conversationPolicy?.replyPath, undefined);
+  assert.equal(patch.agentStack?.preset, undefined);
+  assert.equal(snapshot.voice.conversationPolicy.replyPath, "brain");
+  assert.equal(snapshot.agentStack.preset, "claude_oauth");
+  assert.equal(snapshot.permissions.replies.maxMessagesPerHour, 20);
+});
+
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     identity: {
@@ -70,6 +162,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
         defaultInterruptionMode: "none",
         streaming: {
           enabled: true,
+          minSentencesPerChunk: 3,
           eagerFirstChunkChars: 72,
           maxBufferChars: 280
         }
@@ -138,6 +231,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceAsrLanguageMode, "auto");
   assert.equal(form.voiceAsrLanguageHint, "en");
   assert.equal(form.voiceStreamingEnabled, true);
+  assert.equal(form.voiceStreamingMinSentencesPerChunk, 3);
   assert.equal(form.voiceStreamingEagerFirstChunkChars, 72);
   assert.equal(form.voiceStreamingMaxBufferChars, 280);
   assert.equal(form.voiceDefaultInterruptionMode, "none");
@@ -174,6 +268,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceAsrLanguageMode = "fixed";
   form.voiceAsrLanguageHint = "en-us";
   form.voiceStreamingEnabled = false;
+  form.voiceStreamingMinSentencesPerChunk = 4;
   form.voiceStreamingEagerFirstChunkChars = 84;
   form.voiceStreamingMaxBufferChars = 340;
   form.voiceDefaultInterruptionMode = "speaker";
@@ -236,6 +331,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(effectivePatch.voice.streamWatch.brainContextMaxEntries, 5);
   assert.equal(effectivePatch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
   assert.equal(effectivePatch.voice.conversationPolicy.streaming.enabled, false);
+  assert.equal(effectivePatch.voice.conversationPolicy.streaming.minSentencesPerChunk, 4);
   assert.equal(effectivePatch.voice.conversationPolicy.streaming.eagerFirstChunkChars, 84);
   assert.equal(effectivePatch.voice.conversationPolicy.streaming.maxBufferChars, 340);
   assert.equal(effectivePatch.voice.conversationPolicy.defaultInterruptionMode, "speaker");
@@ -412,6 +508,23 @@ test("settingsFormModel round-trips canonical voice runtime mode", () => {
   assert.equal(form.stackAdvancedOverridesEnabled, true);
   const { effectivePatch } = serializeForm(form);
   assert.equal(effectivePatch.agentStack.runtimeConfig.voice.runtimeMode, "openai_realtime");
+});
+
+test("settingsFormModel preserves a full-brain reply-path override on the openai native realtime preset", () => {
+  const presetEnvelope = withResolved(normalizeSettings({
+    agentStack: {
+      preset: "openai_native_realtime"
+    }
+  }));
+  const form = settingsToForm(presetEnvelope);
+
+  assert.equal(form.voiceReplyPath, "bridge");
+
+  form.voiceReplyPath = "brain";
+  const { patch, effectivePatch } = serializeForm(form);
+
+  assert.equal(patch.voice?.conversationPolicy?.replyPath, "brain");
+  assert.equal(effectivePatch.voice.conversationPolicy.replyPath, "brain");
 });
 
 test("settingsFormModel keeps realtime provider selection while preserving file_wav + api TTS overrides", () => {

@@ -47,6 +47,7 @@ export interface DashboardAppConfig {
   dashboardPort: number;
   dashboardHost: string;
   dashboardToken: string;
+  dashboardSettingsSaveDebug?: boolean | null;
   publicApiToken: string;
   elevenLabsApiKey?: string | null;
   anthropicApiKey?: string | null;
@@ -489,6 +490,7 @@ export function createDashboardServer({
     if (isApiPath(c.req.path) || c.req.path.startsWith("/share/")) {
       return c.text("Not found.", 404);
     }
+    c.header("Cache-Control", "no-store");
     return c.html(indexHtml);
   });
 
@@ -497,6 +499,7 @@ export function createDashboardServer({
       return c.body(null, 404);
     }
     return c.body(null, 200, {
+      "Cache-Control": "no-store",
       "content-type": "text/html; charset=UTF-8"
     });
   });

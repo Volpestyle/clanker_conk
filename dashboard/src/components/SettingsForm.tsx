@@ -6,7 +6,7 @@ import {
   OPENAI_REALTIME_VOICE_OPTIONS,
   OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
   XAI_VOICE_OPTIONS,
-  formToSettingsPatch,
+  formToSettingsSnapshot,
   getCodeAgentValidationError,
   getSettingsValidationError,
   resolveBrowserProviderModelOptions,
@@ -120,6 +120,15 @@ function buildImpactSummary(dirty: Set<string>): string {
     : `${changed} changed. Save to apply.`;
 }
 
+export function applyFormDraftUpdate<T>(
+  current: T,
+  updater: T | ((draft: T) => T)
+): T {
+  return typeof updater === "function"
+    ? (updater as (draft: T) => T)(current)
+    : updater;
+}
+
 export default function SettingsForm({
   settings,
   modelCatalog,
@@ -144,17 +153,13 @@ export default function SettingsForm({
   formRef.current = form;
 
   function updateForm(updater) {
-    setForm((current) => {
-      const next =
-        typeof updater === "function"
-          ? updater(current)
-          : updater;
-      if (next !== current) {
-        formRevisionRef.current += 1;
-      }
-      formRef.current = next;
-      return next;
-    });
+    const current = formRef.current;
+    const next = applyFormDraftUpdate(current, updater);
+    if (next !== current) {
+      formRevisionRef.current += 1;
+    }
+    formRef.current = next;
+    setForm(next);
   }
 
   function clearPresetWarning() {
@@ -574,7 +579,7 @@ export default function SettingsForm({
       return;
     }
     const currentForm = formRef.current ?? form ?? defaultForm;
-    onSave(formToSettingsPatch(currentForm));
+    onSave(formToSettingsSnapshot(currentForm));
   }
 
   function scrollTo(id: string) {

@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { withDashboardServer } from "../testHelpers.ts";
+import { normalizeSettings } from "../store/settingsNormalization.ts";
 
 test("dashboard memory search handles missing params and valid lookups", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, memoryCalls }) => {
@@ -626,6 +627,19 @@ test("dashboard shell finalizes HEAD requests for non-API routes", async () => {
     const response = await fetch(baseUrl, { method: "HEAD" });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "text/html; charset=UTF-8");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings responses are served with no-store caching", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/api/settings`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
   });
 
   if (result?.skipped) {
@@ -829,6 +843,58 @@ test("dashboard browser session history can be filtered to one guild", async () 
     assert.equal(json.sessions.length, 1);
     assert.equal(json.sessions[0]?.sessionId, "browser-session-g1");
     assert.equal(json.sessions[0]?.guildId, "guild-1");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard browser session history surfaces failed browser sessions", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.logAction({
+      kind: "browser_tool_step",
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "user-1",
+      content: "browser_open",
+      metadata: {
+        sessionKey: "browser-session-failed",
+        step: 1,
+        tool: "browser_open"
+      }
+    });
+    store.logAction({
+      kind: "browser_browse_failed",
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "user-1",
+      content: "Open the release notes",
+      metadata: {
+        sessionKey: "browser-session-failed",
+        runtime: "openai_computer_use",
+        provider: "openai",
+        model: "gpt-5.4",
+        currentUrl: "https://example.com/releases",
+        durationMs: 4_200,
+        errorName: "Error",
+        errorMessage: "browser_open_failed"
+      }
+    });
+
+    const response = await fetch(`${baseUrl}/api/agents/browser-sessions?limit=10&guildId=guild-1`);
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.guildId, "guild-1");
+    assert.equal(Array.isArray(json.sessions), true);
+    assert.equal(json.sessions.length, 1);
+    assert.equal(json.sessions[0]?.sessionId, "browser-session-failed");
+    assert.equal(json.sessions[0]?.failed, true);
+    assert.equal(json.sessions[0]?.errorMessage, "browser_open_failed");
+    assert.equal(json.sessions[0]?.runtime, "openai_computer_use");
+    assert.equal(json.sessions[0]?.currentUrl, "https://example.com/releases");
+    assert.equal(json.sessions[0]?.totalSteps, 1);
+    assert.equal(json.sessions[0]?.durationMs, 4200);
   });
 
   if (result?.skipped) {
@@ -1251,6 +1317,125 @@ test("dashboard settings save clears the memory LLM override when inherit is sel
 
   if (result?.skipped) {
     return;
+  }
+});
+
+test("dashboard settings save replaces the full authored snapshot so default reverts persist", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    const defaultBotName = normalizeSettings({}).identity.botName;
+    store.patchSettings({
+      identity: {
+        botName: "patched name"
+      }
+    });
+
+    const beforeResponse = await fetch(`${baseUrl}/api/settings`);
+    assert.equal(beforeResponse.status, 200);
+    const beforeJson = await beforeResponse.json();
+    const expectedUpdatedAt = String(beforeJson._meta?.updatedAt || "");
+    assert.equal(Boolean(expectedUpdatedAt), true);
+    assert.equal(beforeJson.intent.identity?.botName, "patched name");
+
+    const response = await fetch(`${baseUrl}/api/settings`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        _meta: {
+          expectedUpdatedAt
+        }
+      })
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(store.getSettings().identity.botName, defaultBotName);
+    assert.equal(json.intent.identity, undefined);
+    assert.equal(json.effective.identity.botName, defaultBotName);
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings save success logging stays quiet by default and can be enabled", async () => {
+  const priorConsoleInfo = console.info;
+  const infoCalls: unknown[][] = [];
+  console.info = (...args) => {
+    infoCalls.push(args);
+  };
+
+  try {
+    const defaultLoggingResult = await withDashboardServer({}, async ({ baseUrl }) => {
+      const beforeResponse = await fetch(`${baseUrl}/api/settings`);
+      assert.equal(beforeResponse.status, 200);
+      const beforeJson = await beforeResponse.json();
+      const expectedUpdatedAt = String(beforeJson._meta?.updatedAt || "");
+      assert.equal(Boolean(expectedUpdatedAt), true);
+
+      const response = await fetch(`${baseUrl}/api/settings`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          _meta: {
+            expectedUpdatedAt
+          },
+          ...beforeJson.intent
+        })
+      });
+
+      assert.equal(response.status, 200);
+    });
+
+    if (defaultLoggingResult?.skipped) {
+      return;
+    }
+
+    assert.equal(infoCalls.some((args) => args[0] === "Saved dashboard settings snapshot"), false);
+
+    infoCalls.length = 0;
+
+    const debugLoggingResult = await withDashboardServer(
+      {
+        appConfigOverrides: {
+          dashboardSettingsSaveDebug: true
+        }
+      },
+      async ({ baseUrl }) => {
+        const beforeResponse = await fetch(`${baseUrl}/api/settings`);
+        assert.equal(beforeResponse.status, 200);
+        const beforeJson = await beforeResponse.json();
+        const expectedUpdatedAt = String(beforeJson._meta?.updatedAt || "");
+        assert.equal(Boolean(expectedUpdatedAt), true);
+
+        const response = await fetch(`${baseUrl}/api/settings`, {
+          method: "PUT",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            _meta: {
+              expectedUpdatedAt
+            },
+            ...beforeJson.intent
+          })
+        });
+
+        assert.equal(response.status, 200);
+      }
+    );
+
+    if (debugLoggingResult?.skipped) {
+      return;
+    }
+
+    assert.equal(infoCalls.some((args) => args[0] === "Saved dashboard settings snapshot"), true);
+  } finally {
+    console.info = priorConsoleInfo;
   }
 });
 
