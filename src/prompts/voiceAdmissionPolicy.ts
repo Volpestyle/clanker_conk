@@ -95,6 +95,7 @@ export function buildVoiceAdmissionPolicyLines({
     lines.push("Multi-human room: avoid barging in without clear conversational value.");
   }
   lines.push(VOICE_TINY_REPLY_POLICY_LINE);
+  lines.push("Transcripts come from speech-to-text and can be garbled, nonsensical, or misheard — especially when music is playing. If the transcript doesn't form a coherent utterance directed at anyone (e.g. sentence fragments, random foreign words, misheard lyrics), output [SKIP].");
 
   if (normalizedInputKind === "event") {
     lines.push("This is a voice-room event cue, not literal quoted speech.");
@@ -130,12 +131,7 @@ export function buildVoiceAdmissionPolicyLines({
   }
 
   if (musicActive) {
-    lines.push("Music is currently active.");
-    if (musicWakeLatched || normalizedDirectAddressed) {
-      lines.push("Music wake latch is active for follow-ups, so no repeated wake word is required right now.");
-    } else {
-      lines.push("Music wake latch is not active; non-wake chatter during music should be denied.");
-    }
+    lines.push("Music is currently playing. Music audio often bleeds into the mic and produces garbled transcripts — be extra skeptical and [SKIP] anything that doesn't clearly make sense as a directed utterance.");
   }
 
   if (pendingCommandFollowupSignal) {
