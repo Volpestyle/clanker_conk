@@ -336,11 +336,12 @@ export const DEFAULT_SETTINGS = {
           region: "us-east-1"
         },
         elevenLabsRealtime: {
-          agentId: "",
           voiceId: "",
+          ttsModel: "eleven_multilingual_v2",
+          transcriptionModel: "",
           apiBaseUrl: "https://api.elevenlabs.io",
           inputSampleRateHz: 16000,
-          outputSampleRateHz: 16000
+          outputSampleRateHz: 24000
         },
         geminiRealtime: {
           model: "gemini-2.5-flash-native-audio-preview-12-2025",
@@ -497,6 +498,7 @@ export const DEFAULT_SETTINGS = {
     enabled: true,
     transcription: {
       enabled: true,
+      provider: "openai",
       languageMode: "auto",
       languageHint: "en"
     },
@@ -519,6 +521,7 @@ export const DEFAULT_SETTINGS = {
       defaultInterruptionMode: "speaker",
       replyPath: "brain",
       ttsMode: "realtime",
+      thinking: "disabled",
       operationalMessages: "minimal",
       streaming: {
         enabled: true,

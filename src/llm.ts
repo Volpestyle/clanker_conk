@@ -200,6 +200,7 @@ export class LLMService {
   private audioDeps(): AudioServiceDeps {
     return {
       openai: this.openai,
+      elevenLabsApiKey: this.appConfig.elevenLabsApiKey,
       store: this.store
     };
   }
@@ -282,6 +283,8 @@ export class LLMService {
     },
     jsonSchema = "",
     tools = [],
+    thinking,
+    thinkingBudgetTokens,
     signal
   }: {
     settings: unknown;
@@ -300,6 +303,8 @@ export class LLMService {
     };
     jsonSchema?: string;
     tools?: ChatModelRequest["tools"];
+    thinking?: ChatModelRequest["thinking"];
+    thinkingBudgetTokens?: number;
     signal?: AbortSignal;
   }) {
     return await this.generateStreaming({
@@ -311,6 +316,8 @@ export class LLMService {
       trace,
       jsonSchema,
       tools,
+      thinking,
+      thinkingBudgetTokens,
       signal,
       onTextDelta() {}
     });
@@ -333,6 +340,8 @@ export class LLMService {
     },
     jsonSchema = "",
     tools = [],
+    thinking,
+    thinkingBudgetTokens,
     signal,
     onTextDelta
   }: {
@@ -352,6 +361,8 @@ export class LLMService {
     };
     jsonSchema?: string;
     tools?: ChatModelRequest["tools"];
+    thinking?: ChatModelRequest["thinking"];
+    thinkingBudgetTokens?: number;
     signal?: AbortSignal;
     onTextDelta: (delta: string) => void;
   }) {
@@ -393,6 +404,8 @@ export class LLMService {
           temperature,
           maxOutputTokens,
           reasoningEffort: orchestrator.reasoningEffort,
+          thinking,
+          thinkingBudgetTokens,
           jsonSchema: normalizedJsonSchema,
           trace: normalizedTrace,
           tools: normalizedTools,
@@ -410,6 +423,8 @@ export class LLMService {
           temperature,
           maxOutputTokens,
           reasoningEffort: orchestrator.reasoningEffort,
+          thinking,
+          thinkingBudgetTokens,
           jsonSchema: normalizedJsonSchema,
           trace: normalizedTrace,
           tools: normalizedTools,
@@ -465,6 +480,7 @@ export class LLMService {
 
       return {
         text: response.text,
+        ...(response.thinkingText ? { thinkingText: response.thinkingText } : {}),
         toolCalls,
         rawContent,
         provider,
@@ -596,21 +612,24 @@ export class LLMService {
     return resolveVideoGenerationTargetRequest(this.mediaDeps(), settings);
   }
 
-  isAsrReady() {
-    return isAsrReadyRequest(this.audioDeps());
+  isAsrReady(provider?: string) {
+    return isAsrReadyRequest(this.audioDeps(), { provider });
   }
 
-  isSpeechSynthesisReady() {
-    return isSpeechSynthesisReadyRequest(this.audioDeps());
+  isSpeechSynthesisReady(provider?: string) {
+    return isSpeechSynthesisReadyRequest(this.audioDeps(), { provider });
   }
 
   async transcribeAudio(args: {
     filePath?: string | null;
     audioBytes?: Buffer | Uint8Array | ArrayBuffer | null;
     fileName?: string;
+    provider?: string;
     model?: string;
     language?: string;
     prompt?: string;
+    sampleRateHz?: number;
+    baseUrl?: string;
     trace?: LlmTrace;
   }) {
     return transcribeAudioRequest(this.audioDeps(), args);
@@ -618,10 +637,13 @@ export class LLMService {
 
   async synthesizeSpeech(args: {
     text: unknown;
+    provider?: string;
     model?: string;
     voice?: string;
     speed?: number;
     responseFormat?: string;
+    sampleRateHz?: number;
+    baseUrl?: string;
     trace?: LlmTrace;
   }) {
     return synthesizeSpeechRequest(this.audioDeps(), args);

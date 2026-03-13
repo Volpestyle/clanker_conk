@@ -44,6 +44,14 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
     enabled: normalizeBoolean(section.enabled, DEFAULT_SETTINGS.voice.enabled),
     transcription: {
       enabled: normalizeBoolean(transcription.enabled, DEFAULT_SETTINGS.voice.transcription.enabled),
+      provider:
+        normalizeString(
+          transcription.provider,
+          DEFAULT_SETTINGS.voice.transcription.provider,
+          40
+        ).toLowerCase() === "elevenlabs"
+          ? "elevenlabs"
+          : "openai",
       languageMode:
         normalizeString(
           transcription.languageMode,

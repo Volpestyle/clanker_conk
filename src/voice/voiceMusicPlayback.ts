@@ -5,7 +5,12 @@ import {
   noteMusicResumeRequest,
   setKnownMusicQueuePausedState
 } from "./musicResumeState.ts";
-import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
+import {
+  normalizeInlineText,
+  STT_TRANSCRIPT_MAX_CHARS,
+  resolveTranscriberProvider,
+  resolveVoiceAsrLanguageGuidance
+} from "./voiceSessionHelpers.ts";
 import {
   getResolvedVoiceMusicBrainBinding,
   isVoiceMusicBrainEnabled,
@@ -35,25 +40,25 @@ import type { MusicSearchProvider } from "./musicSearch.ts";
 import type { ReplyManager } from "./replyManager.ts";
 import { resolveVoiceDirectAddressSignal } from "./voiceAddressing.ts";
 
-// English-only fallback/fast-path heuristics for obvious music control turns.
-// These are lightweight transport shortcuts, not the main conversational brain.
-const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|halt|end|quit|shut\s*off)\b/i;
-const EN_MUSIC_PAUSE_VERB_RE = /\b(?:pause)\b/i;
-const EN_MUSIC_RESUME_VERB_RE = /\b(?:resume|unpause|continue)\b/i;
-const EN_MUSIC_RESUME_PRONOUN_RE = /\b(?:resume|unpause|continue)\s+it\b/i;
-const EN_MUSIC_RESUME_PLAY_CURRENT_RE =
+// English-only fallback/fast-path heuristics for obvious media control turns
+// (music, video, stream). Lightweight transport shortcuts, not the main brain.
+const EN_MEDIA_STOP_VERB_RE = /\b(?:stop|halt|end|quit|shut\s*off)\b/i;
+const EN_MEDIA_PAUSE_VERB_RE = /\b(?:pause)\b/i;
+const EN_MEDIA_RESUME_VERB_RE = /\b(?:resume|unpause|continue)\b/i;
+const EN_MEDIA_RESUME_PRONOUN_RE = /\b(?:resume|unpause|continue)\s+it\b/i;
+const EN_MEDIA_RESUME_PLAY_CURRENT_RE =
   /\bplay\s+(?:it|this(?:\s+(?:song|track|music|playback))?|the\s+(?:song|track|music|playback))(?:\s+(?:again|back(?:\s+up)?))?(?:\s+(?:please|plz|now))?\s*$/i;
-const EN_MUSIC_SKIP_VERB_RE = /\b(?:skip|next)\b/i;
-const EN_MUSIC_CUE_RE = /\b(?:music|musik|song|songs|track|tracks|playback|playing)\b/i;
-const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
-const EN_MUSIC_PLAY_QUERY_RE =
+const EN_MEDIA_SKIP_VERB_RE = /\b(?:skip|next)\b/i;
+const EN_MEDIA_CUE_RE = /\b(?:music|musik|song|songs|track|tracks|playback|playing|video|stream|streaming)\b/i;
+const EN_MEDIA_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
+const EN_MEDIA_PLAY_QUERY_RE =
   /\b(?:play|start|queue|put\s+on|spin)\s+(.+?)\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz)?$/i;
-const EN_MUSIC_QUERY_TRAILING_NOISE_RE =
+const EN_MEDIA_QUERY_TRAILING_NOISE_RE =
   /\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz|for\s+me|for\s+us|for\s+everyone|for\s+everybody|for\s+the\s+chat|thanks?)\b/gi;
-const EN_MUSIC_QUERY_MEDIA_WORD_RE = /\b(?:music|musik|song|songs|track|tracks)\b/gi;
-const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please|plz)$/i;
-const COMPACT_MUSIC_CONTROL_NOISE_RE =
-  /\b(?:the|this|current|my|our|your|music|musik|song|songs|track|tracks|playback|playing|please|plz|now)\b/g;
+const EN_MEDIA_QUERY_MEDIA_WORD_RE = /\b(?:music|musik|song|songs|track|tracks)\b/gi;
+const EN_MEDIA_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please|plz)$/i;
+const COMPACT_MEDIA_CONTROL_NOISE_RE =
+  /\b(?:the|this|current|my|our|your|music|musik|song|songs|track|tracks|playback|playing|video|stream|streaming|please|plz|now)\b/g;
 const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
 const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 5;
@@ -818,7 +823,7 @@ function resolveCompactVoiceMusicControlCommand(
   const normalizedTranscript = normalizeVoiceMusicCommandTranscript(transcript);
   if (!normalizedTranscript) return null;
   const compactTranscript = normalizedTranscript
-    .replace(COMPACT_MUSIC_CONTROL_NOISE_RE, " ")
+    .replace(COMPACT_MEDIA_CONTROL_NOISE_RE, " ")
     .replace(/\s+/g, " ")
     .trim();
   const normalizedCompactTranscript =
@@ -1507,7 +1512,7 @@ export function isLikelyMusicStopPhrase(
 ) {
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
-  return EN_MUSIC_STOP_VERB_RE.test(normalizedTranscript) && EN_MUSIC_CUE_RE.test(normalizedTranscript);
+  return EN_MEDIA_STOP_VERB_RE.test(normalizedTranscript) && EN_MEDIA_CUE_RE.test(normalizedTranscript);
 }
 
 function isLikelyMusicPausePhrase(
@@ -1519,7 +1524,7 @@ function isLikelyMusicPausePhrase(
 ) {
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
-  return EN_MUSIC_PAUSE_VERB_RE.test(normalizedTranscript) && EN_MUSIC_CUE_RE.test(normalizedTranscript);
+  return EN_MEDIA_PAUSE_VERB_RE.test(normalizedTranscript) && EN_MEDIA_CUE_RE.test(normalizedTranscript);
 }
 
 function isLikelyMusicSkipPhrase(
@@ -1531,7 +1536,7 @@ function isLikelyMusicSkipPhrase(
 ) {
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
-  return EN_MUSIC_SKIP_VERB_RE.test(normalizedTranscript) && EN_MUSIC_CUE_RE.test(normalizedTranscript);
+  return EN_MEDIA_SKIP_VERB_RE.test(normalizedTranscript) && EN_MEDIA_CUE_RE.test(normalizedTranscript);
 }
 
 // Only checked when music is paused. Keep this conservative: explicit resume
@@ -1552,9 +1557,9 @@ function isLikelyMusicResumePhrase(
     .replace(/\s+/g, " ")
     .trim();
   if (!normalizedResumeTranscript) return false;
-  if (EN_MUSIC_RESUME_PLAY_CURRENT_RE.test(normalizedResumeTranscript)) return true;
-  if (!EN_MUSIC_RESUME_VERB_RE.test(normalizedResumeTranscript)) return false;
-  return EN_MUSIC_CUE_RE.test(normalizedResumeTranscript) || EN_MUSIC_RESUME_PRONOUN_RE.test(normalizedResumeTranscript);
+  if (EN_MEDIA_RESUME_PLAY_CURRENT_RE.test(normalizedResumeTranscript)) return true;
+  if (!EN_MEDIA_RESUME_VERB_RE.test(normalizedResumeTranscript)) return false;
+  return EN_MEDIA_CUE_RE.test(normalizedResumeTranscript) || EN_MEDIA_RESUME_PRONOUN_RE.test(normalizedResumeTranscript);
 }
 
 export function isLikelyMusicPlayPhrase(
@@ -1566,8 +1571,8 @@ export function isLikelyMusicPlayPhrase(
 ) {
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
-  if (!EN_MUSIC_PLAY_VERB_RE.test(normalizedTranscript)) return false;
-  if (EN_MUSIC_CUE_RE.test(normalizedTranscript)) return true;
+  if (!EN_MEDIA_PLAY_VERB_RE.test(normalizedTranscript)) return false;
+  if (EN_MEDIA_CUE_RE.test(normalizedTranscript)) return true;
   return manager.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings });
 }
 
@@ -1583,19 +1588,19 @@ export function extractMusicPlayQuery(
     return normalizeInlineText(quotedMatch[1], 120);
   }
 
-  const playMatch = normalizedTranscript.match(EN_MUSIC_PLAY_QUERY_RE);
+  const playMatch = normalizedTranscript.match(EN_MEDIA_PLAY_QUERY_RE);
   const candidate = playMatch?.[1] ? String(playMatch[1]) : "";
   if (!candidate) return "";
 
   const cleaned = candidate
-    .replace(EN_MUSIC_QUERY_TRAILING_NOISE_RE, " ")
-    .replace(EN_MUSIC_QUERY_MEDIA_WORD_RE, " ")
+    .replace(EN_MEDIA_QUERY_TRAILING_NOISE_RE, " ")
+    .replace(EN_MEDIA_QUERY_MEDIA_WORD_RE, " ")
     .replace(/[^\w\s'"&+-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
   if (!cleaned) return "";
-  if (EN_MUSIC_QUERY_EMPTY_RE.test(cleaned)) return "";
+  if (EN_MEDIA_QUERY_EMPTY_RE.test(cleaned)) return "";
   return cleaned.slice(0, 120);
 }
 
@@ -2597,9 +2602,14 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
     const sampleRateHz = source === "file_asr" ? 24000 : Number(session.realtimeInputSampleRateHz) || 24000;
     const voiceRuntime = getVoiceRuntimeConfig(settings);
-    const preferredModel = voiceRuntime.openaiRealtime?.inputTranscriptionModel;
+    const transcriberProvider = resolveTranscriberProvider(settings);
+    const preferredModel =
+      transcriberProvider === "elevenlabs"
+        ? voiceRuntime.elevenLabsRealtime?.transcriptionModel
+        : voiceRuntime.openaiRealtime?.inputTranscriptionModel;
     const transcriptionPlan = resolveTurnTranscriptionPlan({
       mode: session.mode,
+      provider: transcriberProvider,
       configuredModel: preferredModel,
       pcmByteLength: pcmBuffer.length,
       sampleRateHz

@@ -1,6 +1,6 @@
 const VOICE_PROVIDERS = ["openai", "xai", "gemini", "elevenlabs"] as const;
 const BRAIN_PROVIDERS = ["native", "openai", "anthropic", "xai", "gemini"] as const;
-const TRANSCRIBER_PROVIDERS = ["openai"] as const;
+const TRANSCRIBER_PROVIDERS = ["openai", "elevenlabs"] as const;
 
 type VoiceProvider = (typeof VOICE_PROVIDERS)[number];
 type BrainProvider = (typeof BRAIN_PROVIDERS)[number];
@@ -117,12 +117,12 @@ const REALTIME_PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     sharedAsr: true,
   },
   elevenlabs_realtime: {
-    textInput: true,
+    textInput: false,
     updateInstructions: false,
     updateTools: false,
     cancelResponse: false,
     perUserAsr: false,
-    sharedAsr: true,
+    sharedAsr: false,
   },
 };
 

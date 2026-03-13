@@ -1009,13 +1009,24 @@ test("settingsFormModel forces bridge replies onto realtime output", () => {
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
+    voice: {
+      transcription: {
+        provider: "elevenlabs"
+      },
+      conversationPolicy: {
+        replyPath: "brain",
+        ttsMode: "api"
+      }
+    },
     agentStack: {
       advancedOverridesEnabled: true,
         runtimeConfig: {
           voice: {
             runtimeMode: "elevenlabs_realtime",
             elevenLabsRealtime: {
-              agentId: "agent_123",
+              voiceId: "voice_123",
+              ttsModel: "eleven_multilingual_v2",
+              transcriptionModel: "scribe_v1",
               apiBaseUrl: "https://api.elevenlabs.io",
               inputSampleRateHz: 16000,
               outputSampleRateHz: 22050
@@ -1026,14 +1037,28 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   })));
 
   assert.equal(form.voiceProvider, "elevenlabs");
-  assert.equal(form.voiceElevenLabsRealtimeAgentId, "agent_123");
+  assert.equal(form.voiceTranscriptionProvider, "elevenlabs");
+  assert.equal(form.voiceElevenLabsRealtimeVoiceId, "voice_123");
+  assert.equal(form.voiceElevenLabsRealtimeTtsModel, "eleven_multilingual_v2");
+  assert.equal(form.voiceElevenLabsRealtimeTranscriptionModel, "scribe_v1");
   assert.equal(form.voiceElevenLabsRealtimeApiBaseUrl, "https://api.elevenlabs.io");
   assert.equal(form.voiceElevenLabsRealtimeInputSampleRateHz, 16000);
   assert.equal(form.voiceElevenLabsRealtimeOutputSampleRateHz, 22050);
 
   const { effectivePatch } = serializeForm(form);
   assert.equal(effectivePatch.agentStack.runtimeConfig.voice.runtimeMode, "elevenlabs_realtime");
-  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.agentId, "agent_123");
+  assert.equal(effectivePatch.voice.transcription.provider, "elevenlabs");
+  assert.equal(effectivePatch.voice.conversationPolicy.replyPath, "brain");
+  assert.equal(effectivePatch.voice.conversationPolicy.ttsMode, "api");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.voiceId, "voice_123");
+  assert.equal(
+    effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.ttsModel,
+    "eleven_multilingual_v2"
+  );
+  assert.equal(
+    effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.transcriptionModel,
+    "scribe_v1"
+  );
   assert.equal(
     effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.apiBaseUrl,
     "https://api.elevenlabs.io"

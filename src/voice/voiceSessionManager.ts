@@ -95,6 +95,8 @@ import {
   normalizeVoiceAddressingTargetToken,
   normalizeVoiceText,
   parseSoundboardDirectiveSequence,
+  resolveTranscriberProvider,
+  resolveVoiceApiTtsProvider,
   shortError
 } from "./voiceSessionHelpers.ts";
 import {
@@ -3770,20 +3772,40 @@ export class VoiceSessionManager {
     if (!line) return false;
     if (!this.llm?.synthesizeSpeech) return false;
 
-    const apiSpeechSettings = getVoiceRuntimeConfig(settings).openaiAudioApi;
-    const ttsModel = String(apiSpeechSettings?.ttsModel || "gpt-4o-mini-tts").trim() || "gpt-4o-mini-tts";
-    const ttsVoice = String(apiSpeechSettings?.ttsVoice || "alloy").trim() || "alloy";
+    const voiceRuntime = getVoiceRuntimeConfig(settings);
+    const ttsProvider = resolveVoiceApiTtsProvider(settings);
+    const apiSpeechSettings = voiceRuntime.openaiAudioApi;
+    const elevenLabsSpeechSettings = voiceRuntime.elevenLabsRealtime;
+    const ttsModel =
+      ttsProvider === "elevenlabs"
+        ? String(elevenLabsSpeechSettings?.ttsModel || "eleven_multilingual_v2").trim() || "eleven_multilingual_v2"
+        : String(apiSpeechSettings?.ttsModel || "gpt-4o-mini-tts").trim() || "gpt-4o-mini-tts";
+    const ttsVoice =
+      ttsProvider === "elevenlabs"
+        ? String(elevenLabsSpeechSettings?.voiceId || "").trim()
+        : String(apiSpeechSettings?.ttsVoice || "alloy").trim() || "alloy";
     const ttsSpeedRaw = Number(apiSpeechSettings?.ttsSpeed);
     const ttsSpeed = Number.isFinite(ttsSpeedRaw) ? ttsSpeedRaw : 1;
+    const ttsSampleRateHz =
+      ttsProvider === "elevenlabs"
+        ? Number(elevenLabsSpeechSettings?.outputSampleRateHz) || Number(session.realtimeOutputSampleRateHz) || 24000
+        : 24000;
+    const ttsBaseUrl =
+      ttsProvider === "elevenlabs"
+        ? String(elevenLabsSpeechSettings?.apiBaseUrl || "").trim() || undefined
+        : undefined;
 
     let ttsPcm = Buffer.alloc(0);
     try {
       const tts = await this.llm.synthesizeSpeech({
         text: line,
+        provider: ttsProvider,
         model: ttsModel,
         voice: ttsVoice,
         speed: ttsSpeed,
         responseFormat: "pcm",
+        sampleRateHz: ttsSampleRateHz,
+        ...(ttsBaseUrl ? { baseUrl: ttsBaseUrl } : {}),
         trace: {
           guildId: session.guildId,
           channelId: session.textChannelId,
@@ -3817,7 +3839,7 @@ export class VoiceSessionManager {
     const queued = await this.enqueueChunkedTtsPcmForPlayback({
       session,
       ttsPcm,
-      inputSampleRateHz: 24000
+      inputSampleRateHz: ttsSampleRateHz
     });
     if (!queued) {
       if (duckedMusic) {
@@ -7195,7 +7217,14 @@ export class VoiceSessionManager {
     asrPrompt = ""
   }) {
     if (!this.llm?.transcribeAudio || !pcmBuffer?.length) return "";
-    const resolvedModel = String(model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const resolvedSettings = session?.settingsSnapshot || null;
+    const transcriberProvider = resolveTranscriberProvider(resolvedSettings);
+    const voiceRuntime = getVoiceRuntimeConfig(resolvedSettings);
+    const elevenLabsSettings = voiceRuntime.elevenLabsRealtime;
+    const resolvedModel =
+      transcriberProvider === "elevenlabs"
+        ? String(model || elevenLabsSettings?.transcriptionModel || "").trim()
+        : String(model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const source = String(traceSource || "voice_file_asr_turn");
     const emptyTranscriptThreshold = Math.max(1, Math.floor(Number(emptyTranscriptErrorStreakThreshold) || 1));
     if (!session.asrEmptyTranscriptStreakBySource || typeof session.asrEmptyTranscriptStreakBySource !== "object") {
@@ -7207,9 +7236,16 @@ export class VoiceSessionManager {
       const transcript = await this.llm.transcribeAudio({
         audioBytes: wavBytes,
         fileName: "turn.wav",
+        provider: transcriberProvider,
         model: resolvedModel,
         language: asrLanguage,
         prompt: asrPrompt,
+        sampleRateHz,
+        ...(transcriberProvider === "elevenlabs"
+          ? {
+              baseUrl: String(elevenLabsSettings?.apiBaseUrl || "").trim() || undefined
+            }
+          : {}),
         trace: {
           guildId: session.guildId,
           channelId: session.textChannelId,

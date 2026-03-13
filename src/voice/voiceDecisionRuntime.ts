@@ -4,6 +4,7 @@ const OPENAI_REALTIME_SHORT_CLIP_ASR_MS = 1200;
 const PCM16_MONO_BYTES_PER_SAMPLE = 2;
 const OPENAI_MINI_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const FULL_FALLBACK_TRANSCRIPTION_MODEL = "whisper-1";
+const DEFAULT_TRANSCRIBER_PROVIDER = "openai";
 
 export function normalizeVoiceReplyDecisionProvider(value) {
   return normalizeLlmProvider(value);
@@ -35,17 +36,30 @@ type VoiceTurnTranscriptionPlan = {
 
 export function resolveTurnTranscriptionPlan({
   mode,
+  provider = DEFAULT_TRANSCRIBER_PROVIDER,
   configuredModel = OPENAI_MINI_TRANSCRIPTION_MODEL,
   pcmByteLength = 0,
   sampleRateHz = 24000
 }: {
   mode?: string | null;
+  provider?: string | null;
   configuredModel?: string | null;
   pcmByteLength?: number;
   sampleRateHz?: number;
 }): VoiceTurnTranscriptionPlan {
   const normalizedMode = String(mode || "").trim().toLowerCase();
-  const normalizedModel = String(configuredModel || OPENAI_MINI_TRANSCRIPTION_MODEL).trim() || OPENAI_MINI_TRANSCRIPTION_MODEL;
+  const normalizedProvider = String(provider || DEFAULT_TRANSCRIBER_PROVIDER).trim().toLowerCase();
+  const normalizedModel =
+    normalizedProvider === "openai"
+      ? String(configuredModel || OPENAI_MINI_TRANSCRIPTION_MODEL).trim() || OPENAI_MINI_TRANSCRIPTION_MODEL
+      : String(configuredModel || "").trim();
+  if (normalizedProvider !== "openai") {
+    return {
+      primaryModel: normalizedModel,
+      fallbackModel: null,
+      reason: normalizedModel ? "configured_model" : "provider_default_model"
+    };
+  }
   if (normalizedMode !== "openai_realtime") {
     if (normalizedModel === OPENAI_MINI_TRANSCRIPTION_MODEL) {
       return {

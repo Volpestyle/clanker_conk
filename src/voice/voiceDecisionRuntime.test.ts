@@ -141,6 +141,18 @@ test("resolveTurnTranscriptionPlan gives non-realtime mini turns the full fallba
   assert.equal(plan.reason, "mini_with_full_fallback_runtime");
 });
 
+test("resolveTurnTranscriptionPlan keeps non-openai providers on a single configured model", () => {
+  const plan = resolveTurnTranscriptionPlan({
+    mode: "elevenlabs_realtime",
+    provider: "elevenlabs",
+    configuredModel: "scribe_v1"
+  });
+
+  assert.equal(plan.primaryModel, "scribe_v1");
+  assert.equal(plan.fallbackModel, null);
+  assert.equal(plan.reason, "configured_model");
+});
+
 test("transcribePcmTurnWithPlan retries with the fallback model once", async () => {
   const models: string[] = [];
   const result = await transcribePcmTurnWithPlan({

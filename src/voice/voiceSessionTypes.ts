@@ -2,7 +2,6 @@ import type { ClankvoxClient } from "./clankvoxClient.ts";
 import type { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import type { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import type { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
-import type { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
 import type { StreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type { AsrBridgeState, AsrCommitResult } from "./voiceAsrBridge.ts";
@@ -1070,7 +1069,7 @@ export interface VoiceSession {
         decider: VoiceModelContextSummary | null;
     };
     voxClient: ClankvoxClient | null;
-    realtimeClient: OpenAiRealtimeClient | GeminiRealtimeClient | XaiRealtimeClient | ElevenLabsRealtimeClient | null;
+    realtimeClient: OpenAiRealtimeClient | GeminiRealtimeClient | XaiRealtimeClient | null;
     startedAt: number;
     lastActivityAt: number;
     maxEndsAt: number | null;

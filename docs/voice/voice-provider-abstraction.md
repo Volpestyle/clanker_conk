@@ -363,7 +363,7 @@ Current runtime families:
 | `openai_realtime` | OpenAI | Supports native, bridge, and brain transports |
 | `voice_agent` | xAI | Shipped native path via `grok_native_agent` preset |
 | `gemini_realtime` | Gemini | Realtime transport/runtime family |
-| `elevenlabs_realtime` | ElevenLabs | Realtime output/runtime family |
+| `elevenlabs_realtime` | ElevenLabs | Full-brain runtime that uses ElevenLabs API TTS and optional file-turn transcription |
 
 Provider differences live in thin adapters. The higher-level product behavior stays in shared orchestration, prompts, and tool execution.
 

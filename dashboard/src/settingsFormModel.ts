@@ -337,6 +337,8 @@ function buildSettingsFormView(settings: unknown) {
       voiceProvider: voiceProviderStr,
       replyPath: voiceConversation.replyPath,
       ttsMode: voiceConversation.ttsMode,
+      thinking: voiceConversation.thinking || "disabled",
+      transcriptionProvider: transcription.provider,
       asrLanguageMode: transcription.languageMode,
       asrLanguageHint: transcription.languageHint,
       allowNsfwHumor: voiceConversation.allowNsfwHumor,
@@ -410,6 +412,7 @@ export function settingsToForm(settings: unknown) {
   const defaultVideoContext = defaults.videoContext;
   const defaultVision = defaults.vision;
   const defaultVoice = defaults.voice;
+  const defaultVoiceTranscription = defaults.voice.transcription;
   const defaultVoiceXai = defaults.voice.xai;
   const defaultVoiceOpenAiRealtime = defaults.voice.openaiRealtime;
   const defaultVoiceElevenLabsRealtime = defaults.voice.elevenLabsRealtime;
@@ -571,6 +574,7 @@ export function settingsToForm(settings: unknown) {
     voiceProvider: selectedVoiceProvider,
     voiceReplyPath: resolved?.voice?.replyPath ?? defaultVoice.replyPath,
     voiceTtsMode: resolved?.voice?.ttsMode ?? defaultVoice.ttsMode ?? "realtime",
+    voiceThinking: resolved?.voice?.thinking ?? defaultVoice.thinking ?? "disabled",
     voiceAsrLanguageMode: resolved?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
     voiceAsrLanguageHint: resolved?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
     voiceAllowNsfwHumor: resolved?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
@@ -645,10 +649,12 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
     voiceOpenAiRealtimeUsePerUserAsrBridge:
       resolved?.voice?.openaiRealtime?.usePerUserAsrBridge ?? defaultVoiceOpenAiRealtime.usePerUserAsrBridge,
-    voiceElevenLabsRealtimeAgentId:
-      resolved?.voice?.elevenLabsRealtime?.agentId ?? defaultVoiceElevenLabsRealtime.agentId,
     voiceElevenLabsRealtimeVoiceId:
       resolved?.voice?.elevenLabsRealtime?.voiceId ?? defaultVoiceElevenLabsRealtime.voiceId,
+    voiceElevenLabsRealtimeTtsModel:
+      resolved?.voice?.elevenLabsRealtime?.ttsModel ?? defaultVoiceElevenLabsRealtime.ttsModel,
+    voiceElevenLabsRealtimeTranscriptionModel:
+      resolved?.voice?.elevenLabsRealtime?.transcriptionModel ?? defaultVoiceElevenLabsRealtime.transcriptionModel,
     voiceElevenLabsRealtimeApiBaseUrl:
       resolved?.voice?.elevenLabsRealtime?.apiBaseUrl ?? defaultVoiceElevenLabsRealtime.apiBaseUrl,
     voiceElevenLabsRealtimeInputSampleRateHz:
@@ -714,6 +720,8 @@ export function settingsToForm(settings: unknown) {
     voiceApiTtsSpeed:
       resolved?.voice?.openaiAudioApi?.ttsSpeed ?? defaults.voice.openaiAudioApi.ttsSpeed,
     voiceAsrEnabled: resolved?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
+    voiceTranscriptionProvider:
+      resolved?.voice?.transcriptionProvider ?? defaultVoiceTranscription.provider ?? "openai",
     voiceTextOnlyMode: resolved?.voice?.textOnlyMode ?? defaultVoice.textOnlyMode ?? false,
     voiceOperationalMessages: resolved?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "minimal",
     maxMessages: resolved?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
@@ -1194,11 +1202,21 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
     normalizedCodeAgentProvider === "claude-code" ||
     normalizedCodeAgentProvider === "auto" ||
     selectedCodeAgentRoles.includes("claude_code");
-  const normalizedVoiceReplyPath = String(form.voiceReplyPath || "brain").trim().toLowerCase();
-  const normalizedVoiceTtsMode = normalizedVoiceReplyPath === "brain" &&
-    String(form.voiceTtsMode || "realtime").trim().toLowerCase() === "api"
+  const normalizedVoiceRuntimeMode = resolveVoiceRuntimeModeFromSelection(form.voiceProvider);
+  const usesElevenLabsVoiceRuntime = normalizedVoiceRuntimeMode === "elevenlabs_realtime";
+  const normalizedVoiceReplyPath = usesElevenLabsVoiceRuntime
+    ? "brain"
+    : String(form.voiceReplyPath || "brain").trim().toLowerCase();
+  const normalizedVoiceTtsMode =
+    normalizedVoiceReplyPath === "brain" &&
+    (usesElevenLabsVoiceRuntime || String(form.voiceTtsMode || "realtime").trim().toLowerCase() === "api")
       ? "api"
       : "realtime";
+  const normalizedVoiceTranscriptionProvider =
+    normalizedVoiceReplyPath === "brain" &&
+    String(form.voiceTranscriptionProvider || "openai").trim().toLowerCase() === "elevenlabs"
+      ? "elevenlabs"
+      : "openai";
   const normalizedVoiceAdmissionMode = resolveVoiceAdmissionModeForSettings({
     value: form.voiceReplyDecisionRealtimeAdmissionMode || "generation_decides",
     replyPath: normalizedVoiceReplyPath
@@ -1417,13 +1435,16 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
           }
         },
         voice: {
-          runtimeMode: resolveVoiceRuntimeModeFromSelection(form.voiceProvider),
+          runtimeMode: normalizedVoiceRuntimeMode,
           openaiRealtime: {
             model: String(form.voiceOpenAiRealtimeModel || "").trim(),
             voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
             inputAudioFormat: "pcm16",
             outputAudioFormat: "pcm16",
-            transcriptionMethod: String(form.voiceOpenAiRealtimeTranscriptionMethod || "").trim().toLowerCase(),
+            transcriptionMethod:
+              normalizedVoiceTranscriptionProvider === "elevenlabs"
+                ? "file_wav"
+                : String(form.voiceOpenAiRealtimeTranscriptionMethod || "").trim().toLowerCase(),
             inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
             usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
           },
@@ -1456,8 +1477,9 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
             region: String(form.voiceXaiRegion || "").trim()
           },
           elevenLabsRealtime: {
-            agentId: String(form.voiceElevenLabsRealtimeAgentId || "").trim(),
             voiceId: String(form.voiceElevenLabsRealtimeVoiceId || "").trim(),
+            ttsModel: String(form.voiceElevenLabsRealtimeTtsModel || "").trim(),
+            transcriptionModel: String(form.voiceElevenLabsRealtimeTranscriptionModel || "").trim(),
             apiBaseUrl: String(form.voiceElevenLabsRealtimeApiBaseUrl || "").trim(),
             inputSampleRateHz: Number(form.voiceElevenLabsRealtimeInputSampleRateHz),
             outputSampleRateHz: Number(form.voiceElevenLabsRealtimeOutputSampleRateHz)
@@ -1577,6 +1599,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
       enabled: form.voiceEnabled,
       transcription: {
         enabled: Boolean(form.voiceAsrEnabled),
+        provider: normalizedVoiceTranscriptionProvider,
         languageMode: String(form.voiceAsrLanguageMode || "").trim(),
         languageHint: String(form.voiceAsrLanguageHint || "").trim()
       },
@@ -1605,6 +1628,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         defaultInterruptionMode: String(form.voiceDefaultInterruptionMode || "speaker").trim().toLowerCase(),
         replyPath: normalizedVoiceReplyPath,
         ttsMode: normalizedVoiceTtsMode,
+        thinking: String(form.voiceThinking || "disabled").trim().toLowerCase(),
         operationalMessages: String(form.voiceOperationalMessages || "minimal").trim().toLowerCase()
       },
       admission: {

@@ -12,11 +12,11 @@
 
 Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../reference/settings.md`](../reference/settings.md). This document covers the runtime orchestration path and the voice-local settings that affect client lifecycle and reply dispatch.
 
-This part defines the realtime client lifecycle — how the bot connects to the AI provider (OpenAI, xAI, Gemini, ElevenLabs) for voice generation, manages instructions and tools, and handles the event stream that drives the assistant output state machine. Tool execution and context assembly stay shared across providers; the client adapter only translates provider protocol into the common runtime surface.
+This part defines the realtime transport lifecycle — how the bot connects to provider-native runtimes (OpenAI, xAI, Gemini) when they exist, and how full-brain runtimes like ElevenLabs still flow through the shared reply/orchestration surface. Tool execution and context assembly stay shared across providers; the client adapter only translates provider protocol into the common runtime surface.
 
 ## 1. Source of Truth
 
-The `VoiceSession` owns the realtime client reference in `session.realtimeClient`. The client type depends on the resolved runtime mode.
+The `VoiceSession` owns the realtime client reference in `session.realtimeClient`. The client type depends on the resolved runtime mode, and may be `null` for full-brain API-only runtimes such as `elevenlabs_realtime`.
 
 External systems provide events but do not own client state:
 
@@ -29,7 +29,7 @@ Code:
 - `src/voice/openaiRealtimeClient.ts` — OpenAI Realtime API client
 - `src/voice/xaiRealtimeClient.ts` — xAI realtime client
 - `src/voice/geminiRealtimeClient.ts` — Gemini Live API client
-- `src/voice/elevenLabsRealtimeClient.ts` — ElevenLabs conversational AI client
+- `src/llm/audioService.ts` — provider-backed API TTS and file-turn transcription adapters
 - `src/voice/realtimeClientCore.ts` — shared WebSocket utilities
 - `src/voice/sessionLifecycle.ts` — event binding (`bindRealtimeHandlers`)
 - `src/voice/voiceJoinFlow.ts` — client creation and session initialization
@@ -43,15 +43,15 @@ Code:
 | `openai_realtime` | `OpenAiRealtimeClient` | yes | yes | yes | yes | immediate provider ack | yes | yes |
 | `voice_agent` | `XaiRealtimeClient` | yes | yes | yes | yes | immediate provider ack | yes | yes |
 | `gemini_realtime` | `GeminiRealtimeClient` | yes | yes (local only) | — | — | local cut + async confirmation | — | yes |
-| `elevenlabs_realtime` | `ElevenLabsRealtimeClient` | yes | — | — | — | local cut + async confirmation | — | yes |
+| `elevenlabs_realtime` | — | — | — | — | — | local output lock only | — | — |
 
 Capability checks use `providerSupports(mode, capability)` in `src/voice/voiceModes.ts`.
 
-For text-mediated sessions (`bridge`, `brain`), the ASR bridge is still OpenAI-backed today even when the speaking/reasoning provider is xAI, Gemini, or ElevenLabs.
+For text-mediated sessions, the OpenAI ASR bridge still powers `bridge` mode and the optional bridge-style ASR lane in `brain` mode. ElevenLabs can also be selected for file-turn transcription on the full-brain path, and ElevenLabs speech output is rendered through the official TTS streaming endpoint instead of a provider-native conversational runtime client.
 
 ## 3. Lifecycle Phases
 
-The realtime client has a simpler lifecycle than the ASR bridge — there is **no automatic reconnection**. Fatal errors end the session.
+Provider-native realtime clients have a simpler lifecycle than the ASR bridge — there is **no automatic reconnection**. Fatal errors end the session. `elevenlabs_realtime` skips this provider-client lifecycle entirely and uses local orchestration plus provider API calls at ASR/TTS time.
 
 | Phase | Meaning |
 |---|---|

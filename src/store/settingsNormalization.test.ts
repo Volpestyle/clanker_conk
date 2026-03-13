@@ -663,7 +663,9 @@ test("normalizeSettings keeps elevenlabs voice runtime settings under canonical 
         voice: {
           runtimeMode: "elevenlabs_realtime",
           elevenLabsRealtime: {
-            agentId: "   agent_abc   ",
+            voiceId: "   voice_abc   ",
+            ttsModel: "   eleven_flash_v2_5   ",
+            transcriptionModel: "   scribe_v1   ",
             apiBaseUrl: "ftp://not-allowed.example/path",
             inputSampleRateHz: 200000,
             outputSampleRateHz: 4000
@@ -675,7 +677,9 @@ test("normalizeSettings keeps elevenlabs voice runtime settings under canonical 
 
   assert.equal(resolveAgentStack(normalized).voiceRuntime, "elevenlabs_realtime");
   assert.equal(normalized.agentStack.runtimeConfig.voice.runtimeMode, "elevenlabs_realtime");
-  assert.equal(normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.agentId, "agent_abc");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.voiceId, "voice_abc");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.ttsModel, "eleven_flash_v2_5");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.transcriptionModel, "scribe_v1");
   assert.equal(
     normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.apiBaseUrl,
     "https://api.elevenlabs.io"

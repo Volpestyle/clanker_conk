@@ -66,6 +66,8 @@ export type ChatModelRequest = {
   temperature: number;
   maxOutputTokens: number;
   reasoningEffort?: unknown;
+  thinking?: "disabled" | "enabled" | "think_aloud";
+  thinkingBudgetTokens?: number;
   jsonSchema?: string;
   tools?: ChatTool[];
   signal?: AbortSignal;
@@ -73,6 +75,7 @@ export type ChatModelRequest = {
 
 export type ChatModelResponse = {
   text: string;
+  thinkingText?: string;
   toolCalls?: LlmToolCall[];
   rawContent?: unknown;
   stopReason?: string;
@@ -101,6 +104,7 @@ export type LlmActionStore = {
 
 export type LLMAppConfig = {
   openaiApiKey?: string | null;
+  elevenLabsApiKey?: string | null;
   xaiApiKey?: string | null;
   xaiBaseUrl?: string | null;
   anthropicApiKey?: string | null;

@@ -318,15 +318,20 @@ export function normalizeAgentStackSection(
           )
         },
         elevenLabsRealtime: {
-          agentId: normalizeString(
-            voice.elevenLabsRealtime.agentId,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.agentId,
-            200
-          ),
           voiceId: normalizeString(
             voice.elevenLabsRealtime.voiceId,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.voiceId,
             200
+          ),
+          ttsModel: normalizeString(
+            voice.elevenLabsRealtime.ttsModel,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.ttsModel,
+            120
+          ),
+          transcriptionModel: normalizeString(
+            voice.elevenLabsRealtime.transcriptionModel,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.transcriptionModel,
+            120
           ),
           apiBaseUrl: normalizeHttpBaseUrl(
             voice.elevenLabsRealtime.apiBaseUrl,

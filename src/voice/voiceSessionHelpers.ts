@@ -392,9 +392,14 @@ function resolveBrainProvider(settings) {
   return normalizeBrainProvider(getResolvedVoiceGenerationBinding(settings).provider, voiceProvider, "openai");
 }
 
-function resolveTranscriberProvider(settings) {
+export function resolveTranscriberProvider(settings) {
+  const transcription = getVoiceTranscriptionSettings(settings);
+  return normalizeTranscriberProvider(transcription.provider, "openai");
+}
+
+export function resolveVoiceApiTtsProvider(settings) {
   const voiceProvider = resolveVoiceProvider(settings);
-  return normalizeTranscriberProvider(voiceProvider === "elevenlabs" ? "openai" : voiceProvider, "openai");
+  return voiceProvider === "elevenlabs" ? "elevenlabs" : "openai";
 }
 
 export function resolveVoiceRuntimeMode(settings) {

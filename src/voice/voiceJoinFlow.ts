@@ -4,13 +4,14 @@ import { ClankvoxClient } from "./clankvoxClient.ts";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
-import { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
 import { getRealtimeConnectErrorDiagnostics } from "./realtimeClientCore.ts";
 import {
   SOUNDBOARD_MAX_CANDIDATES,
   isRealtimeMode,
   resolveVoiceAsrLanguageGuidance,
   resolveRealtimeProvider,
+  resolveTranscriberProvider,
+  resolveVoiceApiTtsProvider,
   resolveVoiceRuntimeMode,
   shortError
 } from "./voiceSessionHelpers.ts";
@@ -231,13 +232,21 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     )
       .trim()
       .toLowerCase();
+    const transcriberProvider = resolveTranscriberProvider(settings);
+    const voiceApiTtsProvider = resolveVoiceApiTtsProvider(settings);
     const usesFileTurnTranscription = replyPath !== "native" && transcriptionMethod === "file_wav";
     const usesRealtimeBridgeAsr =
       replyPath !== "native" &&
       transcriptionMethod === "realtime_bridge" &&
       !voiceConversation.textOnlyMode;
     const usesApiTts = replyPath === "brain" && ttsMode === "api";
-    const usesOpenAiAudioApi = usesFileTurnTranscription || usesApiTts;
+    const needsOpenAiAudioApi =
+      usesRealtimeBridgeAsr ||
+      (usesFileTurnTranscription && transcriberProvider === "openai") ||
+      (usesApiTts && voiceApiTtsProvider === "openai");
+    const needsElevenLabsAudioApi =
+      (usesFileTurnTranscription && transcriberProvider === "elevenlabs") ||
+      (usesApiTts && voiceApiTtsProvider === "elevenlabs");
     if (runtimeMode === "voice_agent" && !manager.appConfig?.xaiApiKey) {
       await sendOperationalMessage(manager, {
         channel: message.channel,
@@ -306,10 +315,36 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       });
       return true;
     }
+    if (needsElevenLabsAudioApi && !manager.appConfig?.elevenLabsApiKey) {
+      await sendOperationalMessage(manager, {
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId,
+        messageId: message.id,
+        event: "voice_join_request",
+        reason: "elevenlabs_api_key_missing",
+        details: {
+          mode: runtimeMode,
+          transcriptionMethod,
+          replyPath,
+          ttsMode,
+          providerRole:
+            usesApiTts && voiceApiTtsProvider === "elevenlabs"
+              ? "tts"
+              : usesFileTurnTranscription && transcriberProvider === "elevenlabs"
+                ? "transcription"
+                : "voice_runtime"
+        },
+        mustNotify: true
+      });
+      return true;
+    }
     if (runtimeMode === "elevenlabs_realtime") {
       const elevenLabsSettings = voiceRuntime.elevenLabsRealtime;
-      const elevenLabsAgentId = String(elevenLabsSettings?.agentId || "").trim();
-      if (!elevenLabsAgentId) {
+      const elevenLabsVoiceId = String(elevenLabsSettings?.voiceId || "").trim();
+      if (replyPath !== "brain") {
         await sendOperationalMessage(manager, {
           channel: message.channel,
           settings,
@@ -318,16 +353,92 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           userId,
           messageId: message.id,
           event: "voice_join_request",
-          reason: "elevenlabs_agent_id_missing",
+          reason: "elevenlabs_full_brain_required",
           details: {
-            mode: runtimeMode
+            mode: runtimeMode,
+            replyPath
+          },
+          mustNotify: true
+        });
+        return true;
+      }
+      if (ttsMode !== "api") {
+        await sendOperationalMessage(manager, {
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "elevenlabs_api_tts_required",
+          details: {
+            mode: runtimeMode,
+            replyPath,
+            ttsMode
+          },
+          mustNotify: true
+        });
+        return true;
+      }
+      if (usesApiTts && !elevenLabsVoiceId) {
+        await sendOperationalMessage(manager, {
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "elevenlabs_voice_id_missing",
+          details: {
+            mode: runtimeMode,
+            ttsMode
           },
           mustNotify: true
         });
         return true;
       }
     }
-    if (usesOpenAiAudioApi && runtimeMode !== "openai_realtime" && !manager.appConfig?.openaiApiKey) {
+    if (transcriberProvider === "elevenlabs" && replyPath !== "brain") {
+      await sendOperationalMessage(manager, {
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId,
+        messageId: message.id,
+        event: "voice_join_request",
+        reason: "elevenlabs_full_brain_required",
+        details: {
+          mode: runtimeMode,
+          replyPath,
+          providerRole: "transcription"
+        },
+        mustNotify: true
+      });
+      return true;
+    }
+    if (transcriberProvider === "elevenlabs" && transcriptionMethod !== "file_wav") {
+      await sendOperationalMessage(manager, {
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId,
+        messageId: message.id,
+        event: "voice_join_request",
+        reason: "elevenlabs_file_asr_required",
+        details: {
+          mode: runtimeMode,
+          transcriptionMethod,
+          transcriberProvider
+        },
+        mustNotify: true
+      });
+      return true;
+    }
+    if (needsOpenAiAudioApi && runtimeMode !== "openai_realtime" && !manager.appConfig?.openaiApiKey) {
       await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
@@ -365,7 +476,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       });
       return true;
     }
-    if (usesFileTurnTranscription && !manager.llm?.isAsrReady?.()) {
+    if (usesFileTurnTranscription && !manager.llm?.isAsrReady?.(transcriberProvider)) {
       await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
@@ -377,13 +488,14 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "voice_file_asr_unavailable",
         details: {
           mode: runtimeMode,
-          transcriptionMethod
+          transcriptionMethod,
+          transcriberProvider
         },
         mustNotify: true
       });
       return true;
     }
-    if (usesApiTts && !manager.llm?.isSpeechSynthesisReady?.()) {
+    if (usesApiTts && !manager.llm?.isSpeechSynthesisReady?.(voiceApiTtsProvider)) {
       await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
@@ -395,7 +507,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "voice_api_tts_unavailable",
         details: {
           mode: runtimeMode,
-          ttsMode
+          ttsMode,
+          ttsProvider: voiceApiTtsProvider
         },
         mustNotify: true
       });
@@ -604,28 +717,15 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
       } else if (runtimeMode === "elevenlabs_realtime") {
         const elevenLabsRealtimeSettings = voiceRuntime.elevenLabsRealtime;
-        realtimeClient = new ElevenLabsRealtimeClient({
-          apiKey: manager.appConfig.elevenLabsApiKey,
-          baseUrl:
-            String(elevenLabsRealtimeSettings?.apiBaseUrl || "https://api.elevenlabs.io").trim() ||
-            "https://api.elevenlabs.io",
-          logger: realtimeRuntimeLogger
-        });
         realtimeInputSampleRateHz = Number(elevenLabsRealtimeSettings?.inputSampleRateHz) || 16000;
-        realtimeOutputSampleRateHz = Number(elevenLabsRealtimeSettings?.outputSampleRateHz) || 16000;
-        await realtimeClient.connect({
-          agentId: String(elevenLabsRealtimeSettings?.agentId || "").trim(),
-          instructions: baseVoiceInstructions,
-          inputSampleRateHz: realtimeInputSampleRateHz,
-          outputSampleRateHz: realtimeOutputSampleRateHz
-        });
+        realtimeOutputSampleRateHz = Number(elevenLabsRealtimeSettings?.outputSampleRateHz) || 24000;
+        realtimeClient = null;
       }
 
       // --- ASR bridge setup (provider-agnostic) ---
-      // ASR transcription uses OpenAI regardless of the reply provider.
-      // Enable per-user or shared ASR when the provider supports it and
-      // the OpenAI API key is available.
-      if (manager.appConfig?.openaiApiKey && isRealtimeMode(runtimeMode)) {
+      // Realtime bridge ASR uses OpenAI when the configured transcriber
+      // provider is openai and the runtime supports those bridge modes.
+      if (transcriberProvider === "openai" && manager.appConfig?.openaiApiKey && isRealtimeMode(runtimeMode)) {
         const transcriptionMethod = String(
           openAiRealtimeSettings?.transcriptionMethod || "realtime_bridge"
         )

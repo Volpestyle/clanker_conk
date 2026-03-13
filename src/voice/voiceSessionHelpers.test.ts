@@ -130,8 +130,10 @@ test("resolveVoiceAsrLanguageGuidance supports auto and fixed language modes", (
 test("Gemini realtime mode resolves to gemini provider and label", () => {
   assert.equal(resolveVoiceRuntimeMode(createTestSettings({
     agentStack: {
-      overrides: {
-        voiceRuntime: "gemini_realtime"
+      runtimeConfig: {
+        voice: {
+          runtimeMode: "gemini_realtime"
+        }
       }
     }
   })), "gemini_realtime");
@@ -142,8 +144,10 @@ test("Gemini realtime mode resolves to gemini provider and label", () => {
 test("ElevenLabs realtime mode resolves to elevenlabs provider and label", () => {
   assert.equal(resolveVoiceRuntimeMode(createTestSettings({
     agentStack: {
-      overrides: {
-        voiceRuntime: "elevenlabs_realtime"
+      runtimeConfig: {
+        voice: {
+          runtimeMode: "elevenlabs_realtime"
+        }
       }
     }
   })), "elevenlabs_realtime");

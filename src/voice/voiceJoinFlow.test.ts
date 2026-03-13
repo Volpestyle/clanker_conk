@@ -391,10 +391,7 @@ test("requestJoin requires API keys for realtime runtime modes", async () => {
     message: createMessage(),
     settings: baseSettings({
       voice: {
-        mode: "elevenlabs_realtime",
-        elevenLabsRealtime: {
-          agentId: "agent_123"
-        }
+        mode: "elevenlabs_realtime"
       }
     })
   });
@@ -402,7 +399,7 @@ test("requestJoin requires API keys for realtime runtime modes", async () => {
   assert.equal(elevenLabs.operationalMessages.at(-1)?.reason, "elevenlabs_api_key_missing");
 });
 
-test("requestJoin requires ElevenLabs agent id when mode is elevenlabs_realtime", async () => {
+test("requestJoin constrains elevenlabs runtime to full-brain API TTS", async () => {
   const { manager, operationalMessages } = createManager({
     appConfig: {
       elevenLabsApiKey: "el-key"
@@ -413,15 +410,64 @@ test("requestJoin requires ElevenLabs agent id when mode is elevenlabs_realtime"
     settings: baseSettings({
       voice: {
         mode: "elevenlabs_realtime",
+        replyPath: "bridge"
+      }
+    })
+  });
+
+  assert.equal(result, true);
+  assert.equal(operationalMessages.at(-1)?.reason, "elevenlabs_full_brain_required");
+});
+
+test("requestJoin requires ElevenLabs voice ID for elevenlabs API TTS", async () => {
+  const { manager, operationalMessages } = createManager({
+    appConfig: {
+      elevenLabsApiKey: "el-key"
+    }
+  });
+  const result = await requestJoin(manager, {
+    message: createMessage(),
+    settings: baseSettings({
+      voice: {
+        mode: "elevenlabs_realtime",
+        replyPath: "brain",
+        ttsMode: "api",
         elevenLabsRealtime: {
-          agentId: ""
+          voiceId: ""
         }
       }
     })
   });
 
   assert.equal(result, true);
-  assert.equal(operationalMessages.at(-1)?.reason, "elevenlabs_agent_id_missing");
+  assert.equal(operationalMessages.at(-1)?.reason, "elevenlabs_voice_id_missing");
+});
+
+test("requestJoin requires file-turn transcription for elevenlabs transcriber", async () => {
+  const { manager, operationalMessages } = createManager({
+    appConfig: {
+      elevenLabsApiKey: "el-key",
+      openaiApiKey: "openai-key"
+    }
+  });
+  const result = await requestJoin(manager, {
+    message: createMessage(),
+    settings: baseSettings({
+      voice: {
+        mode: "openai_realtime",
+        openaiRealtime: {
+          transcriptionMethod: "realtime_bridge"
+        },
+        replyPath: "brain",
+        transcription: {
+          provider: "elevenlabs"
+        }
+      }
+    })
+  });
+
+  assert.equal(result, true);
+  assert.equal(operationalMessages.at(-1)?.reason, "elevenlabs_file_asr_required");
 });
 
 test("requestJoin validates file-WAV ASR, API TTS, and brain dependencies", async () => {

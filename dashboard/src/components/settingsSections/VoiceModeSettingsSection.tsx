@@ -210,20 +210,25 @@ export function VoiceModeSettingsSection({
 }) {
   const isRealtimeMode =
     isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
-  const replyPath = String(form.voiceReplyPath || "brain").trim().toLowerCase();
+  const replyPath = String(isElevenLabsRealtimeMode ? "brain" : form.voiceReplyPath || "brain").trim().toLowerCase();
   const isBridgePath = replyPath === "bridge";
   const isBrainPath = replyPath === "brain";
   const isNativePath = replyPath === "native";
-  const ttsMode = String(isBridgePath ? "realtime" : form.voiceTtsMode || "realtime").trim().toLowerCase();
+  const ttsMode = String(isElevenLabsRealtimeMode ? "api" : isBridgePath ? "realtime" : form.voiceTtsMode || "realtime")
+    .trim()
+    .toLowerCase();
   const isApiTts = ttsMode === "api";
   const streamingVoiceReplyActive = isBrainPath && !isApiTts;
+  const transcriptionProvider =
+    String(isBrainPath ? form.voiceTranscriptionProvider || "openai" : "openai").trim().toLowerCase();
+  const usesElevenLabsTranscription = transcriptionProvider === "elevenlabs";
   const openAiRealtimeTranscriptionMethodOptions = OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS;
   const openAiRealtimeTranscriptionMethod = String(
-    form.voiceOpenAiRealtimeTranscriptionMethod || "realtime_bridge"
+    usesElevenLabsTranscription ? "file_wav" : form.voiceOpenAiRealtimeTranscriptionMethod || "realtime_bridge"
   )
     .trim()
     .toLowerCase();
-  const usesRealtimeAsrBridge = openAiRealtimeTranscriptionMethod !== "file_wav";
+  const usesRealtimeAsrBridge = !usesElevenLabsTranscription && openAiRealtimeTranscriptionMethod !== "file_wav";
   const asrModeConfigVisible = (isBridgePath || isBrainPath) && usesRealtimeAsrBridge;
   const openAiPerUserAsrBridge =
     asrModeConfigVisible &&
@@ -324,47 +329,53 @@ export function VoiceModeSettingsSection({
             <option value="xai">xAI realtime (low-latency)</option>
             <option value="openai">OpenAI realtime (low-latency)</option>
             <option value="gemini">Gemini realtime (audio + stream frames)</option>
-            <option value="elevenlabs">ElevenLabs realtime (agent websocket)</option>
+            <option value="elevenlabs">ElevenLabs API (full brain)</option>
           </select>
 
           {isRealtimeMode && (
             <>
               <h4>Reply Path</h4>
-              <div className="radio-group">
-                <label>
-                  <input
-                    type="radio"
-                    name="voiceReplyPath"
-                    value="native"
-                    checked={isNativePath}
-                    onChange={set("voiceReplyPath")}
-                  />
-                  <strong>Native</strong>
-                  <span> &mdash; Audio &rarr; realtime model &rarr; audio out. Fastest path with provider-owned reasoning and provider-native tools where supported.</span>
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="voiceReplyPath"
-                    value="bridge"
-                    checked={isBridgePath}
-                    onChange={set("voiceReplyPath")}
-                  />
-                  <strong>Bridge</strong>
-                  <span> &mdash; Audio &rarr; ASR transcript &rarr; realtime model &rarr; audio out. Rich context, multi-speaker labels, and provider-native tools where supported.</span>
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="voiceReplyPath"
-                    value="brain"
-                    checked={isBrainPath}
-                    onChange={set("voiceReplyPath")}
-                  />
-                  <strong>Full Brain</strong>
-                  <span> &mdash; Audio &rarr; ASR transcript &rarr; text LLM &rarr; realtime or API TTS &rarr; audio out. Maximum control with orchestrator-owned tools and any text model.</span>
-                </label>
-              </div>
+              {isElevenLabsRealtimeMode ? (
+                <p>
+                  ElevenLabs runs on the Full Brain path here: transcript turns go through the text brain, then ElevenLabs renders the final speech over its TTS API.
+                </p>
+              ) : (
+                <div className="radio-group">
+                  <label>
+                    <input
+                      type="radio"
+                      name="voiceReplyPath"
+                      value="native"
+                      checked={isNativePath}
+                      onChange={set("voiceReplyPath")}
+                    />
+                    <strong>Native</strong>
+                    <span> &mdash; Audio &rarr; realtime model &rarr; audio out. Fastest path with provider-owned reasoning and provider-native tools where supported.</span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="voiceReplyPath"
+                      value="bridge"
+                      checked={isBridgePath}
+                      onChange={set("voiceReplyPath")}
+                    />
+                    <strong>Bridge</strong>
+                    <span> &mdash; Audio &rarr; ASR transcript &rarr; realtime model &rarr; audio out. Rich context, multi-speaker labels, and provider-native tools where supported.</span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="voiceReplyPath"
+                      value="brain"
+                      checked={isBrainPath}
+                      onChange={set("voiceReplyPath")}
+                    />
+                    <strong>Full Brain</strong>
+                    <span> &mdash; Audio &rarr; ASR transcript &rarr; text LLM &rarr; realtime or API TTS &rarr; audio out. Maximum control with orchestrator-owned tools and any text model.</span>
+                  </label>
+                </div>
+              )}
 
               {/* ── Pipeline Flow Indicator ── */}
               <PipelineFlowIndicator stages={pipelineStages} parallel={pipelineParallel} />
@@ -373,28 +384,59 @@ export function VoiceModeSettingsSection({
               {isBrainPath && (
                 <>
                   <h4>TTS Mode</h4>
+                  {isElevenLabsRealtimeMode ? (
+                    <p>
+                      ElevenLabs voice mode always uses API TTS in Full Brain mode. The text brain decides the words, then ElevenLabs renders the final speech.
+                    </p>
+                  ) : (
+                    <div className="radio-group">
+                      <label>
+                        <input
+                          type="radio"
+                          name="voiceTtsMode"
+                          value="realtime"
+                          checked={!isApiTts}
+                          onChange={set("voiceTtsMode")}
+                        />
+                        <strong>Realtime</strong>
+                        <span> &mdash; Uses the realtime WebSocket for text-to-speech. Lower latency, voice tied to realtime model.</span>
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="voiceTtsMode"
+                          value="api"
+                          checked={isApiTts}
+                          onChange={set("voiceTtsMode")}
+                        />
+                        <strong>TTS API</strong>
+                        <span> &mdash; Uses OpenAI TTS REST API (gpt-4o-mini-tts). More voice options, independent of realtime model.</span>
+                      </label>
+                    </div>
+                  )}
+                  <h4>Thinking</h4>
                   <div className="radio-group">
                     <label>
                       <input
                         type="radio"
-                        name="voiceTtsMode"
-                        value="realtime"
-                        checked={!isApiTts}
-                        onChange={set("voiceTtsMode")}
+                        name="voiceThinking"
+                        value="disabled"
+                        checked={String(form.voiceThinking || "disabled") === "disabled"}
+                        onChange={set("voiceThinking")}
                       />
-                      <strong>Realtime</strong>
-                      <span> &mdash; Uses the realtime WebSocket for text-to-speech. Lower latency, voice tied to realtime model.</span>
+                      <strong>Off</strong>
+                      <span> &mdash; No extended thinking. Fastest response time.</span>
                     </label>
                     <label>
                       <input
                         type="radio"
-                        name="voiceTtsMode"
-                        value="api"
-                        checked={isApiTts}
-                        onChange={set("voiceTtsMode")}
+                        name="voiceThinking"
+                        value="think_aloud"
+                        checked={String(form.voiceThinking) === "think_aloud"}
+                        onChange={set("voiceThinking")}
                       />
-                      <strong>TTS API</strong>
-                      <span> &mdash; Uses OpenAI TTS REST API (gpt-4o-mini-tts). More voice options, independent of realtime model.</span>
+                      <strong>Think aloud</strong>
+                      <span> &mdash; Thinking is spoken before the reply. Adds latency but lets you hear the reasoning.</span>
                     </label>
                   </div>
                   <div className="toggles">
@@ -464,37 +506,64 @@ export function VoiceModeSettingsSection({
                   )}
                   {isApiTts && (
                     <div className="split">
-                      <div>
-                        <label htmlFor="voice-tts-api-model">TTS model</label>
-                        <select
-                          id="voice-tts-api-model"
-                          value={form.voiceApiTtsModel}
-                          onChange={set("voiceApiTtsModel")}
-                        >
-                          <option value="gpt-4o-mini-tts">gpt-4o-mini-tts</option>
-                          <option value="tts-1">tts-1</option>
-                          <option value="tts-1-hd">tts-1-hd</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label htmlFor="voice-tts-api-voice">TTS voice</label>
-                        <select
-                          id="voice-tts-api-voice"
-                          value={form.voiceApiTtsVoice}
-                          onChange={set("voiceApiTtsVoice")}
-                        >
-                          <option value="alloy">alloy</option>
-                          <option value="ash">ash</option>
-                          <option value="ballad">ballad</option>
-                          <option value="coral">coral</option>
-                          <option value="echo">echo</option>
-                          <option value="fable">fable</option>
-                          <option value="nova">nova</option>
-                          <option value="onyx">onyx</option>
-                          <option value="sage">sage</option>
-                          <option value="shimmer">shimmer</option>
-                        </select>
-                      </div>
+                      {isElevenLabsRealtimeMode ? (
+                        <>
+                          <div>
+                            <label htmlFor="voice-elevenlabs-tts-model">ElevenLabs TTS model</label>
+                            <input
+                              id="voice-elevenlabs-tts-model"
+                              type="text"
+                              value={form.voiceElevenLabsRealtimeTtsModel}
+                              onChange={set("voiceElevenLabsRealtimeTtsModel")}
+                              placeholder="eleven_multilingual_v2"
+                            />
+                          </div>
+                          <div>
+                            <label htmlFor="voice-elevenlabs-voice-id">ElevenLabs voice ID</label>
+                            <input
+                              id="voice-elevenlabs-voice-id"
+                              type="text"
+                              value={form.voiceElevenLabsRealtimeVoiceId}
+                              onChange={set("voiceElevenLabsRealtimeVoiceId")}
+                              placeholder="JBFqnCBsd6RMkjVDRZzb"
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <label htmlFor="voice-tts-api-model">TTS model</label>
+                            <select
+                              id="voice-tts-api-model"
+                              value={form.voiceApiTtsModel}
+                              onChange={set("voiceApiTtsModel")}
+                            >
+                              <option value="gpt-4o-mini-tts">gpt-4o-mini-tts</option>
+                              <option value="tts-1">tts-1</option>
+                              <option value="tts-1-hd">tts-1-hd</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label htmlFor="voice-tts-api-voice">TTS voice</label>
+                            <select
+                              id="voice-tts-api-voice"
+                              value={form.voiceApiTtsVoice}
+                              onChange={set("voiceApiTtsVoice")}
+                            >
+                              <option value="alloy">alloy</option>
+                              <option value="ash">ash</option>
+                              <option value="ballad">ballad</option>
+                              <option value="coral">coral</option>
+                              <option value="echo">echo</option>
+                              <option value="fable">fable</option>
+                              <option value="nova">nova</option>
+                              <option value="onyx">onyx</option>
+                              <option value="sage">sage</option>
+                              <option value="shimmer">shimmer</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
                       <div>
                         <label htmlFor="voice-tts-api-speed">TTS speed</label>
                         <input
@@ -524,44 +593,79 @@ export function VoiceModeSettingsSection({
             <StagePanel number={1} label="ASR" pathTag="Bridge / Brain">
               <div className="split">
                 <div>
-                  <label htmlFor="voice-openai-realtime-transcription-method">Transcription method</label>
+                  <label htmlFor="voice-transcription-provider">Transcription provider</label>
                   <select
-                    id="voice-openai-realtime-transcription-method"
-                    value={form.voiceOpenAiRealtimeTranscriptionMethod}
-                    onChange={set("voiceOpenAiRealtimeTranscriptionMethod")}
+                    id="voice-transcription-provider"
+                    value={isBrainPath ? transcriptionProvider : "openai"}
+                    onChange={set("voiceTranscriptionProvider")}
+                    disabled={!isBrainPath}
                   >
-                    {openAiRealtimeTranscriptionMethodOptions.map((methodId) => (
-                      <option key={methodId} value={methodId}>
-                        {methodId}
-                      </option>
-                    ))}
+                    <option value="openai">OpenAI</option>
+                    <option value="elevenlabs">ElevenLabs (full brain only)</option>
                   </select>
                 </div>
-                <div>
-                  <label htmlFor="voice-openai-realtime-transcription-model">
-                    OpenAI transcription model
-                  </label>
-                  <select
-                    id="voice-openai-realtime-transcription-model"
-                    value={form.voiceOpenAiRealtimeInputTranscriptionModel}
-                    onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
-                  >
-                    {openAiTranscriptionModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {usesElevenLabsTranscription ? (
+                  <div>
+                    <label htmlFor="voice-elevenlabs-transcription-model">ElevenLabs transcription model</label>
+                    <input
+                      id="voice-elevenlabs-transcription-model"
+                      type="text"
+                      value={form.voiceElevenLabsRealtimeTranscriptionModel}
+                      onChange={set("voiceElevenLabsRealtimeTranscriptionModel")}
+                      placeholder="scribe_v1"
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label htmlFor="voice-openai-realtime-transcription-method">Transcription method</label>
+                      <select
+                        id="voice-openai-realtime-transcription-method"
+                        value={form.voiceOpenAiRealtimeTranscriptionMethod}
+                        onChange={set("voiceOpenAiRealtimeTranscriptionMethod")}
+                      >
+                        {openAiRealtimeTranscriptionMethodOptions.map((methodId) => (
+                          <option key={methodId} value={methodId}>
+                            {methodId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="voice-openai-realtime-transcription-model">
+                        OpenAI transcription model
+                      </label>
+                      <select
+                        id="voice-openai-realtime-transcription-model"
+                        value={form.voiceOpenAiRealtimeInputTranscriptionModel}
+                        onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
+                      >
+                        {openAiTranscriptionModelOptions.map((modelId) => (
+                          <option key={modelId} value={modelId}>
+                            {modelId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
               </div>
 
               <p>
-                {usesRealtimeAsrBridge
+                {usesElevenLabsTranscription
+                  ? "ElevenLabs transcription is used on the Full Brain path as a finalized file-turn transcription step. It does not run the OpenAI realtime ASR bridge."
+                  : usesRealtimeAsrBridge
                   ? "Realtime bridge streams audio into OpenAI transcription sessions and uses those transcripts as the source of truth."
                   : "File WAV transcribes each finalized turn from captured PCM after the turn ends. It is slower, but does not use realtime ASR bridge sessions."}
               </p>
 
-              {asrModeConfigVisible && (
+              {!isBrainPath && (
+                <p>
+                  Bridge mode currently requires OpenAI transcription so the room can keep a live transcript lane into the realtime runtime.
+                </p>
+              )}
+
+              {asrModeConfigVisible && !usesElevenLabsTranscription && (
                 <div className="split">
                   <div>
                     <label>ASR mode</label>
@@ -1109,22 +1213,22 @@ export function VoiceModeSettingsSection({
               <>
                 <div className="split">
                   <div>
-                    <label htmlFor="voice-elevenlabs-agent-id">ElevenLabs agent ID</label>
-                    <input
-                      id="voice-elevenlabs-agent-id"
-                      type="text"
-                      value={form.voiceElevenLabsRealtimeAgentId}
-                      onChange={set("voiceElevenLabsRealtimeAgentId")}
-                      placeholder="agent_..."
-                    />
-                  </div>
-                  <div>
                     <label htmlFor="voice-elevenlabs-api-base-url">ElevenLabs API base URL</label>
                     <input
                       id="voice-elevenlabs-api-base-url"
                       type="text"
                       value={form.voiceElevenLabsRealtimeApiBaseUrl}
                       onChange={set("voiceElevenLabsRealtimeApiBaseUrl")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-elevenlabs-transcription-model-runtime">Default ElevenLabs transcription model</label>
+                    <input
+                      id="voice-elevenlabs-transcription-model-runtime"
+                      type="text"
+                      value={form.voiceElevenLabsRealtimeTranscriptionModel}
+                      onChange={set("voiceElevenLabsRealtimeTranscriptionModel")}
+                      placeholder="scribe_v1"
                     />
                   </div>
                 </div>
@@ -1153,6 +1257,11 @@ export function VoiceModeSettingsSection({
                     />
                   </div>
                 </div>
+                <p>
+                  ElevenLabs voice mode does not use a conversational agent websocket here. It keeps capture local,
+                  uses Full Brain orchestration, and calls the official ElevenLabs APIs for speech rendering and
+                  optional file-turn transcription.
+                </p>
               </>
             )}
 

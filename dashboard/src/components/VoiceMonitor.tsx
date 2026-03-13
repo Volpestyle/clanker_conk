@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, lazy, Suspense, type ReactNode } from "react";
 import { api } from "../api";
 import {
   useVoiceSSE,
@@ -11,6 +11,8 @@ import {
   type SessionLatency,
   type LatencyTurnEntry
 } from "../hooks/useVoiceSSE";
+
+const VoiceDebugger = lazy(() => import("./VoiceDebugger"));
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
 import { useDashboardGuildScope } from "../guildScope";
 import { CopyButton, Section } from "./ui";
@@ -65,7 +67,7 @@ const MODE_LABELS: Record<string, string> = {
   gemini: "Gemini",
   gemini_realtime: "Gemini RT",
   elevenlabs: "ElevenLabs",
-  elevenlabs_realtime: "ElevenLabs RT",
+  elevenlabs_realtime: "ElevenLabs API",
   xai: "xAI",
   xai_realtime: "xAI RT"
 };
@@ -1672,6 +1674,7 @@ export default function VoiceMonitor() {
     type: ""
   });
   const [showRuntime, setShowRuntime] = useState(true);
+  const [showDebugger, setShowDebugger] = useState(false);
   const [activeKinds, setActiveKinds] = useState<Set<string>>(
     () => new Set(EVENT_KINDS)
   );
@@ -1756,6 +1759,19 @@ export default function VoiceMonitor() {
     }
   };
 
+  if (showDebugger) {
+    return (
+      <Suspense fallback={<div style={{ padding: 20, color: "var(--ink-3)" }}>Loading debugger...</div>}>
+        <VoiceDebugger
+          sessions={sessions}
+          events={events}
+          sseStatus={status}
+          onBack={() => setShowDebugger(false)}
+        />
+      </Suspense>
+    );
+  }
+
   return (
     <div className="vm-container">
       {/* Connection status */}
@@ -1769,6 +1785,13 @@ export default function VoiceMonitor() {
             {voiceState.activeCount} active session{voiceState.activeCount !== 1 ? "s" : ""}
           </span>
         )}
+        <button
+          type="button"
+          className="vm-debugger-toggle"
+          onClick={() => setShowDebugger(true)}
+        >
+          FLIGHT RECORDER
+        </button>
       </div>
 
       <section className="vm-join panel">

@@ -34,6 +34,7 @@ import {
   inspectAsrTranscript,
   isRealtimeMode,
   normalizeVoiceText,
+  resolveTranscriberProvider,
   resolveVoiceAsrLanguageGuidance
 } from "./voiceSessionHelpers.ts";
 import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
@@ -1639,8 +1640,15 @@ export class TurnProcessor {
 
       const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
       const voiceRuntime = getVoiceRuntimeConfig(settings);
-      const preferredModel = voiceRuntime.openaiRealtime?.inputTranscriptionModel;
-      const transcriptionModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+      const transcriberProvider = resolveTranscriberProvider(settings);
+      const preferredModel =
+        transcriberProvider === "elevenlabs"
+          ? voiceRuntime.elevenLabsRealtime?.transcriptionModel
+          : voiceRuntime.openaiRealtime?.inputTranscriptionModel;
+      const transcriptionModel =
+        transcriberProvider === "elevenlabs"
+          ? String(preferredModel || "").trim()
+          : String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
       const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
       const transcriptionPlan = hasTranscriptOverride
         ? {
@@ -1654,6 +1662,7 @@ export class TurnProcessor {
         }
         : resolveTurnTranscriptionPlan({
           mode: session.mode,
+          provider: transcriberProvider,
           configuredModel: transcriptionModel,
           pcmByteLength: normalizedPcmBuffer.length,
           sampleRateHz
@@ -2214,9 +2223,13 @@ export class TurnProcessor {
     if (consumedByMusicMode) return;
 
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
+    const voiceRuntime = getVoiceRuntimeConfig(settings);
+    const transcriberProvider = resolveTranscriberProvider(settings);
     const transcriptionModelPrimary =
-      String(getVoiceRuntimeConfig(settings).openaiRealtime?.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
-      "gpt-4o-mini-transcribe";
+      transcriberProvider === "elevenlabs"
+        ? String(voiceRuntime.elevenLabsRealtime?.transcriptionModel || "").trim()
+        : String(voiceRuntime.openaiRealtime?.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
+          "gpt-4o-mini-transcribe";
     const sampleRateHz = 24000;
     const silenceGate = this.host.evaluatePcmSilenceGate({
       pcmBuffer,
@@ -2247,6 +2260,7 @@ export class TurnProcessor {
     }
     const transcriptionPlan = resolveTurnTranscriptionPlan({
       mode: session.mode,
+      provider: transcriberProvider,
       configuredModel: transcriptionModelPrimary,
       pcmByteLength: pcmBuffer.length,
       sampleRateHz
