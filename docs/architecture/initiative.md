@@ -2,8 +2,8 @@
 
 > **Scope:** Current shipped ambient text delivery cycle.
 > Shared attention model: [`presence-and-attention.md`](presence-and-attention.md)
-> Activity model overview: [`clanker-activity.md`](clanker-activity.md)
-> Voice pipeline reference: [`voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
+> Activity model overview: [`activity.md`](activity.md)
+> Voice pipeline reference: [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
 
 This document describes the text-side ambient delivery system in `src/bot/initiativeEngine.ts`.
 

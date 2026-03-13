@@ -5,14 +5,14 @@
 > Capture and ASR: [`voice-capture-and-asr-pipeline.md`](voice-capture-and-asr-pipeline.md)
 > Reply orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
 > Music behavior: [`music.md`](music.md)
-> Explicit cancel commands ("stop", "cancel"): [`cancel.md`](../cancel.md)
-> Cross-cutting settings contract: [`../settings.md`](../settings.md)
+> Explicit cancel commands ("stop", "cancel"): [`../operations/cancellation.md`](../operations/cancellation.md)
+> Cross-cutting settings contract: [`../reference/settings.md`](../reference/settings.md)
 
 ---
 
 # Part 1: Output State Machine
 
-Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document keeps the output-state, buffering, interruption, and barge-in rules local to the voice runtime.
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../reference/settings.md`](../reference/settings.md). This document keeps the output-state, buffering, interruption, and barge-in rules local to the voice runtime.
 
 This document defines the canonical assistant output state machine for voice sessions.
 The goal is to prevent stale "bot is still speaking" locks when OpenAI realtime,

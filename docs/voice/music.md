@@ -4,13 +4,13 @@
 > Voice output state machine: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
 > Voice reply admission/orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
 > Provider/runtime pipeline: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
-> Cross-cutting settings contract: [`../settings.md`](../settings.md)
+> Cross-cutting settings contract: [`../reference/settings.md`](../reference/settings.md)
 
 ---
 
 ## 1. Purpose
 
-Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document only covers music-local voice behavior and the settings that shape that behavior.
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../reference/settings.md`](../reference/settings.md). This document only covers music-local voice behavior and the settings that shape that behavior.
 
 Music behavior crosses several voice subsystems:
 
@@ -142,16 +142,16 @@ The dedicated model binding lives under `agentStack.runtimeConfig.voice.musicBra
 
 When `agentStack.runtimeConfig.voice.musicBrain.mode` is `disabled`, the deterministic safety gates still decide whether the turn is eligible during active music, but the dedicated music brain is bypassed. The main reply brain then owns the temporary music handoff decision itself:
 
-- `music_reply_handoff(mode=pause)` for a one-reply floor-taking pause that auto-resumes
-- `music_reply_handoff(mode=duck)` for a one-reply duck/unduck handoff
+- `media_reply_handoff(mode=pause)` for a one-reply floor-taking pause that auto-resumes
+- `media_reply_handoff(mode=duck)` for a one-reply duck/unduck handoff
 - no handoff tool call when it wants to speak normally over current playback state
 - `[SKIP]` when the wake word got attention but the bot decides not to respond
 
 Persistent playback tools stay separate:
 
-- `music_pause` means leave playback paused beyond the current reply
-- `music_resume` means request paused playback now; the phase only returns to `playing` after transport confirmation
-- `music_stop` means stop playback
+- `media_pause` means leave playback paused beyond the current reply
+- `media_resume` means request paused playback now; the phase only returns to `playing` after transport confirmation
+- `media_stop` means stop playback
 
 ## 7. Pause Versus Duck
 
@@ -161,7 +161,7 @@ This is the intended nuanced behavior:
 - after music resumes and the latch is open: ordinary follow-up replies can stay conversational without another wake word, and the main reply brain decides whether that reply should pause, duck, do nothing, or stay silent
 - a brand-new explicit wake word during that same latch-open window: pause again
 - if the bot speaks while music is still live and no handoff was claimed, it should usually favor a quick reaction or short answer unless the moment clearly wants more
-- if the brain chooses `music_reply_handoff`, that only means this reply can temporarily take the floor and playback auto-restores afterward; the bot still decides whether the answer stays brief or goes longer
+- if the brain chooses `media_reply_handoff`, that only means this reply can temporarily take the floor and playback auto-restores afterward; the bot still decides whether the answer stays brief or goes longer
 
 So “latch-open follow-up” and “fresh wake” are intentionally different:
 
@@ -174,7 +174,7 @@ Ducking is gain-only:
 
 - duck/unduck lowers and restores music volume
 - it does not pause the track
-- it is used only when the main reply brain explicitly chooses `music_reply_handoff(mode=duck)` and assistant speech happens while music remains in the `playing` phase
+- it is used only when the main reply brain explicitly chooses `media_reply_handoff(mode=duck)` and assistant speech happens while music remains in the `playing` phase
 
 This is the steady-state path for post-resume follow-ups that do not reopen a fresh wake-word pause.
 
@@ -210,6 +210,8 @@ During active music:
 - requester-only cancellation of an active music choice prompt still clears that pending state locally for commands like `never mind`
 - explicit text-side disambiguation fallback still uses cheap exact/ordinal/title matching, then may use a bounded resolver over the active option list; it never invents a new option id or starts a fresh search from that followup alone
 - `music_play` treats `selection_id` as advisory when a query is also present; if the selection id is stale or malformed, the tool logs the bad id and falls back to query search instead of failing the whole play request
+- `video_play` uses the same playback/disambiguation machinery but constrains lookup to YouTube and hands the selected URL to the outbound publish pipeline when that runtime path is active
+- `video_search` is the explicit “show me some YouTube options” capability; when site layout or thumbnails matter more than raw candidates, the model can choose `browser_browse` instead
 - `music_queue_next` and `music_queue_add` can resolve ordinary queue requests directly from query text, or reuse an exact `selection_id`/track id when one is already known
 - for "play X, then queue Y" turns, the intended tool order is `music_play` first and `music_queue_next` second in the same tool turn; this avoids stranding the queue intent behind async playback startup
 - spoken confirmations should not claim a track is queued until `music_queue_next` or `music_queue_add` has actually succeeded

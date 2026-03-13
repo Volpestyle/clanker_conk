@@ -1,11 +1,11 @@
 # Voice Test Suites
 
-> Unit tests, live LLM tests, and replay harnesses: [`tests.md`](tests.md)
+> Unit tests, live LLM tests, and replay harnesses: [`testing.md`](testing.md)
 
 Two complementary test harnesses validate voice behavior at different layers:
 
 - **Golden Validation Suite** — tests the "brain" (LLM inference, prompt orchestration, admission decisions) with mocked Discord infrastructure
-- **E2E Bot-to-Bot Suite** — tests the physical voice layer (gateway, audio transport, Opus encoding, DAVE encryption) with real Discord infrastructure
+- **E2E Selfbot + Driver-Bot Suite** — tests the physical voice layer (gateway, audio transport, Opus encoding, DAVE encryption) with real Discord infrastructure
 
 ---
 
@@ -60,7 +60,7 @@ Use:
 - `--allow-missing-credentials`
 - `--max-cases`
 
-For the current authoritative defaults, check `scripts/voiceGoldenHarness.ts` and [`docs/tests.md](tests.md)`.
+For the current authoritative defaults, check [`../scripts/voiceGoldenHarness.ts`](../scripts/voiceGoldenHarness.ts) and [`testing.md`](testing.md).
 
 ### Credential Requirements
 
@@ -71,13 +71,13 @@ For the current authoritative defaults, check `scripts/voiceGoldenHarness.ts` an
 
 ---
 
-## E2E Bot-to-Bot Voice Validation
+## E2E Selfbot + Driver-Bot Voice Validation
 
-A **Driver Bot** acts as a test double:
+A **Driver Bot** acts as a test double around the system selfbot:
 
-1. Joins the same voice channel as the system bot
+1. Joins the same voice channel as the system selfbot
 2. Injects pre-recorded audio fixtures (simulating user speech)
-3. Records audio output from the system bot
+3. Records audio output from the system selfbot
 4. Validates received audio and timing
 
 This provides **full physical layer coverage** that golden tests cannot achieve.
@@ -93,14 +93,14 @@ This provides **full physical layer coverage** that golden tests cannot achieve.
         │                   │                   │
    ┌────▼────┐        ┌────▼────┐        ┌────▼────┐
    │ Test    │        │ Voice   │        │ System  │
-   │ Guild   │        │ Channel │        │ Bot     │
+   │ Guild   │        │ Channel │        │ Selfbot │
    └─────────┘        └─────────┘        │(clanker)│
                                          └────┬────┘
                                               │
          ┌────────────────────────────────────┼────────────────┐
          │                                    │                │
     ┌────▼────┐                          ┌────▼────┐      ┌────▼────┐
-    │ Driver  │◄───── audio stream ──────│ rust_   │      │ LLM/STT │
+    │ Driver  │◄───── audio stream ──────│ clankvox│      │ LLM/STT │
     │ Bot A/B │      (Opus/encrypted)     │subprocess│    │ Pipeline │
     │ (Test)  │                          └─────────┘      └──────────┘
     └────┬────┘
@@ -115,12 +115,12 @@ This provides **full physical layer coverage** that golden tests cannot achieve.
 ### Data Flow
 
 1. **Setup**: Driver bot(s) connect to Discord gateway and join test voice channel
-2. **Subscription**: Driver bots listen for system bot's audio stream
+2. **Subscription**: Driver bots listen for the system selfbot's audio stream
 3. **Injection**: Driver bot plays pre-recorded PCM audio fixture
-4. **Processing**: System bot receives audio → STT → LLM decision → LLM generation → TTS → audio out
-5. **Capture**: Driver bot records audio bytes from system bot
+4. **Processing**: System selfbot receives audio → STT → LLM decision → LLM generation → TTS → audio out
+5. **Capture**: Driver bot records audio bytes from the system selfbot
 6. **Assertion**: Test validates received audio meets expectations
-7. **Voice-history verification** (optional): Test can query dashboard voice-history APIs to disambiguate bot speech from music audio
+7. **Voice-history verification** (optional): Test can query dashboard voice-history APIs to disambiguate selfbot speech from music audio
 
 ## Infrastructure Requirements
 
@@ -167,14 +167,14 @@ Create a voice channel in the test guild:
 
 #### 5. Text Channel (Optional)
 
-Create a text channel for text-based interactions (stop music, summon bot):
+Create a text channel for text-based interactions (stop music, summon selfbot):
 
 1. In test guild, create text channel: "test-text-1"
 2. Right-click channel → Copy ID → save as `E2E_TEST_TEXT_CHANNEL_ID`
 
-#### 6. Bot Invitations
+#### 6. Driver Bot Invitations
 
-Invite all bots with voice + text permissions:
+Invite the driver bots with voice + text permissions. The system selfbot account just needs to already be present in the test guild.
 
 ```
 https://discord.com/oauth2/authorize?client_id=<BOT_CLIENT_ID>&scope=bot&permissions=3148800
@@ -189,14 +189,14 @@ Required permissions:
 
 ### Environment Configuration
 
-#### System Bot (Fallbacks)
+#### System Selfbot (legacy env names)
 
-The test harness reuses your existing system bot configuration:
+The test harness reuses your existing main runtime configuration. In this fork, `DISCORD_TOKEN` is the selfbot user token even though the env name is legacy:
 
 ```sh
 # Already in .env
-DISCORD_TOKEN=<your_main_bot_token>
-CLIENT_ID=<your_main_bot_user_id>
+DISCORD_TOKEN=<your_selfbot_user_token>
+CLIENT_ID=<your_selfbot_user_id>
 ```
 
 #### E2E-Specific Variables
@@ -223,8 +223,8 @@ DASHBOARD_TOKEN=<if_auth_enabled>
 
 | Variable | Required | Fallback | Purpose |
 |----------|----------|----------|---------|
-| `E2E_SYSTEM_BOT_TOKEN` | No | `DISCORD_TOKEN` | System bot authentication |
-| `E2E_SYSTEM_BOT_USER_ID` | No | `CLIENT_ID` | Identify system bot's audio stream |
+| `E2E_SYSTEM_BOT_TOKEN` | No | `DISCORD_TOKEN` | System selfbot authentication (legacy env name) |
+| `E2E_SYSTEM_BOT_USER_ID` | No | `CLIENT_ID` | Identify the system selfbot's audio stream (legacy env name) |
 | `E2E_DRIVER_BOT_TOKEN` | **Yes** | None | Primary driver bot authentication |
 | `E2E_DRIVER_BOT_2_TOKEN` | No | None | Second driver bot for multi-user tests |
 | `E2E_TEST_GUILD_ID` | **Yes** | None | Test guild/server ID |
@@ -448,9 +448,9 @@ Text channel message response tests.
 
 ### The Problem
 
-When music is playing, the system bot sends both TTS voice responses and music audio through the same Discord audio stream. `waitForAudioResponse()` (which checks `getReceivedAudioBytes() > 0`) cannot distinguish between them — it will return immediately with music bytes, not a TTS response.
+When music is playing, the system selfbot sends both TTS voice responses and music audio through the same Discord audio stream. `waitForAudioResponse()` (which checks `getReceivedAudioBytes() > 0`) cannot distinguish between them — it will return immediately with music bytes, not a TTS response.
 
-This makes it impossible to reliably test "does the bot respond to a voice question while music is playing?" using byte counting alone.
+This makes it impossible to reliably test "does the selfbot respond to a voice question while music is playing?" using byte counting alone.
 
 ### Current Dashboard Voice History APIs
 
@@ -644,10 +644,10 @@ E2E_TEST_VOICE_CHANNEL_ID=...
 
 ### "Dashboard did not become ready within 30000ms"
 
-**Cause**: System bot not running or dashboard not accessible
+**Cause**: System selfbot not running or dashboard not accessible
 
 **Fix**:
-1. Start system bot: `bun start`
+1. Start system selfbot: `bun start`
 2. Verify dashboard: `curl http://127.0.0.1:8787/api/health`
 3. Check `DASHBOARD_HOST` and `DASHBOARD_PORT` match the running instance
 
@@ -718,7 +718,7 @@ Alternatively, pre-generate and commit fixtures to `tests/fixtures/` to allow `u
 
 **Cost Factors**:
 - Discord API (rate limits: gateway connect, voice state updates)
-- LLM inference (if system bot calls LLM)
+- LLM inference (if the system selfbot calls the LLM)
 - STT/TTS costs (realtime or pipeline mode)
 - yt-dlp downloads (music tests)
 

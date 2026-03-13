@@ -1,25 +1,36 @@
-# Clanker Conk Technical Architecture
+# Clanker Conk Self Technical Architecture
 
-This document explains the live runtime shape of the bot: where core decisions happen, how settings flow through the system, and which modules own text, voice, memory, tools, and persistence.
+This document explains the live runtime shape of the experimental selfbot: where core decisions happen, how settings flow through the system, and which modules own text, voice, memory, tools, persistence, and the Rust media plane.
+
+Docs map: [`../README.md`](../README.md)
+Unified media product surface: [`../capabilities/media.md`](../capabilities/media.md)
+
+For the `clankvox`-local transport/media docs, start at [`../../src/voice/clankvox/README.md`](../../src/voice/clankvox/README.md).
 
 Canonical companion docs:
 
-- [`docs/settings.md`](settings.md)
-- [`docs/presence-and-attention.md`](presence-and-attention.md)
-- [`docs/clanker-activity.md`](clanker-activity.md)
-- [`docs/initiative-unified-spec.md`](initiative-unified-spec.md)
-- [`docs/voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
-- [`docs/preset-system-spec.md`](preset-system-spec.md)
+- [`../reference/settings.md`](../reference/settings.md)
+- [`presence-and-attention.md`](presence-and-attention.md)
+- [`activity.md`](activity.md)
+- [`initiative.md`](initiative.md)
+- [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
+- [`presets.md`](presets.md)
 
 ## 1. High-Level Components
 
+Account/runtime model:
+
+- one Discord user account is the primary runtime identity
+- Bun owns gateway/session orchestration, prompts, tools, memory, and the dashboard
+- `clankvox` is the Rust voice/media subprocess that owns Discord RTP, Opus, DAVE, music, TTS pacing, and native stream-watch media transport
+
 Code entrypoint:
 
-- `src/app.ts`: bootstraps storage, services, bot, and dashboard server
+- `src/app.ts`: bootstraps storage, services, the selfbot runtime, `clankvox`, and the dashboard server
 
 Core runtime:
 
-- `src/bot.ts`: Discord orchestration and scheduler entrypoints
+- `src/bot.ts`: Discord orchestration and scheduler entrypoints for the selfbot runtime
 - `src/bot/*`: text reply admission, reply pipeline, ambient text initiative, automations, permissions, continuity, memory slices, and message history
 - `src/settings/settingsSchema.ts`: canonical persisted settings schema
 - `src/settings/agentStack.ts`: preset resolution and runtime binding helpers
@@ -30,21 +41,22 @@ Core runtime:
 - `src/memory/*`: durable memory extraction, storage, lookup, and reflection
 - `src/services/discovery.ts`: passive feed collection for the unified initiative cycle
 - `src/voice/*`: session lifecycle, capture, turn processing, voice-side admission, tool dispatch, output, and ambient voice thought delivery
+- `src/voice/clankvox/*`: Rust media-plane subprocess for Discord voice transport, DAVE lifecycle, RTP/media parsing, and native screen-watch receive
 - `src/tools/*`: shared text/voice tool schemas and execution wrappers
 - `src/agents/*`: browser and code-agent runtimes
 - `src/dashboard.ts` and `dashboard/src/*`: REST control plane and dashboard UI
 
-Behaviorally, the bot is documented as one shared attention system with text and voice spokes. That attention layer is currently implemented across several modules rather than one single package: text reply admission and recent windows, initiative, voice reply admission, thought generation, and music/floor overlays.
+Behaviorally, the selfbot is documented as one shared attention system with text and voice spokes. That attention layer is currently implemented across several modules rather than one single package: text reply admission and recent windows, initiative, voice reply admission, thought generation, and music/floor overlays.
 
 ## 2. Runtime Lifecycle
 
-![Runtime Lifecycle](diagrams/runtime-lifecycle.png)
+![Runtime Lifecycle](../diagrams/runtime-lifecycle.png)
 <!-- source: docs/diagrams/runtime-lifecycle.mmd -->
 
 At a high level:
 
 1. settings are loaded and normalized
-2. Discord events and schedulers enter `src/bot.ts`
+2. Discord gateway events and schedulers enter `src/bot.ts`
 3. shared conversational attention is shaped by direct address, recent engagement, and ambient cadence
 4. active text turns route into immediate reply admission, ambient text falls through to the initiative cycle, and voice sessions route into their domain handlers
 5. the LLM/tool layer is consulted only after deterministic guardrails pass
@@ -105,7 +117,7 @@ There is no separate directive tool handler in the live architecture.
 
 ## 4. Settings Flow
 
-The canonical settings contract now lives in [`docs/settings.md](settings.md)`.
+The canonical settings contract now lives in [`../reference/settings.md`](../reference/settings.md).
 
 At a high level:
 
@@ -115,7 +127,7 @@ At a high level:
 - dashboard saves use compare-and-swap on `settings.updated_at`
 - persistence and live-session application are separate outcomes
 
-![Settings Flow](diagrams/settings-flow.png)
+![Settings Flow](../diagrams/settings-flow.png)
 <!-- source: docs/diagrams/settings-flow.mmd -->
 
 ## 5. Persistence Model
@@ -138,17 +150,14 @@ Important tables:
 - `automation_runs`
 - `response_triggers`
 
-![Data Model](diagrams/data-model.png)
+![Data Model](../diagrams/data-model.png)
 <!-- source: docs/diagrams/data-model.mmd -->
 
 ## 6. Text Reply Flow
 
-Entrypoint: Discord `messageCreate` handling in `src/bot.ts`.
+Entrypoint: Discord `messageCreate` handling in `src/bot.ts` for the selfbot user session.
 
-Discord app-command invocation messages (`ChatInputCommand`, `ContextMenuCommand`)
-are excluded from this path. Slash/context-menu commands route through
-`interactionCreate` and own their single interaction response directly instead of
-also entering normal text reply admission.
+This fork is message-first. Any legacy interaction or app-command codepaths inherited from the bot-oriented codebase are compatibility leftovers, not the canonical control surface.
 
 Main stages:
 
@@ -158,9 +167,9 @@ Main stages:
 4. LLM/tool loop
 5. delivery and persistence
 
-The user-facing activity model for these paths is documented in [`docs/clanker-activity.md](clanker-activity.md)`.
+The user-facing activity model for these paths is documented in [`activity.md`](activity.md).
 
-![Message Event Flow](diagrams/message-event-flow.png)
+![Message Event Flow](../diagrams/message-event-flow.png)
 <!-- source: docs/diagrams/message-event-flow.mmd -->
 
 ## 7. Voice Runtime
@@ -176,6 +185,12 @@ Voice is split into independent layers:
 
 These layers are the voice spoke of the shared attention model. They decide how attention becomes audible in a room; they do not define a separate voice-only mind.
 
+Transport ownership in this fork:
+
+- Bun owns Discord session lifecycle, turn orchestration, tools, and settings application
+- `clankvox` owns the Discord media plane: voice sockets, Opus/RTP, DAVE, queued audio output, and native Go Live stream receive/send
+- the Go Live stream-server legs are documented as additional `clankvox` transport roles in [`../archive/selfbot-stream-watch.md`](../archive/selfbot-stream-watch.md) and [`../voice/discord-streaming.md`](../voice/discord-streaming.md)
+
 Canonical public surfaces:
 
 - transport/runtime: `agentStack.runtimeConfig.voice.*`
@@ -187,10 +202,10 @@ Canonical public surfaces:
 
 Voice-specific docs:
 
-- [`docs/voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
-- [`docs/voice/voice-capture-and-asr-pipeline.md`](voice/voice-capture-and-asr-pipeline.md)
-- [`docs/voice/voice-client-and-reply-orchestration.md`](voice/voice-client-and-reply-orchestration.md)
-- [`docs/voice/voice-output-and-barge-in.md`](voice/voice-output-and-barge-in.md)
+- [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
+- [`../voice/voice-capture-and-asr-pipeline.md`](../voice/voice-capture-and-asr-pipeline.md)
+- [`../voice/voice-client-and-reply-orchestration.md`](../voice/voice-client-and-reply-orchestration.md)
+- [`../voice/voice-output-and-barge-in.md`](../voice/voice-output-and-barge-in.md)
 
 ## 8. Unified Initiative Flow
 
@@ -215,8 +230,8 @@ This is the text spoke's ambient delivery path. The corresponding voice spoke is
 
 Canonical references:
 
-- [`docs/initiative-unified-spec.md`](initiative-unified-spec.md)
-- [`docs/clanker-activity.md`](clanker-activity.md)
+- [`initiative.md`](initiative.md)
+- [`activity.md`](activity.md)
 
 ## 9. Memory Model
 

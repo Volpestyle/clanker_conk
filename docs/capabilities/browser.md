@@ -2,6 +2,8 @@
 
 This document describes the shipped browser-agent system: how `browser_browse` works today, how it is configured, and how cancellation behaves across text and voice.
 
+Canonical media hub: [`media.md`](media.md)
+
 ## Overview
 
 `browser_browse` is one browsing capability with two shipped runtimes selected from `settings.agentStack`:
@@ -10,6 +12,17 @@ This document describes the shipped browser-agent system: how `browser_browse` w
 - `openai_computer_use`: OpenAI-hosted computer-use reasoning. The model emits computer actions, and Clanker executes them locally through `BrowserManager`.
 
 Both runtimes run headless by default and can optionally show a visible browser window from the dashboard Browser Runtime section.
+
+Headless browser sessions still render pixels offscreen. `src/services/browserSessionVideoSource.ts`
+turns an active `BrowserManager` session into a deduped frame source by sampling
+session screenshots plus the current URL at an adaptive cadence. That makes the
+browser runtime usable as a visual source for outbound stream publish and other
+live-visual features without requiring `headed` mode.
+
+When voice is active, those same persistent browser sessions can also be shared
+through the native Go Live sender path. `share_browser_session` attaches an
+existing browser session to the outbound publish transport, and
+`stop_video_share` tears that outbound browser/video share down cleanly.
 
 Key modules:
 
@@ -35,6 +48,10 @@ When the resolved runtime is `local_browser_agent` and browser sessions are enab
 - text reply tool loop
 - full-brain voice reply tool loop
 - provider-native realtime voice tool loop
+
+`share_browser_session` / `stop_video_share` are voice-adjacent tools rather
+than generic browser tools. They are only useful when there is an active voice
+session plus a persistent local browser session to share.
 
 It is intentionally not enabled for automation runs right now, even though automations use the same general reply-tool loop.
 
@@ -132,7 +149,7 @@ When `agentStack.runtimeConfig.browser.headed` is enabled, the local browser man
 
 ## Cancellation Model
 
-Cancellation is unified across text and voice. See [`cancel.md`](cancel.md) for the full cancellation system (detection, speaker ownership, recovery).
+Cancellation is unified across text and voice. See [`../operations/cancellation.md`](../operations/cancellation.md) for the full cancellation system (detection, speaker ownership, recovery).
 
 ### Shared principles
 
@@ -179,7 +196,7 @@ This is implemented in:
 
 ## Settings
 
-The canonical persistence, preset, and save semantics for these fields live in [`docs/settings.md](settings.md)`.
+The canonical persistence, preset, and save semantics for these fields live in [`../reference/settings.md`](../reference/settings.md).
 
 This document only covers the browser-local knobs that matter for browser runtime behavior.
 

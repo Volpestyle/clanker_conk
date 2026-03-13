@@ -29,7 +29,7 @@ Access is settings-driven, not env-var-driven:
 
 Dashboard compatibility fields still flatten those controls into the `codeAgent*` form section, but the persisted source of truth is the preset-driven `agentStack` plus `permissions.devTasks`.
 
-The canonical persistence, preset, and save semantics for these fields live in [`docs/settings.md](settings.md)`.
+The canonical persistence, preset, and save semantics for these fields live in [`../reference/settings.md`](../reference/settings.md).
 
 Guardrails:
 
@@ -143,7 +143,7 @@ Common metadata fields:
 
 ## Settings Surface
 
-The cross-cutting settings contract lives in [`docs/settings.md](settings.md)`. The code-agent-specific knobs still live under `agentStack.runtimeConfig.devTeam` and `agentStack.overrides.devTeam`.
+The cross-cutting settings contract lives in [`../reference/settings.md`](../reference/settings.md). The code-agent-specific knobs still live under `agentStack.runtimeConfig.devTeam` and `agentStack.overrides.devTeam`.
 
 Canonical persisted defaults live under `agentStack.runtimeConfig.devTeam` in `src/settings/settingsSchema.ts`:
 

@@ -1,6 +1,6 @@
 # Tests
 
-> Voice E2E and golden validation suites: [`e2e-test-spec.md`](e2e-test-spec.md)
+> Voice E2E and golden validation suites: [`e2e.md`](e2e.md)
 
 ## Default Test Commands
 
@@ -142,7 +142,7 @@ Debug visibility:
 The project includes two offline behavior-validation harnesses:
 
 - Flooding replay harness: [`scripts/floodingReplayHarness.ts`](../scripts/floodingReplayHarness.ts)
-- Voice golden harness: [`scripts/voiceGoldenHarness.ts`](../scripts/voiceGoldenHarness.ts) (covered in [`docs/e2e-test-spec.md`](e2e-test-spec.md))
+- Voice golden harness: [`../scripts/voiceGoldenHarness.ts`](../scripts/voiceGoldenHarness.ts) (covered in [`e2e.md`](e2e.md))
 
 Harness intent:
 

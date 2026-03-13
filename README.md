@@ -1,10 +1,10 @@
-# clanker conk
+# clanker_conk_self
 
-A Discord bot that lives in your server as a genuine participant, not a command-response machine but a personality with tools.
+An experimental Discord selfbot that lives in your server as a genuine participant, not a command-response machine but a personality with tools.
 
-The core idea: give an LLM brain a growing set of capabilities (voice, browsing, memory, web search, media generation) and let it compose them naturally through conversation. You don't invoke features with slash commands (though you can). You talk to the bot in voice or text and it figures out which tools to chain together to do what you're asking.
+The core idea: give an LLM brain a growing set of capabilities (voice, browsing, memory, web search, media generation) and let it compose them naturally through conversation. You talk to the selfbot in voice or text and it figures out which tools to chain together to do what you're asking.
 
-Slash-command entry points are intentionally compact: `/clank say`, `/clank browse`, `/clank code`, and `/clank music ...`.
+This fork is selfbot-first. The canonical control surfaces are natural conversation plus the private dashboard. Some legacy bot-oriented codepaths from `clanker_conk` may still exist in the tree, but they are no longer the architectural center of the repo.
 
 Ask it to check your GitHub issues? It can browse the page and summarize them. Ask it what song is playing in a stream it's watching? It can look at the screen, search the web, and queue it up. No rigid workflows, the brain orchestrates.
 
@@ -12,7 +12,7 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 
 **Communication**
 - Text chat with natural reply decisions (not just @mention responses)
-- Voice chat via OpenAI Realtime, Gemini Live, xAI, or ElevenLabs — the bot joins Discord voice channels and talks
+- Voice chat via OpenAI Realtime, Gemini Live, xAI, or ElevenLabs — the selfbot joins Discord voice channels and talks
 - Stream watching with live screen-share vision and commentary
 
 **Tools the Brain Can Use**
@@ -36,6 +36,7 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 - Optional public HTTPS via Cloudflare Quick Tunnel
 - Structured runtime logs with Loki/Grafana support
 - SQLite persistence with vector embeddings
+- Rust voice/media plane via `clankvox` for Discord audio, DAVE, RTP, and native stream receive
 - Multi-provider model/runtime support (OpenAI, Anthropic, Claude OAuth, xAI, Google, Codex, Codex CLI, Claude Code)
 
 ## Tech Stack
@@ -55,7 +56,7 @@ bun install
 
 ### Required
 
-- `DISCORD_TOKEN`
+- `DISCORD_TOKEN` (`clanker_conk_self` currently uses this legacy env name for the selfbot user token)
 - At least one LLM provider credential: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `OPENAI_OAUTH_REFRESH_TOKEN`, `GOOGLE_API_KEY`, and/or `ELEVENLABS_API_KEY`
 
 ### Optional
@@ -85,11 +86,15 @@ Point the code-agent working directory at a git repo root or subdirectory; local
 - `CLAUDE_OAUTH_REFRESH_TOKEN` — Claude subscription-backed provider (`claude-oauth`)
 - Stream-watch vision resolves providers in order: `claude-oauth` → `anthropic` → `xai`
 
-## Discord Bot Permissions
+## Discord Account Requirements
 
-Required intents: `Guilds`, `GuildMessages`, `GuildMessageReactions`, `MessageContent`, `GuildVoiceStates`
+This fork assumes a real Discord user account used only for private experimentation.
 
-Recommended permissions: View Channels, Send Messages, Read Message History, Add Reactions, Connect, Speak, Use Soundboard
+- `DISCORD_TOKEN` should authenticate that user account.
+- The runtime patches `discord.js` for user-session auth details: bare-token REST auth, `/gateway` discovery, desktop identify properties, and READY payload normalization when Discord omits `application` for user accounts.
+- The account must already be present in the target server or DM/group call.
+- The account needs whatever normal Discord permissions the room requires: view channels, send messages, connect, speak, and soundboard access where applicable.
+- Bot-application setup is still relevant for driver bots in E2E tests, but not for the main runtime identity.
 
 ## Run
 
@@ -98,6 +103,8 @@ bun run start
 ```
 
 Builds the React dashboard, then starts bot + dashboard together.
+
+In this fork, that means the selfbot runtime plus dashboard together.
 
 - Dashboard: `http://localhost:8787` (or configured `DASHBOARD_PORT`)
 - Configure everything through the dashboard: persona, permissions, LLM provider/model, voice settings, reply/discovery behavior, memory, and more
@@ -127,28 +134,32 @@ bun run logs:loki:up   # start Loki + Grafana
 bun run start
 ```
 
-Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details in `docs/logs.md`.
+Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details in `docs/operations/logging.md`.
 
 ## Docs
 
 | Doc | Description |
 |-----|-------------|
-| `docs/technical-architecture.md` | System architecture, data model, runtime flows |
-| `docs/clanker-activity.md` | Text + voice activity model: direct replies, recent-window follow-ups, unified initiative, voice thought engine |
-| `docs/initiative-unified-spec.md` | Unified text initiative cycle and discovery feed |
-| `docs/preset-system-spec.md` | Preset-driven stack/runtime settings |
-| `docs/agent-code.md` | Code agent runtime (Claude Code, Codex CLI, Codex) |
-| `docs/agent-browser.md` | Browser agent runtime |
+| `docs/README.md` | Documentation map and canonical entry point into the docs tree |
+| `docs/capabilities/media.md` | Unified media surface: music, video, screen watch, publish, and browser visual context |
+| `docs/architecture/overview.md` | System architecture, data model, runtime flows |
+| `docs/architecture/activity.md` | Text + voice activity model: direct replies, recent-window follow-ups, unified initiative, voice thought engine |
+| `docs/architecture/initiative.md` | Unified text initiative cycle and discovery feed |
+| `docs/architecture/presets.md` | Preset-driven stack/runtime settings |
+| `docs/capabilities/code.md` | Code agent runtime (Claude Code, Codex CLI, Codex) |
+| `docs/capabilities/browser.md` | Browser agent runtime |
 | `docs/voice/voice-provider-abstraction.md` | Voice pipeline stages, providers, and settings |
 | `docs/voice/screen-share-system.md` | Screen share pipeline and frame reasoning flow |
-| `docs/oauth-providers.md` | OAuth providers (`claude-oauth`, `openai-oauth`) |
-| `docs/memory-system.md` | Memory system design |
-| `docs/public-https-entrypoint-spec.md` | Public HTTPS tunnel |
-| `docs/e2e-test-spec.md` | E2E bot-to-bot + golden validation suites |
-| `docs/tests.md` | Test commands, live tests, and replay harnesses |
-| `docs/logs.md` | Structured logging and Loki setup |
+| `docs/voice/discord-streaming.md` | Discord-native Go Live watch/publish transport details |
+| `docs/archive/selfbot-stream-watch.md` | Historical selfbot-native Go Live watch plan and `clankvox` transport narrative |
+| `docs/providers/oauth.md` | OAuth providers (`claude-oauth`, `openai-oauth`) |
+| `docs/capabilities/memory.md` | Memory system design |
+| `docs/operations/public-https.md` | Public HTTPS tunnel |
+| `docs/operations/e2e.md` | E2E selfbot + driver-bot voice validation suites |
+| `docs/operations/testing.md` | Test commands, live tests, and replay harnesses |
+| `docs/operations/logging.md` | Structured logging and Loki setup |
 
-Canonical specs live in `docs/` and `docs/voice/`. Archived reference notes live under `docs/tmp/archive/` and are not canonical.
+Canonical specs live under `docs/architecture/`, `docs/capabilities/`, `docs/operations/`, `docs/providers/`, `docs/reference/`, and `docs/voice/`. Historical notes live under `docs/archive/` and `docs/tmp/`.
 
 ## Notes
 

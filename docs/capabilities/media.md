@@ -1,0 +1,166 @@
+# Media
+
+This document is the canonical product-level guide to media in the selfbot:
+what the agent can do, how those capabilities fit together, and which deep-dive
+docs own the transport internals.
+
+Media is one system here, not a pile of separate modes. The same autonomous
+brain can decide to:
+
+- play music
+- play a YouTube video
+- search for options first
+- browse the web visually before deciding
+- start watching a live Discord screen share
+
+The product contract is capability-first: the brain sees available context and
+tools, then decides what helps most.
+
+## Media Surfaces
+
+### Music playback
+
+Core tools:
+
+- `music_play`
+- `music_search`
+- `music_queue_next`
+- `music_queue_add`
+- `media_stop`
+- `media_pause`
+- `media_resume`
+- `media_skip`
+- `media_now_playing`
+- `media_reply_handoff`
+
+Use this surface for ordinary audio-first listening and queue control.
+
+Deep dive: [`../voice/music.md`](../voice/music.md)
+
+### Video playback
+
+Core tools:
+
+- `video_play`
+- `video_search`
+
+This surface reuses the same underlying playback/disambiguation machinery as
+music, but it constrains lookup to YouTube and is intended for “put a video on”
+requests.
+
+If the request is specific enough, `video_play` should resolve and start
+playback directly. If the request is ambiguous, the brain can use
+`video_search`, ask a follow-up question, or use `browser_browse` when seeing
+the YouTube page/thumbnails would help.
+
+Outbound native self publish is a runtime capability behind this surface. The
+model does not need a separate “start stream publish” tool for ordinary video
+playback.
+
+Deep dives:
+
+- [`../voice/music.md`](../voice/music.md)
+- [`../voice/discord-streaming.md`](../voice/discord-streaming.md)
+
+### Screen watch
+
+Core tool:
+
+- `start_screen_watch`
+
+This is the inbound visual-context surface. The model does not choose between
+native Discord watch and the share-link fallback directly. Runtime does.
+
+Deep dives:
+
+- [`../voice/screen-share-system.md`](../voice/screen-share-system.md)
+- [`../voice/discord-streaming.md`](../voice/discord-streaming.md)
+
+### Browser visual context
+
+Core tools:
+
+- `browser_browse`
+- `share_browser_session`
+- `stop_video_share`
+
+This is not “media playback,” but it is part of the same visual system because
+the browser can be both:
+
+- a reasoning tool for choosing media
+- a live visual source for outbound native stream-publish flows
+
+Headless browser sessions still render pixels. The runtime can capture those
+offscreen frames without requiring a visible window.
+
+Deep dives:
+
+- [`browser.md`](browser.md)
+- [`../voice/discord-streaming.md`](../voice/discord-streaming.md)
+
+## Autonomy Rules
+
+The brain should not follow a rigid ladder like:
+
+`if ambiguous -> browser -> if failed -> search`
+
+Instead:
+
+- use `music_play` / `video_play` for ordinary “play this now” requests
+- use `music_search` / `video_search` when the user explicitly wants options
+- use `browser_browse` when page appearance, thumbnails, or navigation matter
+- use `share_browser_session` when the user should see the live browser itself
+- use `start_screen_watch` when live visual context would materially help
+
+The point is not to encode a flowchart. The point is to give the agent enough
+capabilities to choose well.
+
+## Runtime Ownership
+
+High level:
+
+- Bun owns prompts, tool routing, session lifecycle, discovery/control-plane
+  logic, memory, and dashboard state.
+- `clankvox` owns the Discord media plane: RTP, Opus, DAVE, audio output, and
+  native Go Live stream transport.
+
+That means media behavior is split between product orchestration in Bun and
+transport/media execution in Rust.
+
+Deep dives:
+
+- [`../architecture/overview.md`](../architecture/overview.md)
+- [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
+- [`../../src/voice/clankvox/README.md`](../../src/voice/clankvox/README.md)
+
+## Current Shape
+
+As of this repo snapshot:
+
+- music playback is fully shipped
+- `video_play` / `video_search` exist as product-layer capabilities on top of
+  the playback stack
+- native Discord screen watch is validated live end to end
+- native outbound self publish exists as runtime transport work, with the
+  product surface intentionally kept narrower than the underlying transport
+- browser sessions can already feed native outbound browser share flows, even
+  when headless
+
+## Deep-Dive Ownership
+
+Use the following split:
+
+- product behavior and capability boundaries: this document
+- music queue/playback/disambiguation semantics: [`../voice/music.md`](../voice/music.md)
+- inbound screen-watch pipeline and prompt context: [`../voice/screen-share-system.md`](../voice/screen-share-system.md)
+- Discord-native Go Live watch/publish transport: [`../voice/discord-streaming.md`](../voice/discord-streaming.md)
+- browser runtime/session behavior: [`browser.md`](browser.md)
+
+Historical planning doc:
+
+- [`../archive/selfbot-stream-watch.md`](../archive/selfbot-stream-watch.md) remains useful as an
+  implementation narrative, but it is not the primary product doc anymore
+
+Product language: media is one agentic capability family. Music, video, screen
+watch, and browser vision are different entry points into the same shared
+context-and-action system.

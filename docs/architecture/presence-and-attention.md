@@ -1,8 +1,8 @@
 # Presence and Attention Model
 
 > **Scope:** Canonical attention model across text and voice.
-> Activity/runtime mapping: [`clanker-activity.md`](clanker-activity.md)
-> Voice transport stack: [`voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
+> Activity/runtime mapping: [`activity.md`](activity.md)
+> Voice transport stack: [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
 
 ## Core Idea
 
@@ -15,7 +15,7 @@ The canonical attention modes are:
 
 That does **not** require one giant transport finite-state machine or one literal shared hub module. The important part is the product behavior: continuity can carry across surfaces when it matters, while floor-taking stays modality-specific underneath it.
 
-![Clanker Activity Model](diagrams/clanker-activity.png)
+![Clanker Activity Model](../diagrams/clanker-activity.png)
 
 <!-- source: docs/diagrams/clanker-activity.mmd -->
 

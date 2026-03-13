@@ -4,13 +4,13 @@
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
 > Output and barge-in: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
 > Reply orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
-> Cross-cutting settings contract: [`../settings.md`](../settings.md)
+> Cross-cutting settings contract: [`../reference/settings.md`](../reference/settings.md)
 
 ---
 
 # Part 1: Audio Capture
 
-Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document keeps the capture lifecycle, promotion thresholds, ASR handoff, and related voice-local settings scoped to the audio pipeline itself.
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../reference/settings.md`](../reference/settings.md). This document keeps the capture lifecycle, promotion thresholds, ASR handoff, and related voice-local settings scoped to the audio pipeline itself.
 
 This part defines the per-user audio capture state machine. Each user who speaks in a voice session gets an independent `CaptureState` that tracks their audio from the first Discord speaking event through promotion, finalization, and handoff to the turn processor.
 

@@ -276,12 +276,62 @@ Interpretation notes:
 - `realtime_tool_call_*` events come from provider-native tool execution. These happen only when the session owns provider tools directly (`realtimeToolOwnership="provider_native"`).
 - `session.mode` still tells you which realtime runtime carried audio. It does not, by itself, tell you who owned planning or tools.
 
+## Native Screen Watch Fallback Attribution
+
+When screen watch falls back to the share link and you need to know why native
+Discord watch did not bind, inspect these events together:
+
+- `screen_watch_native_start_failed`
+- `screen_watch_started_native`
+- `screen_watch_link_fallback_started`
+- `screen_watch_link_reused`
+
+Interpretation notes:
+
+- `screen_watch_native_start_failed` is the authoritative native-start failure event before fallback.
+- `screen_watch_started_native` means the Bun runtime actually bound a native Discord share target.
+- `screen_watch_link_fallback_started` and `screen_watch_link_reused` now carry `metadata.nativeFailureReason` so the fallback line still explains why native did not win.
+
+Useful metadata fields:
+
+- `reason`
+- `fallback`
+- `requestedTargetUserId`
+- `selectionReason`
+- `nativeActiveSharerCount`
+- `nativeActiveSharerUserIds`
+- `nativeDecoderSupported`
+- `runtimeMode`
+- `voiceChannelId`
+
+When you need to locate the failure layer for native Discord screen watch,
+follow the cross-process breadcrumb trail in order:
+
+- Rust voice-conn observed Discord state: `clankvox_discord_video_state_observed`
+- Rust saw an OP18 payload that looked video-adjacent but did not match the current video-state shape: `clankvox_voice_ws_unclassified_op18`
+- Rust capture supervisor applied state: `clankvox_native_video_state_received`
+- Rust emitted state over IPC: `clankvox_native_video_state_emitted`
+- Bun session applied active-sharer state: `native_discord_screen_share_state_updated`
+- Rust accepted the watch subscription: `clankvox_native_video_subscribe_requested`
+- Rust refreshed Discord sink wants: `clankvox_video_sink_wants_updated`
+- Rust forwarded the first subscribed frame: `clankvox_first_video_frame_forwarded`
+- Bun ingested a frame for model context: `stream_watch_frame_ingested`
+
+Interpretation notes:
+
+- if `screen_watch_native_start_failed` says `requested_target_not_actively_sharing` and no `clankvox_discord_video_state_observed` appears, the Rust process never observed native share state from Discord
+- if `clankvox_voice_ws_unclassified_op18` appears, Discord sent OP18 data that the current Rust parser did not recognize as video state
+- if you see `ignoring video state payload without user_id`, Discord sent video-like state without the user identity field our Rust parser requires
+- if `clankvox_discord_video_state_observed` appears without `native_discord_screen_share_state_updated`, the issue is between Rust IPC emission and Bun session-state application
+- if state-update logs appear but `clankvox_first_video_frame_forwarded` never appears, native share discovery worked but no subscribed frame made it through
+- if `clankvox_video_sink_wants_skipped_no_connection` appears, a subscription request arrived before the voice connection was ready; later `voice_ready` or another state update should trigger a retry path
+
 ## Voice output incident workflow
 
 When a voice turn is transcribed correctly but the bot does not answer, use the
 assistant output state machine doc first:
 
-- [`voice-output-and-barge-in.md`](voice/voice-output-and-barge-in.md)
+- [`../voice/voice-output-and-barge-in.md`](../voice/voice-output-and-barge-in.md)
 
 Start with these events:
 
@@ -291,6 +341,9 @@ Start with these events:
 - `bot_audio_started`
 - `openai_realtime_response_done`
 - `openai_realtime_active_response_cleared_stale`
+- `realtime_assistant_utterance_queued`
+- `realtime_assistant_utterance_drain_blocked`
+- `realtime_assistant_utterance_queue_drained`
 
 Important interpretation rule:
 
@@ -308,6 +361,10 @@ Inspect these metadata fields together:
 - `allow`
 - `reason`
 - `outputLockReason`
+- `blockers`
+- `pendingResponseRequestId`
+- `pendingResponseSource`
+- `backpressureActive`
 - `stage`
 - `source`
 - `msSinceAssistantReply`
@@ -323,6 +380,8 @@ Common blockers:
 Operator notes:
 
 - `voice_barge_in_gate` is promotion-scoped, not chunk-scoped. It captures the first summarized interruption decision for a promoted user capture when some assistant output context is active.
+- `realtime_assistant_utterance_queued` tells you why spoken playback was queued instead of sent immediately. Look at `blockers`, `outputLockReason`, `pendingResponse*`, `heldPrePlaybackReply`, `deferredActiveCapture`, and `ttsBufferedSamples`.
+- `realtime_assistant_utterance_drain_blocked` fires when queued spoken playback tried to drain but some blocker still held the floor. It is deduped by blocker signature, so a new line usually means the wedge changed state rather than simple polling noise.
 - if `voice_barge_in_gate` shows `allow=false`, treat `reason` as the primary interruption blocker and `outputLockReason` as supporting context about what the assistant was doing.
 - if `voice_barge_in_gate` shows `allow=false reason=music_only_playback`, that means music was the only remaining output lock. Buffered or live bot speech should not resolve to this reason.
 - if `voice_barge_in_gate` shows `allow=false reason=transcript_overlap_interrupts_enabled`, the system intentionally waited for transcript-burst interruption logic instead of cutting audio from raw PCM.

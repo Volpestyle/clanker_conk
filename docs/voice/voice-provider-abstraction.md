@@ -1,18 +1,23 @@
 # Voice Pipeline — Provider Abstraction and Stage Reference
 
 > **Scope:** Current voice transport stack, runtime modes, and canonical settings surfaces.
-> Shared attention model: [`../presence-and-attention.md`](../presence-and-attention.md)
-> Activity model and knob map: [`../clanker-activity.md`](../clanker-activity.md)
-> Cross-cutting settings contract: [`../settings.md`](../settings.md)
+> Shared attention model: [`../architecture/presence-and-attention.md`](../architecture/presence-and-attention.md)
+> Activity model and knob map: [`../architecture/activity.md`](../architecture/activity.md)
+> Cross-cutting settings contract: [`../reference/settings.md`](../reference/settings.md)
 > Capture and ASR details: [`voice-capture-and-asr-pipeline.md`](voice-capture-and-asr-pipeline.md)
 > Reply orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
 > Output and barge-in: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
+> Discord-native stream transport: [`discord-streaming.md`](discord-streaming.md)
+> Historical stream-watch rollout: [`../archive/selfbot-stream-watch.md`](../archive/selfbot-stream-watch.md)
+> `clankvox` local docs: [`../../src/voice/clankvox/README.md`](../../src/voice/clankvox/README.md)
 
 This document describes the voice spoke under the shared attention contract: capture, transcription, admission, transport, output, and voice-side ambient delivery.
 
+In this fork, the Discord voice transport is selfbot-owned. Bun owns the user-account gateway/session lifecycle and reply orchestration. `clankvox` is the Rust media plane that owns RTP, DAVE, Opus, mixer/output pacing, and the native Go Live stream-watch / stream-publish transport legs.
+
 ## 1. Canonical Settings Surface
 
-Persistence, preset inheritance, dashboard envelope shape, and save/version semantics now live in [`../settings.md`](../settings.md).
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics now live in [`../reference/settings.md`](../reference/settings.md).
 
 This document keeps the voice-local settings surfaces that matter for voice transport and stage behavior.
 
@@ -45,6 +50,18 @@ The voice stack keeps transport and behavior separate:
 5. `output` speaks through realtime or API TTS, then `clankvoxClient` paces generated PCM into the Rust mixer while preserving queued speech unless an interruption clears it
 
 Shared continuity can inform this stack. Voice does not own the whole conversational mind; it owns how that continuity becomes audible in a live room.
+
+Media-plane ownership:
+
+- selfbot gateway/session: Discord control-plane identity, voice-state events, stream discovery dispatch
+- `clankvox`: Discord media-plane transport, encryption/decryption, and frame/audio ingress/egress
+- Bun voice runtime: turn lifecycle, tools, prompt assembly, commentary, and stream-watch decode/ingest after IPC
+
+Current transport roles inside `clankvox`:
+
+- `voice`: main bidirectional voice transport for audio send/receive
+- `stream_watch`: inbound Go Live receive transport for native screen watch
+- `stream_publish`: outbound Go Live sender transport for native self publish
 
 Runtime mode values:
 
@@ -237,7 +254,7 @@ Canonical soundboard settings:
 
 Implementation note:
 
-- `voice.soundboard.eagerness` is prompt context, not a hard gate. Lower values push the bot toward restraint; higher values let it use Discord sound effects more playfully when the joke lands.
+- `voice.soundboard.eagerness` is prompt context, not a hard gate. Lower values push the runtime toward restraint; higher values let it use Discord sound effects more playfully when the joke lands.
 - `play_soundboard` is the canonical soundboard mechanism on provider-native `native` and `bridge` sessions. Those sessions should not emit `[[SOUNDBOARD:...]]` markup in spoken replies.
 - The canonical precise timing mechanism on the `brain` path is inline `[[SOUNDBOARD:<sound_ref>]]` control markup in the model text. The runtime parses those directives into an ordered speech/soundboard sequence.
 - Buffered brain playback routes the whole reply through that ordered sequencer.

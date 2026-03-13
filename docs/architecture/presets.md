@@ -2,7 +2,7 @@
 
 Canonical reference for how agent stack presets work. Canonical preset metadata lives in `src/settings/agentStackCatalog.ts`, numeric guardrails live in `src/settings/settingsConstraints.ts`, and runtime resolution lives in `src/settings/agentStack.ts`.
 
-The cross-cutting settings contract now lives in [`docs/settings.md](settings.md)`. This document stays focused on preset-specific defaults, behavior, and product intent.
+The cross-cutting settings contract now lives in [`../reference/settings.md`](../reference/settings.md). This document stays focused on preset-specific defaults, behavior, and product intent.
 
 ## Presets
 
@@ -88,4 +88,4 @@ The Voice section's classifier provider/model controls persist without requiring
 
 When `advancedOverridesEnabled` is true, additional sections appear: Advanced Stack (LLM), Research Runtime, Browser Runtime, Dev Team, Sessions. These sections are mounted only when advanced overrides are enabled, and their numeric bounds are shared with backend normalization through `settingsConstraints.ts`.
 
-Canonical persistence, envelope, and save/version semantics live in [`docs/settings.md](settings.md)`. In preset terms, the only special rule is that presets seed defaults into `effective` resolution; they are not stored as a second parallel config object.
+Canonical persistence, envelope, and save/version semantics live in [`../reference/settings.md`](../reference/settings.md). In preset terms, the only special rule is that presets seed defaults into `effective` resolution; they are not stored as a second parallel config object.

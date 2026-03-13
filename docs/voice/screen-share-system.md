@@ -2,11 +2,15 @@
 
 Complete documentation of the screen watch pipeline: session lifecycle, transport selection, frame processing, and how the agent sees and reasons about what's on screen.
 
-See also: [`docs/public-https-entrypoint-spec.md`](../public-https-entrypoint-spec.md) (public URL gating).
-Native Discord receive status: [`../native-discord-screen-share.md`](../native-discord-screen-share.md)
-Cross-cutting settings contract: [`../settings.md`](../settings.md)
+Canonical media hub: [`../capabilities/media.md`](../capabilities/media.md)
+See also: [`../operations/public-https.md`](../operations/public-https.md) (public URL gating).
+Native Discord receive status: [`discord-streaming.md`](discord-streaming.md)
+Direct selfbot stream-watch plan: [`../archive/selfbot-stream-watch.md`](../archive/selfbot-stream-watch.md)
+Cross-cutting settings contract: [`../reference/settings.md`](../reference/settings.md)
 
-Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document covers the screen-watch pipeline and the stream-watch settings that shape voice-local visual context.
+This document is about inbound screen watch. For the broader product-level media story, including music/video playback and outbound publish context, start at [`../capabilities/media.md`](../capabilities/media.md). The same selfbot stream-discovery control plane also supports outbound native self publish for music video relay and browser-session share; that sender path is documented in [`discord-streaming.md`](discord-streaming.md).
+
+Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../reference/settings.md`](../reference/settings.md). This document covers the screen-watch pipeline and the stream-watch settings that shape voice-local visual context.
 
 ## Design Philosophy
 
@@ -49,14 +53,14 @@ These are **orthogonal, not mutually exclusive.** The scanner always runs to bui
 Discord VC user says "share my screen"
          │
          ▼
-  Reply pipeline / voice tool
+  Selfbot reply pipeline / voice tool
   (start_screen_watch)
          │
          ▼
   Runtime chooses watch transport
   ├─ Native Discord watch (preferred)
-  │  ├─ validate requester + target context in VC
-  │  ├─ subscribe to the target's active Discord stream in clankvox
+  │  ├─ selfbot gateway resolves target + stream credentials
+  │  ├─ clankvox opens native stream-watch transport
   │  ├─ clankvox decrypts and forwards encoded video frames
   │  ├─ Bun decodes sampled keyframes into JPEG
   │  └─ feed frames to the processing pipeline
@@ -161,8 +165,9 @@ When a watch session ends, the default text model summarizes the accumulated key
 - `start_screen_watch` is the only model-facing action
 - `start_screen_watch` can optionally include `{ target: "display name or user id" }` when the agent wants a specific Discord sharer
 - Realtime instructions can already list active Discord sharers before a watch starts
-- Runtime tries native Discord watch first through the active voice session
+- Runtime tries native Discord watch first through the selfbot's active voice session
 - Native watch binds an explicit target first when one is provided and resolves cleanly
+- An explicit target can use discovered Go Live state immediately, even before native video-state frames have populated the active-sharer roster
 - Without an explicit target, native watch auto-binds only when runtime can identify a safe target:
   - requester is actively sharing, or
   - exactly one user is actively sharing
@@ -172,15 +177,18 @@ When a watch session ends, the default text model summarizes the accumulated key
 
 ### Native Discord watch
 
-- `clankvox` subscribes to the target user's active Discord stream
+- the selfbot gateway tracks active sharers and stream credentials
+- `clankvox` opens a separate native `stream_watch` transport for the target user's active stream
 - `clankvox` emits encoded H264/VP8 frame payloads through Bun IPC
-- Bun decodes sampled keyframes to JPEG with `ffmpeg`
+- Bun normalizes H264 payloads from length-prefixed AVC to Annex-B start codes before `ffmpeg` decode (required for correct decode)
 - Decoded JPEGs are forwarded into the existing stream-watch pipeline
 - The latest decoded frame becomes normal voice-brain context on active turns
 - If multiple unrelated Discord sharers are active, the agent can pick one with `start_screen_watch({ target: "name" })`
 - If multiple unrelated Discord sharers are active and no explicit target is provided, runtime does not guess a native target
 - The same rolling-note scanner and commentary triggers apply regardless of transport
 - Active native sharer metadata is prompt context, but image visibility still requires an active watch session
+- Voice session tracks Go Live state in a `goLiveStream` field (active, streamKey, targetUserId, credentials) populated by stream discovery callbacks
+- Link fallback is suppressed at two checkpoints when native watch is already active for the target (see `discord-streaming.md`)
 
 ### Share page fallback
 
@@ -278,15 +286,18 @@ This separates "what the scanner saw" from "what context the VC brain currently 
 - Tokens are 18-byte random base64url, never logged in full
 - Sessions auto-expire after TTL
 - Session creation requires `DASHBOARD_TOKEN` (admin auth)
-- Public URL gating defined in [`docs/public-https-entrypoint-spec.md`](../public-https-entrypoint-spec.md)
+- Public URL gating defined in [`../operations/public-https.md`](../operations/public-https.md)
 
 ## Key Source Files
 
 | File | Purpose |
 |------|---------|
-| `src/voice/voiceStreamWatch.ts` | Frame processing, scanner, commentary triggers |
+| `src/voice/voiceStreamWatch.ts` | Frame processing, scanner, commentary triggers, native transport lifecycle |
 | `src/services/screenShareSessionManager.ts` | Fallback share-link manager and share page HTML |
-| `src/bot/screenShare.ts` | Bot integration, native-first transport selection, and fallback start |
+| `src/bot/screenShare.ts` | Bot integration, native-first transport selection, fallback suppression |
+| `src/voice/nativeDiscordVideoDecoder.ts` | H264/VP8 keyframe decode to JPEG via ffmpeg, Annex-B normalization |
+| `src/voice/nativeDiscordScreenShare.ts` | Active sharer tracking, target resolution |
+| `src/selfbot/streamDiscovery.ts` | Go Live stream discovery state, stream key management |
 | `src/voice/voiceReplyPipeline.ts` | Frame + notes passed to brain generation |
 | `src/prompts/promptVoice.ts` | Screen context in voice prompts |
 | `src/dashboard/routesVoice.ts` | API endpoints |

@@ -1,0 +1,21 @@
+flowchart LR
+    A["Selfbot gateway/session<br/>user token"] --> B["VoiceSessionManager<br/>screen-watch product surface"]
+    B --> C["nativeScreenShare state<br/>sharers + stream registry"]
+    B --> D["clankvoxClient IPC"]
+
+    A --> E["VOICE_STATE_UPDATE<br/>VOICE_SERVER_UPDATE<br/>STREAM_CREATE<br/>STREAM_SERVER_UPDATE<br/>STREAM_DELETE"]
+    E --> C
+
+    D --> F["clankvox transport slot<br/>voice"]
+    D --> G["clankvox transport slot<br/>stream_watch"]
+
+    C --> H{"native watch ready?"}
+    H -->|yes| I["send STREAM_WATCH<br/>build stream credentials"]
+    H -->|no| J["share-link fallback"]
+
+    I --> G
+
+    G --> K["existing DAVE + video receive<br/>OP15 + depacketize + IPC"]
+    K --> L["existing Bun keyframe decode<br/>ffmpeg -> JPEG"]
+    L --> M["existing stream-watch ingest<br/>scanner + voice brain context"]
+    J --> M

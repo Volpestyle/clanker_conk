@@ -29,7 +29,7 @@ Supporting infrastructure:
 
 ## Flow Diagram
 
-![Memory System Flow](diagrams/memory-system-flow.png)
+![Memory System Flow](../diagrams/memory-system-flow.png)
 <!-- source: docs/diagrams/memory-system-flow.mmd -->
 
 ## How Memory Is Created
@@ -165,7 +165,7 @@ These are fallbacks, not primary access paths. The model shouldn't need to searc
 | `profile` | Core | Identity-level, rarely changes | Name, birthday, occupation, timezone |
 | `relationship` | Core | Connections between people | Family members, close friends, work relationships |
 | `preference` | Contextual | Likes, dislikes, habits | "Prefers short replies", "Likes Rust" |
-| `project` | Contextual | Ongoing work, activities | "Building a Discord bot", "Playing Elden Ring" |
+| `project` | Contextual | Ongoing work, activities | "Building a Discord selfbot", "Playing Elden Ring" |
 | `guidance` | Behavioral | Standing style/tone instructions | "Keep responses brief", "Use casual tone in #general" |
 | `behavioral` | Behavioral | Trigger/action rules from the community | "Send a GIF when Tiny Conk says 'what the heli'", "Always greet James in Spanish" |
 | `other` | Contextual | Everything else | Lore, observations, miscellaneous |

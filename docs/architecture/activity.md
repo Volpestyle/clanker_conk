@@ -2,9 +2,9 @@
 
 > **Scope:** Current shipped mapping from the shared attention contract into text and voice behavior.
 > Shared attention model: [`presence-and-attention.md`](presence-and-attention.md)
-> Unified text initiative cycle: [`initiative-unified-spec.md`](initiative-unified-spec.md)
-> Voice pipeline and stage settings: [`voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
-> Architecture overview: [`technical-architecture.md`](technical-architecture.md)
+> Unified text initiative cycle: [`initiative.md`](initiative.md)
+> Voice pipeline and stage settings: [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
+> Architecture overview: [`overview.md`](overview.md)
 
 This document is the source of truth for how the current runtime surfaces one shared conversational continuity contract through text and voice. It documents the shipped spokes and guardrails, not a giant transport-level finite-state machine.
 
@@ -12,11 +12,11 @@ This document is the source of truth for how the current runtime surfaces one sh
 
 Settings shape context, budgets, and transport. They do not script the bot's creative behavior. Admission gates are cost/noise gates, not relevance gates. The model can always choose silence through `[SKIP]`, and tools are capabilities it may use when they help.
 
-![Clanker Activity Model](diagrams/clanker-activity.png)
+![Clanker Activity Model](../diagrams/clanker-activity.png)
 
 <!-- source: docs/diagrams/clanker-activity.mmd -->
 
-![Clanker Voice And Tool Model](diagrams/clanker-voice-and-tools.png)
+![Clanker Voice And Tool Model](../diagrams/clanker-voice-and-tools.png)
 
 <!-- source: docs/diagrams/clanker-voice-and-tools.mmd -->
 

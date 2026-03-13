@@ -28,7 +28,7 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 - Include a 'Product language' conclusion in your messages and commit messages when it seems like it makes sense.
 
 #### Code Hygiene
-- LOGS LOGS LOGS, log everything that might be beneficial for debugging or incident analysis. (logs.md)[docs/logs.md]
+- LOGS LOGS LOGS, log everything that might be beneficial for debugging or incident analysis. See [docs/operations/logging.md](docs/operations/logging.md).
 - Remove legacy compatibility paths, dead code, backward-compat shims, aliases, and old-field fallbacks as part of the same change. Prefer a single source of truth over parallel old/new code paths. Always sweep up after a change to remove all leftover latent code. Keep only what the user explicitly asks to preserve.
 - When doing large changes, don't worry about tests until the very end. It's better to have ME prove our system manually before spending energy making and fixing tests.
 - Always update canonical documentation of related feature when updating code. Prefer to avoid 'past tense' language, stating a canonical truth rather than a redesign or migration plan, unless explicitly asked for plan.
@@ -42,7 +42,7 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 #### Process
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
 - Do not run 'smoke' or 'live' tests unless the user explicitly directs you to run them, since they incur cost. E2E tests and essential unit tests are the primary focus.
-- For runtime debugging and incident analysis, prefer Grafana/Loki log exploration first; see `docs/logs.md` for setup and query workflow.
+- For runtime debugging and incident analysis, prefer Grafana/Loki log exploration first; see `docs/operations/logging.md` for setup and query workflow.
 - Expect parallel in-flight edits from the user or other agents; treat unexpected diffs as active work, and never revert/reset/checkout files you did not explicitly change for the current task. Do not call out unrelated in-flight edits unless they directly interfere with your task.
 - Avoid typecasts to `any` or `unknown`; prefer explicit, concrete types and narrow unions. Use casts only as a last resort with clear justification.
 - Use git commit author `Volpestyle <14805252+Volpestyle@users.noreply.github.com>` for all commits in this repository.

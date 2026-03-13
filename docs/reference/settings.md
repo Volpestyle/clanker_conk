@@ -4,11 +4,11 @@ Canonical reference for how settings are authored, stored, resolved, served to t
 
 Companion docs:
 
-- [`docs/preset-system-spec.md`](preset-system-spec.md) for preset-specific defaults and product intent
-- [`docs/technical-architecture.md`](technical-architecture.md) for the broader runtime architecture
-- [`docs/voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md) for voice-specific stage behavior
-- [`docs/agent-browser.md`](agent-browser.md) for browser-runtime behavior
-- [`docs/agent-code.md`](agent-code.md) for code-agent behavior
+- [`../architecture/presets.md`](../architecture/presets.md) for preset-specific defaults and product intent
+- [`../architecture/overview.md`](../architecture/overview.md) for the broader runtime architecture
+- [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md) for voice-specific stage behavior
+- [`../capabilities/browser.md`](../capabilities/browser.md) for browser-runtime behavior
+- [`../capabilities/code.md`](../capabilities/code.md) for code-agent behavior
 
 ## 1. Mental Model
 
@@ -99,7 +99,7 @@ Current save guarantees:
 
 ## 4. Resolution Pipeline
 
-![Settings Flow](diagrams/settings-flow.png)
+![Settings Flow](../diagrams/settings-flow.png)
 
 <!-- source: docs/diagrams/settings-flow.mmd -->
 
@@ -186,16 +186,16 @@ Important consequence:
 
 - the store should never persist a preset-derived value just because the dashboard displayed it
 
-Preset-specific default choices and product intent live in [`docs/preset-system-spec.md](preset-system-spec.md)`.
+Preset-specific default choices and product intent live in [`../architecture/presets.md`](../architecture/presets.md).
 
 ## 7. Feature-Local Settings Docs
 
-`docs/settings.md` is the canonical cross-cutting contract. Feature docs still own the meaning of feature-local knobs:
+`docs/reference/settings.md` is the canonical cross-cutting contract. Feature docs still own the meaning of feature-local knobs:
 
-- browser runtime knobs and behavior: [`docs/agent-browser.md`](agent-browser.md)
-- code-agent knobs and behavior: [`docs/agent-code.md`](agent-code.md)
-- voice transport and pipeline knobs: [`docs/voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
-- activity/attention-facing behavior knobs: [`docs/clanker-activity.md`](clanker-activity.md)
+- browser runtime knobs and behavior: [`../capabilities/browser.md`](../capabilities/browser.md)
+- code-agent knobs and behavior: [`../capabilities/code.md`](../capabilities/code.md)
+- voice transport and pipeline knobs: [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
+- activity/attention-facing behavior knobs: [`../architecture/activity.md`](../architecture/activity.md)
 
 Those docs explain what a setting means behaviorally. This doc explains how settings exist as data.
 
