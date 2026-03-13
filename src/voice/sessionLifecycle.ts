@@ -571,21 +571,26 @@ export class SessionLifecycle {
             );
           }
         }
-        void Promise.resolve(
-          this.host.startMusicStreamPublish({
-            guildId: session.guildId,
-            source: "music_player_state_playing"
-          })
-        ).catch((error) => {
-          this.logAsyncFailure({
-            session,
-            content: "music_stream_publish_start_failed",
-            error,
-            metadata: {
-              status
-            }
+        const intent = session.streamPublishIntent;
+        if (intent) {
+          session.streamPublishIntent = null;
+          void Promise.resolve(
+            this.host.startMusicStreamPublish({
+              guildId: session.guildId,
+              source: "music_player_state_playing",
+              forceMode: "video"
+            })
+          ).catch((error) => {
+            this.logAsyncFailure({
+              session,
+              content: "music_stream_publish_start_failed",
+              error,
+              metadata: {
+                status
+              }
+            });
           });
-        });
+        }
       } else if (status === "paused") {
         void Promise.resolve(
           this.host.pauseMusicStreamPublish({
@@ -628,6 +633,7 @@ export class SessionLifecycle {
     };
 
     const onMusicIdle = () => {
+      session.streamPublishIntent = null;
       this.host.setMusicPhase(session, "idle");
       setKnownMusicQueuePausedState(session, false);
       const music = this.host.ensureSessionMusicState(session);
@@ -660,6 +666,7 @@ export class SessionLifecycle {
     };
 
     const onMusicError = () => {
+      session.streamPublishIntent = null;
       this.host.setMusicPhase(session, "idle");
       setKnownMusicQueuePausedState(session, false);
       const music = this.host.ensureSessionMusicState(session);
@@ -1711,17 +1718,25 @@ export class SessionLifecycle {
             }
           }
         } catch (error) {
+          const errorMessage = String((error as Error)?.message || error);
           nativeScreenShare.lastDecodeFailureAt = Date.now();
-          nativeScreenShare.lastDecodeFailureReason = String((error as Error)?.message || error);
+          nativeScreenShare.lastDecodeFailureReason = errorMessage;
           this.host.store.logAction({
             kind: "voice_error",
             guildId: session.guildId,
             channelId: session.textChannelId,
             userId: normalizedUserId,
-            content: `native_discord_video_decode_failed: ${String((error as Error)?.message || error)}`,
+            content: `native_discord_video_decode_failed: ${errorMessage}`,
             metadata: {
               sessionId: session.id,
-              codec: String(payload.codec || "").trim().toLowerCase() || null
+              codec: String(payload.codec || "").trim().toLowerCase() || null,
+              keyframe: Boolean(payload.keyframe),
+              rtpTimestamp: Number.isFinite(Number(payload.rtpTimestamp))
+                ? Math.max(0, Math.floor(Number(payload.rtpTimestamp)))
+                : null,
+              frameBytes: Buffer.from(String(payload.frameBase64 || "").trim(), "base64").length,
+              timedOut: errorMessage === "ffmpeg_decode_timeout",
+              transportStatus: nativeScreenShare.transportStatus || null
             }
           });
         } finally {

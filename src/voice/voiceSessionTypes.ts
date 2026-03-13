@@ -1181,6 +1181,7 @@ export interface VoiceSession {
     playbackArmedReason?: string | null;
     playbackArmedAt?: number;
     playerState?: string | null;
+    streamPublishIntent?: { mode: "video" } | null;
     botTurnOpenAt?: number;
     deferredVoiceActions?: Partial<Record<DeferredVoiceActionType, DeferredVoiceAction>>;
     deferredVoiceActionTimers?: Partial<Record<DeferredVoiceActionType, ReturnType<typeof setTimeout> | NodeJS.Timeout | null>>;

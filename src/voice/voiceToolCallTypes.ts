@@ -46,6 +46,7 @@ export type VoiceToolCallManager = Pick<
   | "search"
   | "sessions"
   | "setMusicPhase"
+  | "startVisualizerStreamPublish"
   | "soundboardDirector"
   | "store"
   | "transcribePcmTurn"

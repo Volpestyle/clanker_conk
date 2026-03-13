@@ -538,6 +538,23 @@ export const SHARE_BROWSER_SESSION_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const STREAM_VISUALIZER_SCHEMA: SharedToolSchema = {
+  name: "stream_visualizer",
+  description: "Start Discord Go Live with an audio visualizer for currently playing music.",
+  voiceContinuationPolicy: "if_no_spoken_text",
+  parameters: {
+    type: "object",
+    properties: {
+      mode: {
+        type: "string",
+        enum: ["cqt", "spectrum", "waves", "vectorscope"],
+        description: "Visualizer style. Uses dashboard default if omitted."
+      }
+    },
+    additionalProperties: false
+  }
+};
+
 export const STOP_VIDEO_SHARE_SCHEMA: SharedToolSchema = {
   name: "stop_video_share",
   description: "Stop the current outbound video share, whether it is a browser session or a published video stream.",
@@ -640,6 +657,7 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_SKIP_SCHEMA,
   MUSIC_NOW_PLAYING_SCHEMA,
   SHARE_BROWSER_SESSION_SCHEMA,
+  STREAM_VISUALIZER_SCHEMA,
   STOP_VIDEO_SHARE_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,
   SCREEN_NOTE_SCHEMA,

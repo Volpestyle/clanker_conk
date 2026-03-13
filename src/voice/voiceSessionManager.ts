@@ -68,6 +68,7 @@ import {
   handleDiscoveredSelfStreamCredentialsReceived,
   handleDiscoveredSelfStreamDeleted,
   startMusicStreamPublish,
+  startVisualizerStreamPublish,
   pauseMusicStreamPublish,
   stopMusicStreamPublish,
   startBrowserStreamPublish,
@@ -1507,9 +1508,18 @@ export class VoiceSessionManager {
     });
   }
 
-  startMusicStreamPublish({ guildId, source = "music_player_state_playing" }) {
+  startMusicStreamPublish({ guildId, source = "music_player_state_playing", forceMode }: { guildId: string; source?: string | null; forceMode?: "video" | "visualizer" }) {
     return startMusicStreamPublish(this, {
       guildId,
+      source,
+      forceMode
+    });
+  }
+
+  startVisualizerStreamPublish({ guildId, visualizerMode, source = "stream_visualizer_tool" }: { guildId: string; visualizerMode?: string | null; source?: string | null }) {
+    return startVisualizerStreamPublish(this, {
+      guildId,
+      visualizerMode,
       source
     });
   }

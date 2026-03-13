@@ -150,21 +150,36 @@ function getConfiguredVisualizerMode(manager: StreamPublishManager) {
 
 function resolvePublishableMusicSource(
   manager: StreamPublishManager,
-  session: StreamPublishSession | null | undefined
+  session: StreamPublishSession | null | undefined,
+  forceMode?: "video" | "visualizer" | null,
+  forcedVisualizerMode?: StreamWatchVisualizerMode | null
 ): StreamPublishSourceResolution {
-  const visualizerMode = getConfiguredVisualizerMode(manager);
+  const configuredVisualizerMode = getConfiguredVisualizerMode(manager);
   const provider = String(session?.music?.provider || "").trim().toLowerCase();
   const trackUrl = normalizeSourceUrl(session?.music?.lastTrackUrl);
   const playbackUrl = normalizeSourceUrl(session?.music?.lastPlaybackUrl) || trackUrl;
   const playbackResolvedDirectUrl = Boolean(session?.music?.lastPlaybackResolvedDirectUrl);
 
-  if (visualizerMode !== "off") {
+  // forceMode: "video" → skip visualizer, resolve to URL
+  // forceMode: "visualizer" → always resolve to visualizer with specified or default mode
+  // undefined → current behavior (read dashboard setting)
+  const useVisualizer = forceMode === "visualizer"
+    ? true
+    : forceMode === "video"
+      ? false
+      : configuredVisualizerMode !== "off";
+
+  const effectiveVisualizerMode: StreamWatchVisualizerMode = forceMode === "visualizer"
+    ? (forcedVisualizerMode && forcedVisualizerMode !== "off" ? forcedVisualizerMode : configuredVisualizerMode !== "off" ? configuredVisualizerMode : "cqt")
+    : configuredVisualizerMode;
+
+  if (useVisualizer) {
     if (!playbackUrl) {
       return {
         ok: false,
         reason: "music_playback_url_missing",
         sourceKind: "music" as const,
-        visualizerMode,
+        visualizerMode: effectiveVisualizerMode,
         sourceKey: null,
         sourceUrl: null,
         sourceLabel: null
@@ -175,7 +190,7 @@ function resolvePublishableMusicSource(
       ok: true,
       reason: "music_visualizer_ready",
       sourceKind: "music" as const,
-      visualizerMode,
+      visualizerMode: effectiveVisualizerMode,
       sourceKey: trackUrl || playbackUrl,
       sourceUrl: trackUrl || playbackUrl,
       sourceLabel: trackUrl || playbackUrl,
@@ -183,7 +198,7 @@ function resolvePublishableMusicSource(
         kind: "visualizer",
         url: playbackUrl,
         resolvedDirectUrl: playbackResolvedDirectUrl,
-        visualizerMode
+        visualizerMode: effectiveVisualizerMode
       }
     };
   }
@@ -193,7 +208,7 @@ function resolvePublishableMusicSource(
       ok: false,
       reason: "music_track_url_missing",
       sourceKind: "music" as const,
-      visualizerMode,
+      visualizerMode: effectiveVisualizerMode,
       sourceKey: null as string | null,
       sourceUrl: null as string | null,
       sourceLabel: null as string | null
@@ -208,7 +223,7 @@ function resolvePublishableMusicSource(
         ok: true,
         reason: "youtube_track_url_ready",
         sourceKind: "music" as const,
-        visualizerMode,
+        visualizerMode: effectiveVisualizerMode,
         sourceKey: trackUrl,
         sourceUrl: trackUrl,
         sourceLabel: trackUrl,
@@ -227,7 +242,7 @@ function resolvePublishableMusicSource(
     ok: false,
     reason: "music_stream_publish_only_supports_youtube",
     sourceKind: "music" as const,
-    visualizerMode,
+    visualizerMode: effectiveVisualizerMode,
     sourceKey: trackUrl,
     sourceUrl: trackUrl,
     sourceLabel: trackUrl
@@ -740,9 +755,39 @@ export function startMusicStreamPublish(
   manager: StreamPublishManager,
   {
     guildId,
-    source = "music_player_state_playing"
+    source = "music_player_state_playing",
+    forceMode
   }: {
     guildId: string;
+    source?: string | null;
+    forceMode?: "video" | "visualizer";
+  }
+) {
+  const session = manager.sessions.get(String(guildId || "").trim()) || null;
+  if (!session || session.ending) {
+    return {
+      ok: false,
+      reason: "voice_session_missing"
+    };
+  }
+
+  const sourceResolution = resolvePublishableMusicSource(manager, session, forceMode);
+  return startResolvedStreamPublish(manager, session, {
+    sourceResolution,
+    source,
+    logContent: "music_stream_publish_requested"
+  });
+}
+
+export function startVisualizerStreamPublish(
+  manager: StreamPublishManager,
+  {
+    guildId,
+    visualizerMode,
+    source = "stream_visualizer_tool"
+  }: {
+    guildId: string;
+    visualizerMode?: string | null;
     source?: string | null;
   }
 ) {
@@ -754,11 +799,21 @@ export function startMusicStreamPublish(
     };
   }
 
-  const sourceResolution = resolvePublishableMusicSource(manager, session);
+  const normalizedMode = visualizerMode
+    ? normalizeStreamWatchVisualizerMode(visualizerMode)
+    : null;
+  const effectiveMode = normalizedMode && normalizedMode !== "off" ? normalizedMode : null;
+
+  const sourceResolution = resolvePublishableMusicSource(
+    manager,
+    session,
+    "visualizer",
+    effectiveMode
+  );
   return startResolvedStreamPublish(manager, session, {
     sourceResolution,
     source,
-    logContent: "music_stream_publish_requested"
+    logContent: "visualizer_stream_publish_requested"
   });
 }
 

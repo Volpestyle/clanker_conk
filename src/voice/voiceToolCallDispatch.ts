@@ -20,6 +20,7 @@ import {
   executeVoiceMusicResumeTool,
   executeVoiceMusicSkipTool,
   executeVoiceMusicStopTool,
+  executeVoiceStreamVisualizerTool,
   executeVoiceVideoPlayTool,
   executeVoiceVideoSearchTool
 } from "./voiceToolCallMusic.ts";
@@ -240,6 +241,12 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
       args: opts.args,
       signal: opts.signal
     }),
+  stream_visualizer: async (manager, opts) =>
+    await executeVoiceStreamVisualizerTool(manager, {
+      session: opts.session,
+      args: opts.args,
+      signal: opts.signal
+    }),
   share_browser_session: async (manager, opts) =>
     await executeVoiceShareBrowserSessionTool(manager, {
       session: opts.session,
@@ -318,6 +325,7 @@ async function executeStartScreenWatchTool(
         : null,
     reason: normalizeInlineText(result?.reason, 120) || null,
     targetUserId: normalizeInlineText(result?.targetUserId, 80) || null,
+    frameReady: Boolean(result?.frameReady),
     linkUrl: normalizeInlineText(result?.linkUrl, 320) || null,
     expiresInMinutes: Number.isFinite(Number(result?.expiresInMinutes))
       ? Math.max(0, Math.round(Number(result.expiresInMinutes)))

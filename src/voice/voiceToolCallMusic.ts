@@ -19,7 +19,7 @@ import {
   setMusicDisambiguationState
 } from "./voiceMusicPlayback.ts";
 import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
-import { musicPhaseCanResume } from "./voiceSessionTypes.ts";
+import { musicPhaseCanResume, musicPhaseIsActive } from "./voiceSessionTypes.ts";
 import type { MusicSelectionResult, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
@@ -818,6 +818,9 @@ export async function executeVoiceVideoPlayTool(
     const selectedTrack = resolveMusicPlaySelection(manager, session, selectionId, catalog);
     if (selectedTrack) {
       catalog.set(selectedTrack.id, selectedTrack);
+      if (hasFullVoiceSessionShape(session)) {
+        session.streamPublishIntent = { mode: "video" };
+      }
       return startVoicePlaybackRequest(manager, {
         session,
         settings,
@@ -848,6 +851,9 @@ export async function executeVoiceVideoPlayTool(
   if (!canSearch) {
     if (session) {
       manager.setMusicPhase(session, "loading");
+    }
+    if (hasFullVoiceSessionShape(session)) {
+      session.streamPublishIntent = { mode: "video" };
     }
     manager.requestPlayMusic({
       guildId: session?.guildId,
@@ -925,6 +931,9 @@ export async function executeVoiceVideoPlayTool(
     };
   }
 
+  if (hasFullVoiceSessionShape(session)) {
+    session.streamPublishIntent = { mode: "video" };
+  }
   return startVoicePlaybackRequest(manager, {
     session,
     settings,
@@ -1184,5 +1193,34 @@ export async function executeVoiceMusicNowPlayingTool(
           }
         : null,
     queue_state: manager.buildVoiceQueueStatePayload(session)
+  };
+}
+
+export async function executeVoiceStreamVisualizerTool(
+  manager: VoiceToolCallManager,
+  { session, args, signal }: VoiceMusicToolOptions
+) {
+  throwIfAborted(signal, "Voice stream visualizer cancelled");
+  const currentPhase = session ? getMusicPhase(manager, session) : "idle";
+  if (!musicPhaseIsActive(currentPhase)) {
+    return {
+      ok: false,
+      error: "music_not_active",
+      reason: "stream_visualizer requires active music playback",
+      phase: currentPhase
+    };
+  }
+
+  const modeArg = normalizeInlineText(args?.mode, 32)?.toLowerCase() || null;
+  const result = manager.startVisualizerStreamPublish({
+    guildId: String(session?.guildId || "").trim(),
+    visualizerMode: modeArg,
+    source: "stream_visualizer_tool"
+  });
+
+  return {
+    ok: Boolean(result?.ok),
+    mode: modeArg || "default",
+    reason: String(result?.reason || "").trim() || null
   };
 }

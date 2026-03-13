@@ -707,8 +707,9 @@ export function buildVoiceTurnPrompt({
 
   if (allowVoiceToolCalls) {
     parts.push([
-      "Music: music_play starts/replaces playback (re-call with selection_id only when reusing an exact prior id). Omit selection_id unless you already have the exact id from prompt context or a prior tool result. Never invent placeholder or markup tokens.",
-      "Video: video_play starts YouTube video playback through the same playback stack and outbound stream publish when available. Re-call with selection_id only when reusing an exact prior id.",
+      "Music: music_play starts audio-only playback (no Go Live stream). Re-call with selection_id only when reusing an exact prior id. Omit selection_id unless you already have the exact id from prompt context or a prior tool result. Never invent placeholder or markup tokens.",
+      "Video: video_play starts YouTube video playback and shows it via Discord Go Live. Re-call with selection_id only when reusing an exact prior id.",
+      "Visualizer: stream_visualizer starts a Go Live audio visualizer for currently playing music. Optional mode: cqt, spectrum, waves, vectorscope.",
       "Use video_search only when the user explicitly wants video options. If seeing the site, thumbnails, or layout would help you decide, browser_browse can be the better tool.",
       "Queue: music_queue_next (after current) and music_queue_add (append) can take either direct query text or exact prior IDs. Prefer direct query for ordinary queue requests; use music_search only when the user explicitly wants options or browsing.",
       "For a request like \"play X, then queue Y\", emit music_play for X first and music_queue_next for Y second in the same tool response. Do not say Y is queued unless music_queue_next or music_queue_add succeeds.",
@@ -720,6 +721,7 @@ export function buildVoiceTurnPrompt({
 
   if (allowScreenShareToolCall) {
     parts.push("start_screen_watch: begin screen watch when live visual context would help. If multiple Discord shares are live and you want a specific one, pass { target: \"display name\" }. The runtime binds to an active Discord sharer when possible and falls back automatically when needed.");
+    parts.push("A successful start_screen_watch does not always mean live pixels are ready yet. If the tool result says frameReady=false, do not claim to see the screen yet.");
     parts.push("If start_screen_watch falls back to a link or returns linkUrl, treat that as off-screen coordination. In spoken replies, tell them to open the link you sent or the screen-share link. Do not read the full URL aloud unless they explicitly ask you to spell it out.");
   }
 
