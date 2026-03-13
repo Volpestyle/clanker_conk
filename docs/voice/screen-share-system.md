@@ -169,11 +169,14 @@ When a watch session ends, the default text model summarizes the accumulated key
 - Native watch binds an explicit target first when one is provided and resolves cleanly
 - An explicit target can use discovered Go Live state immediately, even before native video-state frames have populated the active-sharer roster
 - Without an explicit target, native watch auto-binds only when runtime can identify a safe target:
-  - requester is actively sharing, or
+  - requester has discovered Go Live state, even before credentials or frame-backed sharer state
+  - requester is actively sharing
   - exactly one user is actively sharing
-- If an explicit target resolves to someone in voice who is not actively sharing, link fallback can still target that user
+  - a single discovered Go Live target exists while the active-sharer roster is still empty
+- If an explicit target resolves to someone in voice who is not actively sharing, link fallback can still target that user when `STREAM_LINK_FALLBACK=true`
 - If native watch is unavailable, the runtime falls back to `ScreenShareSessionManager.createSession()`
 - Fallback sessions reuse existing requester+target links when possible
+- Set `STREAM_LINK_FALLBACK=false` to disable that fallback transport entirely and stay native-only
 
 ### Native Discord watch
 
@@ -236,6 +239,12 @@ All under `voice.streamWatch`:
 | `sharePageMaxWidthPx` | `960` | Fallback browser capture max width (640-1920) |
 | `sharePageJpegQuality` | `0.6` | Fallback browser capture JPEG quality (0.5-0.75) |
 
+Environment flags that shape the transport layer:
+
+| Variable | Default | Description |
+|---------|---------|-------------|
+| `STREAM_LINK_FALLBACK` | `true` | Master env gate for the share-link transport. Set `false` to disable link creation, link recovery, and link capability reporting while keeping native Go Live watch enabled. |
+
 Both layers are always active — there is no routing decision between "direct to brain" and "scanner generated." The brain always sees the frame; the scanner always builds temporal notes.
 
 The native Discord tuning fields above are canonical `voice.streamWatch` settings. They are currently used by runtime and persisted through the settings model, but they are not yet surfaced as dedicated dashboard controls.
@@ -273,7 +282,7 @@ This separates "what the scanner saw" from "what context the VC brain currently 
 - Optional parameter: `{ target?: string }`
 - `target` can be a display name, username, Discord mention, or Discord user id
 - If `target` resolves to one active sharer, runtime watches that share
-- If `target` resolves to a voice participant who is not actively sharing, runtime can still open the share-link fallback for that user
+- If `target` resolves to a voice participant who is not actively sharing, runtime can still open the share-link fallback for that user when `STREAM_LINK_FALLBACK=true`
 - If no `target` is provided, runtime only auto-picks when the requester is sharing or exactly one sharer is active
 - If multiple sharers are active and no `target` is provided, runtime refuses instead of guessing
 - Only available when `screenShareAvailable = true`

@@ -13,8 +13,16 @@ This repo supports native Discord Go Live in both directions:
 - Native Discord screen watch: subscribe to an active Discord Go Live stream through Discord's voice media protocol.
 - Native Discord self publish: create our own Go Live stream and send H264 video through the stream server connection.
 - Share-link fallback: send `/share/:token`, capture with `getDisplayMedia()`, and POST JPEG frames back into the bot.
+  This transport can be disabled completely with `STREAM_LINK_FALLBACK=false`.
 
 The model still only sees `start_screen_watch` for inbound visual context. Outbound publish is a runtime capability tied to the music pipeline, not a new conversational tool.
+
+In the full-brain voice path, `start_screen_watch` is exposed as soon as native
+screen watch is supported and enabled for the session, even if only discovered
+Go Live state exists and no active share has been bound yet. That lets the
+brain initiate OP20 `STREAM_WATCH` in response to "can you see my stream now?"
+instead of waiting for a fully ready watch state or frame-backed sharer roster
+before the tool appears.
 
 ## Current Status
 
@@ -66,6 +74,12 @@ connect or later becomes unhealthy. When the native `stream_watch` transport
 fails or disconnects after start, Bun tears the native watch down and requests
 the share-link path directly when requester + text-channel context are known.
 
+Set `STREAM_LINK_FALLBACK=false` to disable that transport entirely. In that
+mode, runtime stays native-only: capability reporting stops advertising the
+share-link path, native startup failures do not create fallback sessions, and
+post-connect transport failures log a skipped recovery instead of issuing a
+share-link request.
+
 ### Link fallback suppression
 
 When a native stream watch is active, the link fallback is suppressed at two
@@ -85,6 +99,7 @@ decoded frame presence, or active sharer state.
 `startVoiceScreenWatch` also accepts a `preferredTransport` parameter. Callers
 can pass `"link"` to skip native entirely and go straight to the share-link
 path — used for recovery when native transport fails after initial connection.
+If `STREAM_LINK_FALLBACK=false`, `"link"` requests are rejected.
 
 ## Why The Regular Voice Connection Cannot See Go Live Streams
 
@@ -235,10 +250,12 @@ These are the same opcodes as the regular voice connection but exchanged on the 
 ```
 1. Detect Go Live
    → Listen for VOICE_STATE_UPDATE with self_stream: true
+   → Seed provisional session Go Live state from that early signal
    → OR listen for STREAM_CREATE dispatch event
 
 2. Subscribe to stream
    → Gateway OP20 STREAM_WATCH { stream_key }
+   → If STREAM_CREATE has not arrived yet, synthesize stream_key from guild/channel/user IDs
    → Receive STREAM_CREATE { stream_key, rtc_server_id }
    → Receive STREAM_SERVER_UPDATE { stream_key, endpoint, token }
 
@@ -418,6 +435,8 @@ There is no separate standalone settings block for outbound native publish. Musi
 ### Stream discovery layer (implemented)
 
 - `native_discord_go_live_detected` — selfbot gateway saw `self_stream: true`
+- `stream_discovery_go_live_bootstrap_seeded` — Bun seeded provisional session Go Live state from `self_stream: true`
+- `stream_discovery_go_live_bootstrap_cleared` — Bun cleared stale provisional session Go Live state after `self_stream: false`
 - `native_discord_stream_watch_requested` — Gateway OP20 sent
 - `native_discord_stream_server_received` — `STREAM_SERVER_UPDATE` received
 - `native_discord_stream_connection_started` — second clankvox connection opening

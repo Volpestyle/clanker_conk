@@ -82,6 +82,10 @@ export interface StreamDiscoveryState {
 
 /** Callbacks fired when stream state changes. */
 export interface StreamDiscoveryCallbacks {
+  /** Fired when VOICE_STATE_UPDATE self_stream=true is detected (early Go Live signal). */
+  onGoLiveDetected?: (info: { userId: string; guildId: string; channelId: string }) => void;
+  /** Fired when VOICE_STATE_UPDATE self_stream=false is detected before stream deletion arrives. */
+  onGoLiveEnded?: (info: { userId: string; guildId: string; channelId: string | null }) => void;
   onStreamDiscovered?: (stream: GoLiveStream) => void;
   onStreamCredentialsReceived?: (stream: GoLiveStream) => void;
   onStreamDeleted?: (stream: GoLiveStream) => void;
@@ -182,7 +186,7 @@ export function setupStreamDiscovery(
   const log = callbacks.onLog ?? (() => {});
 
   onRawDispatch(client, "VOICE_STATE_UPDATE", (data) => {
-    handleVoiceStateUpdate(state, data as unknown as VoiceStateUpdateDispatch, log);
+    handleVoiceStateUpdate(state, data as unknown as VoiceStateUpdateDispatch, callbacks);
   });
 
   onRawDispatch(client, "STREAM_CREATE", (data) => {
@@ -219,8 +223,9 @@ export function setupStreamDiscovery(
 function handleVoiceStateUpdate(
   state: StreamDiscoveryState,
   data: VoiceStateUpdateDispatch,
-  log: StreamDiscoveryCallbacks["onLog"] & {}
+  callbacks: StreamDiscoveryCallbacks
 ): void {
+  const log = callbacks.onLog ?? (() => {});
   if (!data.guild_id || !data.user_id) return;
 
   if (data.self_stream === true) {
@@ -229,7 +234,19 @@ function handleVoiceStateUpdate(
       guildId: data.guild_id,
       channelId: data.channel_id ?? null,
     });
+    if (data.channel_id) {
+      callbacks.onGoLiveDetected?.({
+        userId: data.user_id,
+        guildId: data.guild_id,
+        channelId: data.channel_id,
+      });
+    }
   } else if (data.self_stream === false) {
+    callbacks.onGoLiveEnded?.({
+      userId: data.user_id,
+      guildId: data.guild_id,
+      channelId: data.channel_id ?? null,
+    });
     // User stopped Go Live. STREAM_DELETE should follow, but we can
     // proactively mark any matching streams.
     for (const stream of state.streams.values()) {

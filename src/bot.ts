@@ -11,6 +11,7 @@ import { applySelfbotPatches } from "./selfbot/selfbotPatches.ts";
 import {
   createStreamDiscoveryState,
   createGoLiveStreamState,
+  buildStreamKey,
   buildGoLiveStreamStateFromStream,
   setupStreamDiscovery,
   type StreamDiscoveryState
@@ -622,6 +623,63 @@ export class ClankerBot {
         this.client as never,
         this.streamDiscovery,
         {
+          onGoLiveDetected: ({ userId, guildId, channelId }) => {
+            const isSelfStream = String(userId || "").trim() === String(this.client.user?.id || "").trim();
+            const session = this.voiceSessionManager.getSession(guildId);
+            if (session && !isSelfStream && !session.goLiveStream?.active) {
+              const streamKey = buildStreamKey(guildId, channelId, userId);
+              if (
+                String(session.goLiveStream?.streamKey || "").trim() === streamKey &&
+                String(session.goLiveStream?.targetUserId || "").trim() === String(userId || "").trim() &&
+                String(session.goLiveStream?.guildId || "").trim() === String(guildId || "").trim() &&
+                String(session.goLiveStream?.channelId || "").trim() === String(channelId || "").trim()
+              ) {
+                return;
+              }
+              session.goLiveStream = {
+                ...createGoLiveStreamState(),
+                streamKey,
+                targetUserId: userId,
+                guildId,
+                channelId,
+                discoveredAt: Date.now(),
+              };
+              this.store.logAction({
+                kind: "stream_discovery",
+                guildId,
+                channelId,
+                userId,
+                content: `stream_discovery_go_live_bootstrap_seeded: streamKey=${streamKey}`,
+                metadata: { streamKey }
+              });
+            }
+          },
+          onGoLiveEnded: ({ userId, guildId, channelId }) => {
+            const isSelfStream = String(userId || "").trim() === String(this.client.user?.id || "").trim();
+            const session = this.voiceSessionManager.getSession(guildId);
+            const provisionalStreamKey = channelId ? buildStreamKey(guildId, channelId, userId) : null;
+            if (
+              session &&
+              !isSelfStream &&
+              !session.goLiveStream?.active &&
+              String(session.goLiveStream?.targetUserId || "").trim() === String(userId || "").trim() &&
+              String(session.goLiveStream?.guildId || "").trim() === String(guildId || "").trim() &&
+              (!channelId || String(session.goLiveStream?.channelId || "").trim() === String(channelId || "").trim())
+            ) {
+              this.store.logAction({
+                kind: "stream_discovery",
+                guildId,
+                channelId,
+                userId,
+                content: `stream_discovery_go_live_bootstrap_cleared: streamKey=${provisionalStreamKey ?? session.goLiveStream?.streamKey ?? "unknown"}`,
+                metadata: {
+                  streamKey: provisionalStreamKey ?? session.goLiveStream?.streamKey ?? null,
+                  reason: "voice_state_self_stream_false"
+                }
+              });
+              session.goLiveStream = createGoLiveStreamState();
+            }
+          },
           onStreamDiscovered: (stream) => {
             this.store.logAction({
               kind: "stream_discovery",
@@ -631,6 +689,11 @@ export class ClankerBot {
               content: `stream_discovered: streamKey=${stream.streamKey} rtcServerId=${stream.rtcServerId ?? "unknown"}`,
               metadata: { streamKey: stream.streamKey, rtcServerId: stream.rtcServerId }
             });
+            const isSelfStream = String(stream.userId || "").trim() === String(this.client.user?.id || "").trim();
+            const session = this.voiceSessionManager.getSession(stream.guildId);
+            if (session && !isSelfStream) {
+              session.goLiveStream = buildGoLiveStreamStateFromStream(stream);
+            }
           },
           onStreamCredentialsReceived: (stream) => {
             this.store.logAction({

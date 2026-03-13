@@ -76,6 +76,8 @@ describe("streamDiscovery", () => {
   let discoveredStreams: GoLiveStream[];
   let credentialStreams: GoLiveStream[];
   let deletedStreams: GoLiveStream[];
+  let goLiveDetected: Array<{ userId: string; guildId: string; channelId: string }>;
+  let goLiveEnded: Array<{ userId: string; guildId: string; channelId: string | null }>;
 
   beforeEach(() => {
     state = createStreamDiscoveryState();
@@ -84,8 +86,12 @@ describe("streamDiscovery", () => {
     discoveredStreams = [];
     credentialStreams = [];
     deletedStreams = [];
+    goLiveDetected = [];
+    goLiveEnded = [];
 
     setupStreamDiscovery(client as never, state, {
+      onGoLiveDetected: (info) => goLiveDetected.push(info),
+      onGoLiveEnded: (info) => goLiveEnded.push(info),
       onStreamDiscovered: (s) => discoveredStreams.push(s),
       onStreamCredentialsReceived: (s) => credentialStreams.push(s),
       onStreamDeleted: (s) => deletedStreams.push(s),
@@ -150,6 +156,13 @@ describe("streamDiscovery", () => {
       expect(logs).toHaveLength(1);
       expect(logs[0].action).toBe("stream_discovery_user_go_live");
       expect(logs[0].detail.userId).toBe("111");
+      expect(goLiveDetected).toEqual([
+        {
+          userId: "111",
+          guildId: "222",
+          channelId: "333",
+        }
+      ]);
     });
 
     it("logs when a user stops Go Live", () => {
@@ -170,6 +183,13 @@ describe("streamDiscovery", () => {
       );
       expect(endLog).toBeDefined();
       expect(endLog!.detail.userId).toBe("111");
+      expect(goLiveEnded).toEqual([
+        {
+          userId: "111",
+          guildId: "222",
+          channelId: null,
+        }
+      ]);
     });
 
     it("ignores updates without self_stream", () => {
