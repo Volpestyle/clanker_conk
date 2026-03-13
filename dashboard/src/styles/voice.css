@@ -54,6 +54,29 @@
   font-variant-numeric: tabular-nums;
 }
 
+.vm-debugger-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-xs);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: all 120ms ease;
+  font-family: inherit;
+  margin-left: 8px;
+}
+
+.vm-debugger-toggle:hover {
+  background: rgba(190, 242, 100, 0.15);
+  box-shadow: 0 0 12px rgba(190, 242, 100, 0.2);
+}
+
 .vm-join {
   padding: 14px 16px;
   gap: 10px;
