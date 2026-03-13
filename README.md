@@ -1,4 +1,4 @@
-# clanker_conk_self
+# clanky
 
 An experimental Discord selfbot that lives in your server as a genuine participant, not a command-response machine but a personality with tools.
 
