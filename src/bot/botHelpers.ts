@@ -37,7 +37,7 @@ export function resolveMaxMediaPromptLen(settings) {
   if (!Number.isFinite(raw)) return DEFAULT_MAX_MEDIA_PROMPT_LEN;
   return clamp(Math.floor(raw), MAX_MEDIA_PROMPT_FLOOR, MAX_MEDIA_PROMPT_CEILING);
 }
-const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gif"]);
+const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gif", "tool_images"]);
 const INITIATIVE_MEDIA_TYPES = new Set(["none", "image", "video", "gif"]);
 const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
 const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["start_watch", "none"]);
@@ -85,7 +85,7 @@ export const REPLY_OUTPUT_SCHEMA = {
           properties: {
             type: {
               type: "string",
-              enum: ["image_simple", "image_complex", "video", "gif", "none"]
+              enum: ["image_simple", "image_complex", "video", "gif", "tool_images", "none"]
             },
             prompt: { type: ["string", "null"] }
           },
@@ -779,6 +779,12 @@ function normalizeStructuredMediaDirective(rawMedia, maxLen = DEFAULT_MAX_MEDIA_
     .toLowerCase();
   if (!rawType || rawType === "none") return null;
   if (!REPLY_MEDIA_TYPES.has(rawType)) return null;
+  if (rawType === "tool_images") {
+    return {
+      type: rawType,
+      prompt: null
+    };
+  }
   const prompt = normalizeDirectiveText(rawMedia.prompt, rawType === "gif" ? MAX_GIF_QUERY_LEN : maxLen);
   if (!prompt) return null;
   return {

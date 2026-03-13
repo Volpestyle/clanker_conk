@@ -90,6 +90,10 @@ the browser can be both:
 - a reasoning tool for choosing media
 - a live visual source for outbound native stream-publish flows
 
+In text replies, images returned by tools can stay private reasoning context or
+be attached to the final Discord message if the brain explicitly chooses that
+output shape. Tool images are not auto-posted just because they exist.
+
 Headless browser sessions still render pixels. The runtime can capture those
 offscreen frames without requiring a visible window.
 

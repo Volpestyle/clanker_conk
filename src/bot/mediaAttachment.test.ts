@@ -14,6 +14,7 @@ import { VideoContextService } from "../video/videoContextService.ts";
 import { ImageCaptionCache } from "../vision/imageCaptionCache.ts";
 import type { MediaAttachmentContext } from "./botContext.ts";
 import {
+  buildMessagePayloadWithToolImages,
   buildMessagePayloadWithImage,
   maybeAttachReplyGif,
   resolveMediaAttachment
@@ -73,6 +74,21 @@ test("buildMessagePayloadWithImage attaches a generated buffer as a file", () =>
   assert.match(String(result.payload.files?.[0]?.name || ""), /^clanker-\d+\.png$/);
 });
 
+test("buildMessagePayloadWithToolImages attaches tool-returned base64 images as files", () => {
+  const result = buildMessagePayloadWithToolImages("hello", [
+    {
+      mediaType: "image/png",
+      dataBase64: Buffer.from("png-bytes").toString("base64")
+    }
+  ]);
+
+  assert.equal(result.toolImagesUsed, true);
+  assert.equal(result.payload.content, "hello");
+  assert.equal(result.payload.files?.length, 1);
+  assert.equal(result.payload.files?.[0]?.name, "clanky-tool-1.png");
+  assert.equal(result.payload.files?.[0]?.attachment.toString(), "png-bytes");
+});
+
 test("maybeAttachReplyGif reports configuration blocking when GIF search is unavailable", async () => {
   await withTempMediaAttachmentContext(async (ctx) => {
     ctx.gifs.isConfigured = () => false;
@@ -127,6 +143,30 @@ test("resolveMediaAttachment handles simple image directives through the shared 
     assert.equal(result.imageCapabilityBlocked, false);
     assert.equal(result.imageVariantUsed, "simple");
     assert.match(result.payload.content, /generated\.png/);
+  });
+});
+
+test("resolveMediaAttachment attaches tool-returned images when requested by the model", async () => {
+  await withTempMediaAttachmentContext(async (ctx) => {
+    const result = await resolveMediaAttachment(ctx, {
+      settings: createTestSettings(),
+      text: "here it is",
+      directive: {
+        type: "tool_images"
+      },
+      toolImageInputs: [
+        {
+          mediaType: "image/png",
+          dataBase64: Buffer.from("browser-shot").toString("base64")
+        }
+      ]
+    });
+
+    assert.equal(result.media?.type, "tool_images");
+    assert.equal(result.toolImagesUsed, true);
+    assert.equal(result.payload.content, "here it is");
+    assert.equal(result.payload.files?.length, 1);
+    assert.equal(result.payload.files?.[0]?.name, "clanky-tool-1.png");
   });
 });
 

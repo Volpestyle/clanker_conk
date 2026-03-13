@@ -582,6 +582,7 @@ export function buildReplyPrompt({
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
+  parts.push("If a previous tool call returned images and you want to include those exact images in the final Discord reply, set media to {\"type\":\"tool_images\",\"prompt\":null}.");
   parts.push("Use tool calls for web search, browser browsing, durable memory search, image lookup, voice control, and other supported capabilities.");
   parts.push("Do not encode tool requests inside the JSON reply body.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");

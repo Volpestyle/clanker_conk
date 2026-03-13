@@ -410,3 +410,185 @@ test("maybeReplyToMessagePipeline recovers unstructured model output as prose re
     assert.equal(warning?.content, "structured_output_recovered_as_prose");
   });
 });
+
+test("maybeReplyToMessagePipeline lets the model attach tool-returned images in the final reply", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+
+    const llmCalls: Array<{
+      userPrompt: string;
+      imageInputs?: unknown;
+      contextMessages?: unknown;
+    }> = [];
+    const replyPayloads: Array<Record<string, unknown>> = [];
+    const channelSendPayloads: Array<Record<string, unknown>> = [];
+    const typingCallsRef = { count: 0 };
+    let generateCount = 0;
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push({
+            userPrompt: String(payload.userPrompt || ""),
+            imageInputs: payload.imageInputs,
+            contextMessages: payload.contextMessages
+          });
+          generateCount += 1;
+
+          if (generateCount === 1) {
+            return {
+              text: "let me check",
+              toolCalls: [
+                {
+                  id: "tool-1",
+                  name: "browser_browse",
+                  input: {
+                    query: "show me the stream"
+                  }
+                }
+              ],
+              rawContent: null,
+              provider: "claude-oauth",
+              model: "claude-opus-4-6",
+              usage: {
+                inputTokens: 12,
+                outputTokens: 10,
+                cacheWriteTokens: 0,
+                cacheReadTokens: 0
+              },
+              costUsd: 0
+            };
+          }
+
+          return {
+            text: JSON.stringify({
+              text: "yep here it is",
+              skip: false,
+              reactionEmoji: null,
+              media: { type: "tool_images", prompt: null },
+              automationAction: {
+                operation: "none",
+                title: null,
+                instruction: null,
+                schedule: null,
+                targetQuery: null,
+                automationId: null,
+                runImmediately: false,
+                targetChannelId: null
+              },
+              screenWatchIntent: {
+                action: "none",
+                confidence: 0,
+                reason: null
+              },
+              screenNote: null,
+              screenMoment: null
+            }),
+            toolCalls: [],
+            rawContent: null,
+            provider: "claude-oauth",
+            model: "claude-opus-4-6",
+            usage: {
+              inputTokens: 14,
+              outputTokens: 18,
+              cacheWriteTokens: 0,
+              cacheReadTokens: 0
+            },
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({
+      guild,
+      channelId,
+      channelSendPayloads,
+      typingCallsRef
+    });
+    const message = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-1",
+      content: "can you show me the screenshot?",
+      replyPayloads
+    });
+    const settings = store.getSettings();
+    const runtime = buildReplyPipelineRuntime(bot, {
+      captionTimestamps: [],
+      unsolicitedReplyContextWindow: 2
+    });
+    runtime.buildBrowserBrowseContext = () => ({
+      requested: false,
+      configured: true,
+      enabled: true,
+      used: false,
+      blockedByBudget: false,
+      error: null,
+      query: "",
+      text: "",
+      imageInputs: [],
+      steps: 0,
+      hitStepLimit: false,
+      budget: {
+        maxPerHour: 10,
+        used: 0,
+        remaining: 10,
+        canBrowse: true
+      }
+    });
+    runtime.runModelRequestedBrowserBrowse = async () => ({
+      used: true,
+      text: "Browser screenshot captured.",
+      imageInputs: [
+        {
+          mediaType: "image/png",
+          dataBase64: Buffer.from("browser-shot").toString("base64")
+        }
+      ],
+      steps: 1,
+      hitStepLimit: false,
+      error: null,
+      blockedByBudget: false
+    });
+
+    const handled = await maybeReplyToMessagePipeline(runtime, message, settings, {
+      source: "message_event",
+      forceDecisionLoop: true,
+      forceRespond: true,
+      recentMessages: [],
+      triggerMessageIds: [message.id],
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "direct_address"
+      }
+    });
+
+    assert.equal(handled, true);
+    assert.equal(typingCallsRef.count, 1);
+    const sentPayload = replyPayloads[0] || channelSendPayloads[0];
+    assert.ok(sentPayload, "expected a sent reply payload");
+    assert.equal(sentPayload.content, "yep here it is");
+    assert.equal(Array.isArray(sentPayload.files), true);
+    assert.equal(sentPayload.files?.length, 1);
+    assert.equal(sentPayload.files?.[0]?.name, "clanky-tool-1.png");
+    assert.match(llmCalls[1]?.userPrompt || "", /tool_images/);
+  });
+});

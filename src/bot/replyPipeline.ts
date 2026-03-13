@@ -118,8 +118,14 @@ type ReplyPipelineMentions = {
   } | null;
 };
 
+type ReplyMessagePayloadFile = {
+  attachment: Buffer;
+  name: string;
+};
+
 type ReplyMessagePayload = Record<string, unknown> & {
   content: string;
+  files?: ReplyMessagePayloadFile[];
   allowedMentions?: {
     repliedUser?: boolean;
   };
@@ -277,6 +283,7 @@ type ReplyActionableLlmResult = {
   memoryLookup: ReturnType<ReplyPipelineRuntime["buildMemoryLookupContext"]>;
   imageLookup: ReturnType<ReplyPipelineRuntime["buildImageLookupContext"]>;
   modelImageInputs: ReplyImageInput[];
+  toolResultImageInputs: ReplyImageInput[];
   replyPrompts: ReplyPrompts;
 };
 
@@ -297,6 +304,7 @@ type ReplySendableActionResult = {
   modelProducedSkip: boolean;
   modelProducedEmpty: boolean;
   payload: ReplyMessagePayload;
+  toolImagesUsed: boolean;
   imageUsed: boolean;
   imageBudgetBlocked: boolean;
   imageCapabilityBlocked: boolean;
@@ -999,6 +1007,7 @@ async function executeReplyLlm(
   let usedBrowserBrowseFollowup = false;
   let usedMemoryLookupFollowup = false;
   let usedImageLookupFollowup = false;
+  let toolResultImageInputs: ReplyImageInput[] = [];
   const REPLY_TOOL_LOOP_MAX_STEPS = 2;
   const REPLY_TOOL_LOOP_MAX_CALLS = 3;
   let replyToolLoopSteps = 0;
@@ -1028,6 +1037,22 @@ async function executeReplyLlm(
 
     const toolResultMessages: ContentBlock[] = [];
     let toolResultImageInputsAdded = false;
+    const mergeToolResultImages = (extraInputs: ReplyImageInput[] | undefined) => {
+      if (!Array.isArray(extraInputs) || extraInputs.length === 0 || typeof bot.mergeImageInputs !== "function") {
+        return false;
+      }
+      modelImageInputs = bot.mergeImageInputs({
+        baseInputs: modelImageInputs,
+        extraInputs,
+        maxInputs: MAX_MODEL_IMAGE_INPUTS
+      });
+      toolResultImageInputs = bot.mergeImageInputs({
+        baseInputs: toolResultImageInputs,
+        extraInputs,
+        maxInputs: MAX_MODEL_IMAGE_INPUTS
+      });
+      return true;
+    };
 
     // Separate sub-agent tools (can run concurrently) from sequential tools
     const CONCURRENT_TOOL_NAMES = new Set(["code_task", "browser_browse"]);
@@ -1047,16 +1072,7 @@ async function executeReplyLlm(
         throwIfAborted(signal, "Reply cancelled");
         const toolInput = toolCall.input;
         const result = await executeReplyTool(toolCall.name, toolInput, replyToolRuntime, replyToolContext);
-        if (
-          Array.isArray(result?.imageInputs) &&
-          result.imageInputs.length &&
-          typeof bot.mergeImageInputs === "function"
-        ) {
-          modelImageInputs = bot.mergeImageInputs({
-            baseInputs: modelImageInputs,
-            extraInputs: result.imageInputs,
-            maxInputs: MAX_MODEL_IMAGE_INPUTS
-          });
+        if (mergeToolResultImages(result?.imageInputs)) {
           toolResultImageInputsAdded = true;
         }
         concurrentResults.set(toolCall.id, result);
@@ -1147,16 +1163,7 @@ async function executeReplyLlm(
         );
       }
 
-      if (
-        Array.isArray(result?.imageInputs) &&
-        result.imageInputs.length &&
-        typeof bot.mergeImageInputs === "function"
-      ) {
-        modelImageInputs = bot.mergeImageInputs({
-          baseInputs: modelImageInputs,
-          extraInputs: result.imageInputs,
-          maxInputs: MAX_MODEL_IMAGE_INPUTS
-        });
+      if (mergeToolResultImages(result?.imageInputs)) {
         toolResultImageInputsAdded = true;
       }
 
@@ -1168,11 +1175,9 @@ async function executeReplyLlm(
           imageLookup,
           query: imageLookupRequest
         });
-        modelImageInputs = bot.mergeImageInputs({
-          baseInputs: modelImageInputs,
-          extraInputs: imageLookup.selectedImageInputs || [],
-          maxInputs: MAX_MODEL_IMAGE_INPUTS
-        });
+        if (mergeToolResultImages(imageLookup.selectedImageInputs || [])) {
+          toolResultImageInputsAdded = true;
+        }
         usedImageLookupFollowup = Boolean(imageLookup?.used);
       }
 
@@ -1201,7 +1206,7 @@ async function executeReplyLlm(
 
     throwIfAborted(signal, "Reply cancelled");
     const toolLoopUserPrompt = toolResultImageInputsAdded
-      ? "Attached are images returned by the previous tool call. Use them if they help."
+      ? "Attached are images returned by the previous tool call. Use them if they help. If you want to include those exact images in the final Discord reply, set media to {\"type\":\"tool_images\",\"prompt\":null}."
       : "";
     appendReplyFollowupPrompt(replyPromptCapture, toolLoopUserPrompt);
     generation = await bot.llm.generate({
@@ -1253,7 +1258,7 @@ async function executeReplyLlm(
     handledByIntent: false,
     generation, typingDelayMs, usedWebSearchFollowup, usedBrowserBrowseFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
     mediaPromptLimit, replyDirective,
-    webSearch, browserBrowse, memoryLookup, imageLookup, modelImageInputs, replyPrompts
+    webSearch, browserBrowse, memoryLookup, imageLookup, modelImageInputs, toolResultImageInputs, replyPrompts
   };
 }
 
@@ -1273,7 +1278,7 @@ async function dispatchReplyActions(
   } = ctx;
   const {
     generation, usedWebSearchFollowup, mediaPromptLimit, replyDirective,
-    webSearch, replyPrompts
+    webSearch, toolResultImageInputs, replyPrompts
   } = llmResult;
   if (replyDirective.parseState === "unstructured") {
     const recoveredText = sanitizeBotText(String(generation.text || ""));
@@ -1383,6 +1388,7 @@ async function dispatchReplyActions(
   finalText = embedWebSearchSources(finalText, webSearch);
 
   let payload: ReplyMessagePayload = { content: finalText };
+  let toolImagesUsed = false;
   let imageUsed = false;
   let imageBudgetBlocked = false;
   let imageCapabilityBlocked = false;
@@ -1431,6 +1437,7 @@ async function dispatchReplyActions(
           )
           : null
     },
+    toolImageInputs: toolResultImageInputs,
     trace: {
       guildId: message.guildId,
       channelId: message.channelId,
@@ -1439,6 +1446,7 @@ async function dispatchReplyActions(
     }
   });
   payload = mediaAttachment.payload;
+  toolImagesUsed = mediaAttachment.toolImagesUsed;
   imageUsed = mediaAttachment.imageUsed;
   imageBudgetBlocked = mediaAttachment.imageBudgetBlocked;
   imageCapabilityBlocked = mediaAttachment.imageCapabilityBlocked;
@@ -1450,7 +1458,7 @@ async function dispatchReplyActions(
   gifBudgetBlocked = mediaAttachment.gifBudgetBlocked;
   gifConfigBlocked = mediaAttachment.gifConfigBlocked;
 
-  if (!finalText && !imageUsed && !videoUsed && !gifUsed) {
+  if (!finalText && !toolImagesUsed && !imageUsed && !videoUsed && !gifUsed) {
     bot.store.logAction({
       kind: "bot_error",
       guildId: message.guildId,
@@ -1485,7 +1493,7 @@ async function dispatchReplyActions(
     skipped: false,
     reaction, mediaDirective,
     finalText, mentionResolution, screenShareOffer, allowMediaOnlyReply, modelProducedSkip,
-    modelProducedEmpty, payload, imageUsed, imageBudgetBlocked, imageCapabilityBlocked,
+    modelProducedEmpty, payload, toolImagesUsed, imageUsed, imageBudgetBlocked, imageCapabilityBlocked,
     imageVariantUsed, videoUsed, videoBudgetBlocked, videoCapabilityBlocked, gifUsed,
     gifBudgetBlocked, gifConfigBlocked, imagePrompt, complexImagePrompt, videoPrompt, gifQuery
   };
@@ -1512,11 +1520,12 @@ async function sendReplyMessage(
   } = ctx;
   const {
     generation, typingDelayMs, usedWebSearchFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
+    toolResultImageInputs,
     webSearch, imageLookup, memoryLookup, replyPrompts
   } = llmResult;
   const {
-    reaction,
-    finalText, mentionResolution, screenShareOffer, payload, imageUsed, imageBudgetBlocked, imageCapabilityBlocked,
+    reaction, mediaDirective,
+    finalText, mentionResolution, screenShareOffer, payload, toolImagesUsed, imageUsed, imageBudgetBlocked, imageCapabilityBlocked,
     imageVariantUsed, videoUsed, videoBudgetBlocked, videoCapabilityBlocked, gifUsed,
     gifBudgetBlocked, gifConfigBlocked, imagePrompt, complexImagePrompt, videoPrompt, gifQuery
   } = actionResult;
@@ -1627,6 +1636,11 @@ async function sendReplyMessage(
         blockedByConfiguration: gifConfigBlocked,
         maxPerDay: gifBudget.maxPerDay,
         remainingAtPromptTime: gifBudget.remaining
+      },
+      toolImages: {
+        requestedByModel: mediaDirective?.type === "tool_images",
+        availableFromTools: toolResultImageInputs.length,
+        used: toolImagesUsed
       },
       memory: {
         toolCallsUsed: usedMemoryLookupFollowup,

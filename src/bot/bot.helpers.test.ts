@@ -30,6 +30,25 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
   assert.equal(parsed.automationAction.operation, null);
 });
 
+test("parseStructuredReplyOutput accepts tool image attachments without a prompt", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "here it is",
+      skip: false,
+      reactionEmoji: null,
+      media: { type: "tool_images", prompt: null }
+    })
+  );
+
+  assert.equal(parsed.text, "here it is");
+  assert.equal(parsed.mediaDirective?.type, "tool_images");
+  assert.equal(parsed.mediaDirective?.prompt, null);
+  assert.equal(parsed.imagePrompt, null);
+  assert.equal(parsed.complexImagePrompt, null);
+  assert.equal(parsed.videoPrompt, null);
+  assert.equal(parsed.gifQuery, null);
+});
+
 test("parseStructuredReplyOutput rejects unstructured plain text", () => {
   const parsed = parseStructuredReplyOutput("just reply text");
 

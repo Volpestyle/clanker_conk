@@ -1,6 +1,7 @@
 import { MAX_GIF_QUERY_LEN, normalizeDirectiveText } from "./botHelpers.ts";
 import { getDiscoverySettings } from "../settings/agentStack.ts";
 import type { Settings } from "../settings/settingsSchema.ts";
+import type { ImageInput } from "../llm/serviceShared.ts";
 import {
   getGifBudgetState,
   getImageBudgetState,
@@ -27,7 +28,8 @@ type MediaDirectiveType =
   | "gif"
   | "image_simple"
   | "image_complex"
-  | "video";
+  | "video"
+  | "tool_images";
 
 type MediaAttachmentTrace = {
   guildId?: string | null;
@@ -103,12 +105,14 @@ type ResolveMediaAttachmentOptions = {
     complexImagePrompt?: string | null;
     videoPrompt?: string | null;
   } | null;
+  toolImageInputs?: ImageInput[] | null;
   trace?: MediaAttachmentTrace;
 };
 
 type ResolveMediaAttachmentResult = {
   payload: MessagePayload;
   media: { type: MediaDirectiveType } | null;
+  toolImagesUsed: boolean;
   imageUsed: boolean;
   imageBudgetBlocked: boolean;
   imageCapabilityBlocked: boolean;
@@ -120,6 +124,8 @@ type ResolveMediaAttachmentResult = {
   gifBudgetBlocked: boolean;
   gifConfigBlocked: boolean;
 };
+
+const MAX_TOOL_IMAGE_ATTACHMENTS = 10;
 
 function buildBasePayload(text: string): MessagePayload {
   return {
@@ -200,6 +206,73 @@ function buildMessagePayloadWithGif(text: string, gifUrl: string) {
   return {
     payload: { content },
     gifUsed: true
+  };
+}
+
+function mediaTypeToExtension(mediaType: string | null | undefined) {
+  const normalized = String(mediaType || "").trim().toLowerCase();
+  switch (normalized) {
+    case "image/jpeg":
+    case "image/jpg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    case "image/avif":
+      return "avif";
+    default:
+      return "png";
+  }
+}
+
+export function buildMessagePayloadWithToolImages(
+  text: string,
+  imageInputs: ImageInput[] | null | undefined
+) {
+  const files: MessagePayloadFile[] = [];
+  const urls: string[] = [];
+
+  for (const imageInput of Array.isArray(imageInputs) ? imageInputs.slice(0, MAX_TOOL_IMAGE_ATTACHMENTS) : []) {
+    const dataBase64 = String(imageInput?.dataBase64 || "").trim();
+    if (dataBase64) {
+      const extension = mediaTypeToExtension(imageInput?.mediaType || imageInput?.contentType);
+      files.push({
+        attachment: Buffer.from(dataBase64, "base64"),
+        name: `clanky-tool-${files.length + 1}.${extension}`
+      });
+      continue;
+    }
+
+    const url = String(imageInput?.url || "").trim();
+    if (url) {
+      urls.push(url);
+    }
+  }
+
+  if (files.length > 0) {
+    const trimmedText = String(text || "").trim();
+    return {
+      payload: {
+        content: trimmedText,
+        files
+      },
+      toolImagesUsed: true
+    };
+  }
+
+  if (urls.length > 0) {
+    const trimmedText = String(text || "").trim();
+    const content = trimmedText ? `${trimmedText}\n${urls.join("\n")}` : urls.join("\n");
+    return {
+      payload: { content },
+      toolImagesUsed: true
+    };
+  }
+
+  return {
+    payload: buildBasePayload(text),
+    toolImagesUsed: false
   };
 }
 
@@ -418,12 +491,14 @@ export async function resolveMediaAttachment(
     settings,
     text,
     directive = null,
+    toolImageInputs = null,
     trace
   }: ResolveMediaAttachmentOptions
 ): Promise<ResolveMediaAttachmentResult> {
   const base: ResolveMediaAttachmentResult = {
     payload: buildBasePayload(text),
     media: null,
+    toolImagesUsed: false,
     imageUsed: false,
     imageBudgetBlocked: false,
     imageCapabilityBlocked: false,
@@ -435,6 +510,16 @@ export async function resolveMediaAttachment(
     gifBudgetBlocked: false,
     gifConfigBlocked: false
   };
+
+  if (directive?.type === "tool_images") {
+    const toolImageResult = buildMessagePayloadWithToolImages(text, toolImageInputs);
+    return {
+      ...base,
+      payload: toolImageResult.payload,
+      media: toolImageResult.toolImagesUsed ? { type: "tool_images" } : null,
+      toolImagesUsed: toolImageResult.toolImagesUsed
+    };
+  }
 
   if (directive?.type === "gif" && directive.gifQuery) {
     const gifResult = await maybeAttachReplyGif(ctx, {

@@ -108,7 +108,7 @@ That inner loop:
 - appends tool results back into the loop
 - stops when the model returns plain text
 
-When the inner browse agent captures a screenshot, that image is preserved as a structured image input instead of being stranded as raw base64 text. The parent brain receives the screenshot alongside the browser tool result text, so it can inspect the page visually. A request like "take a screenshot of eBay and tell me what's on the page" should route through `browser_browse`, not `web_scrape`.
+When the inner browse agent captures a screenshot, that image is preserved as a structured image input instead of being stranded as raw base64 text. The parent brain receives the screenshot alongside the browser tool result text, so it can inspect the page visually. In text replies, the brain can either keep those screenshots private as reasoning context or explicitly attach the exact tool-returned images in the final Discord message. A request like "take a screenshot of eBay and tell me what's on the page" should route through `browser_browse`, not `web_scrape`.
 
 `browser_close` is terminal for persistent local browser sessions. It is not just a low-level cleanup action. When the inner agent uses it, the browser session is treated as completed, future continuation on that `session_id` is rejected, and the wrapper omits `session_id` from the returned tool result.
 
