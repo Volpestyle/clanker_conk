@@ -1,0 +1,424 @@
+/**
+ * Static capability documentation builders for the system prompt.
+ *
+ * These functions produce instructional text that describes *how* each tool
+ * or feature works.  They are gated by settings (which change only on
+ * config update, not per-turn) so the system prompt stays cacheable across
+ * turns.  Per-turn availability / budget / state lines remain in the user
+ * prompt.
+ *
+ * Design principle: the model always knows its full capability set.
+ * Infrastructure enforces hard-fail guards at the tool execution layer
+ * when a tool is temporarily unavailable (budget, runtime, etc.).
+ */
+
+import { getPromptBotName, REPLY_JSON_SCHEMA, getMediaPromptCraftGuidance } from "./promptCore.ts";
+import {
+  CONVERSATION_SEARCH_POLICY_LINE,
+  WEB_SCRAPE_POLICY_LINE,
+  BROWSER_BROWSE_POLICY_LINE,
+  BROWSER_SCREENSHOT_POLICY_LINE,
+  buildWebSearchPolicyLine,
+  buildWebToolRoutingPolicyLine
+} from "./toolPolicy.ts";
+import {
+  MUSIC_ACTIVE_AUTONOMY_POLICY_LINE,
+  MUSIC_REPLY_HANDOFF_POLICY_LINE
+} from "./voiceLivePolicy.ts";
+
+// ---------------------------------------------------------------------------
+// Text output format (fully static)
+// ---------------------------------------------------------------------------
+
+export function buildTextOutputFormatDocs(): string[] {
+  return [
+    "=== OUTPUT FORMAT ===",
+    "Task: write one natural Discord reply for this turn.",
+    "If recent messages are one coherent thread, you may combine and answer multiple messages in one reply.",
+    "If recent messages are unrelated, prioritize the latest message and keep the reply focused.",
+    "Return strict JSON only. Do not output markdown or code fences.",
+    "JSON format:",
+    REPLY_JSON_SCHEMA,
+    "Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].",
+    "When no reaction is needed, set reactionEmoji to null.",
+    "When no media should be generated, set media to null.",
+    "If a previous tool call returned images and you want to include those exact images in the final Discord reply, set media to {\"type\":\"tool_images\",\"prompt\":null}.",
+    "Use tool calls for web search, browser browsing, durable memory search, image lookup, voice control, and other supported capabilities.",
+    "Do not encode tool requests inside the JSON reply body.",
+    "When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.",
+    "Set screenWatchIntent.action to one of start_watch|none.",
+    "When not starting screen watch, set screenWatchIntent.action=none, screenWatchIntent.confidence=0, screenWatchIntent.reason=null."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Automation
+// ---------------------------------------------------------------------------
+
+export function buildAutomationDocs(): string[] {
+  return [
+    "=== AUTOMATION ===",
+    "You can create and manage scheduled automations for users.",
+    "If the user asks to schedule/start recurring tasks, set automationAction.operation=create.",
+    "For create, set automationAction.schedule with one of:",
+    "- daily: {\"kind\":\"daily\",\"hour\":0-23,\"minute\":0-59}",
+    "- interval: {\"kind\":\"interval\",\"everyMinutes\":integer}",
+    "- once: {\"kind\":\"once\",\"atIso\":\"ISO-8601 timestamp\"}",
+    "For create, set automationAction.instruction to the exact task instruction (what to do each run).",
+    "Use automationAction.runImmediately=true only when user asks for immediate first run.",
+    "If user asks to stop/pause a recurring task, set automationAction.operation=pause with targetQuery.",
+    "If user asks to resume/re-enable, set automationAction.operation=resume with targetQuery.",
+    "If user asks to remove/delete permanently, set automationAction.operation=delete with targetQuery.",
+    "If user asks to see what is scheduled, set automationAction.operation=list.",
+    "When no automation control is requested, set automationAction.operation=none."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Media generation (images, video, GIFs)
+// ---------------------------------------------------------------------------
+
+export function buildMediaGenerationDocs(settings: unknown, maxMediaPromptChars = 900): string[] {
+  const mediaGuidance = getMediaPromptCraftGuidance(settings);
+  const limit = Math.max(100, Math.floor(Number(maxMediaPromptChars) || 900));
+  return [
+    "=== MEDIA GENERATION ===",
+    "You can generate images and short videos when the moment calls for it.",
+    "For a simple/quick visual, set media to {\"type\":\"image_simple\",\"prompt\":\"...\"}.",
+    "Use image_simple for straightforward concepts or fast meme-style visuals.",
+    "For a detailed/composition-heavy visual, set media to {\"type\":\"image_complex\",\"prompt\":\"...\"}.",
+    "Use image_complex for cinematic/detail-rich scenes or harder visual requests.",
+    "If a generated clip is best, set media to {\"type\":\"video\",\"prompt\":\"...\"}.",
+    "Use video when motion/animation is meaningfully better than a still image.",
+    `Keep image/video media prompts under ${limit} chars, and always include normal reply text.`,
+    mediaGuidance,
+    "Set at most one media object per reply.",
+    "When media generation is unavailable for a turn, set media to null and respond with text only."
+  ];
+}
+
+export function buildGifDocs(): string[] {
+  return [
+    "=== GIFS ===",
+    "Reply GIF lookup is available via a search-based GIF tool.",
+    "If a GIF should be sent, set media to {\"type\":\"gif\",\"prompt\":\"short search query\"}.",
+    "Use media.type=gif only when a reaction GIF genuinely improves the reply.",
+    "Keep GIF media prompts concise (under 120 chars), and always include normal reply text.",
+    "When GIF lookup is unavailable for a turn, do not set media.type=gif."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Web search + browser
+// ---------------------------------------------------------------------------
+
+export function buildWebSearchDocs({ includeBrowserBrowse = false }: { includeBrowserBrowse?: boolean } = {}): string[] {
+  return [
+    "=== WEB SEARCH ===",
+    "Live web search and direct page reading are available via the web_search and web_scrape tools.",
+    buildWebToolRoutingPolicyLine({ includeBrowserBrowse }),
+    buildWebSearchPolicyLine(),
+    WEB_SCRAPE_POLICY_LINE,
+    "Use the web tools only when they materially help.",
+    "If something you can do is currently disabled or budget-blocked, say it is currently unavailable with the reason. Do not claim a supported feature can never work."
+  ];
+}
+
+export function buildBrowserDocs(): string[] {
+  return [
+    "=== BROWSER ===",
+    "Interactive browser browsing is available via the browser_browse tool.",
+    BROWSER_BROWSE_POLICY_LINE,
+    BROWSER_SCREENSHOT_POLICY_LINE
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Memory lookup + image lookup
+// ---------------------------------------------------------------------------
+
+export function buildMemoryLookupDocs(): string[] {
+  return [
+    "=== MEMORY LOOKUP ===",
+    "Durable memory lookup is available via the memory_search tool.",
+    "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, call memory_search with a concise query.",
+    "If the user asks for a broad dump of stored memory or everything you remember, use query \"__ALL__\".",
+    "`__ALL__` requests a capped stored-memory dump, not a ranked topical lookup."
+  ];
+}
+
+export function buildImageLookupDocs(): string[] {
+  return [
+    "History image lookup is available via the image_lookup tool.",
+    "If the user refers to an earlier image/photo and current message attachments are insufficient, call image_lookup with a short query or a specific image ref like IMG 3.",
+    "The [IMG n] markers in recent chat are historical images, not fresh attachments on the latest user message.",
+    "Do not claim you cannot review earlier shared images when history lookup is available."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Conversation search
+// ---------------------------------------------------------------------------
+
+export function buildConversationSearchDocs(): string[] {
+  return [CONVERSATION_SEARCH_POLICY_LINE];
+}
+
+// ---------------------------------------------------------------------------
+// Voice control (text-channel perspective)
+// ---------------------------------------------------------------------------
+
+export function buildVoiceControlDocs(settings: unknown): string[] {
+  const botName = getPromptBotName(settings);
+  return [
+    "=== VOICE CONTROL ===",
+    `${botName} has voice channel capability. Use join_voice_channel / leave_voice_channel tools to manage VC presence.`,
+    "Music commands (play, queue, stop, pause, skip, search) are available as tool calls. If not in a voice channel, call join_voice_channel first, then call the music tool.",
+    "If the user asks what is playing, what was stopped, or what is queued, answer from the current music state directly.",
+    "If there is a pending music disambiguation request, and the user picks one of the options (by number or by naming it), call the pending action with the selection_id set to that exact id."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Screen watch (text-channel perspective)
+// ---------------------------------------------------------------------------
+
+export function buildScreenWatchDocs(): string[] {
+  return [
+    "=== SCREEN WATCH ===",
+    "You can start screen watch when useful. The runtime will use native Discord screen watch when available and fall back automatically if needed.",
+    "If the user asks you to see/watch their screen or stream, set screenWatchIntent.action to start_watch.",
+    "If visual context would materially improve troubleshooting/help, you may proactively set screenWatchIntent.action to start_watch.",
+    "Set screenWatchIntent.confidence from 0 to 1. Use high confidence only when live visual context is clearly useful."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Video context
+// ---------------------------------------------------------------------------
+
+export function buildVideoContextDocs(): string[] {
+  return [
+    "=== VIDEO CONTEXT ===",
+    "When video links or attachments are present, metadata and transcripts may be extracted automatically.",
+    "If you reference video details, cite source IDs inline like [V1] or [V2].",
+    "Treat transcripts and keyframes as partial context. Avoid overclaiming what happened in the full video.",
+    "Do not claim you watched or fully understood the video when context is missing."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Composite: build the full TOOLS section for text system prompt
+// ---------------------------------------------------------------------------
+
+export type TextSystemCapabilityFlags = {
+  voiceEnabled: boolean;
+  webSearchEnabled: boolean;
+  browserEnabled: boolean;
+  memoryEnabled: boolean;
+  mediaGenerationEnabled: boolean;
+  gifsEnabled: boolean;
+  automationEnabled: boolean;
+  screenShareEnabled: boolean;
+  videoContextEnabled: boolean;
+  maxMediaPromptChars: number;
+};
+
+export function buildTextCapabilitiesDocs(
+  settings: unknown,
+  flags: TextSystemCapabilityFlags
+): string[] {
+  const sections: string[] = [];
+
+  // Conversation search is always available (no settings gate)
+  sections.push(...buildConversationSearchDocs());
+
+  if (flags.webSearchEnabled) {
+    sections.push(...buildWebSearchDocs({ includeBrowserBrowse: flags.browserEnabled }));
+  }
+
+  if (flags.browserEnabled) {
+    sections.push(...buildBrowserDocs());
+  }
+
+  if (flags.memoryEnabled) {
+    sections.push(...buildMemoryLookupDocs());
+  }
+
+  // Image lookup works on message history, not durable memory — always include docs
+  sections.push(...buildImageLookupDocs());
+
+  if (flags.voiceEnabled) {
+    sections.push(...buildVoiceControlDocs(settings));
+  }
+
+  if (flags.screenShareEnabled) {
+    sections.push(...buildScreenWatchDocs());
+  }
+
+  if (flags.automationEnabled) {
+    sections.push(...buildAutomationDocs());
+  }
+
+  if (flags.videoContextEnabled) {
+    sections.push(...buildVideoContextDocs());
+  }
+
+  if (flags.mediaGenerationEnabled) {
+    sections.push(...buildMediaGenerationDocs(settings, flags.maxMediaPromptChars));
+  }
+
+  if (flags.gifsEnabled) {
+    sections.push(...buildGifDocs());
+  }
+
+  sections.push(...buildTextOutputFormatDocs());
+
+  return sections;
+}
+
+// ===========================================================================
+// Voice-specific capability docs
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Voice tool usage philosophy (static guidance)
+// ---------------------------------------------------------------------------
+
+export function buildVoiceToolUsageDocs(): string[] {
+  return [
+    "Speak first on casual turns. Use tools to improve accuracy or execute requested actions. Always include a brief spoken acknowledgment before calling tools (e.g., 'Sure, one sec' or 'Let me pull that up') — tool calls can take several seconds and the user hears silence until you speak. Ground factual or success claims in tool results — never claim success before a tool returns."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Voice memory tool docs
+// ---------------------------------------------------------------------------
+
+export function buildVoiceMemoryToolDocs(): string[] {
+  return [
+    "note_context: session-scoped facts, preferences, or plans for this conversation.",
+    "memory_write: long-term durable facts only (namespace=speaker/guild/self, type=preference/profile/relationship/guidance/behavioral/other). Don't save chatter, prompt instructions, or session-only info."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Voice music/media tool docs
+// ---------------------------------------------------------------------------
+
+export function buildVoiceMusicToolDocs(): string[] {
+  return [
+    "Music: music_play starts audio-only playback (no Go Live stream). Re-call with selection_id only when reusing an exact prior id. Omit selection_id unless you already have the exact id from prompt context or a prior tool result. Never invent placeholder or markup tokens.",
+    "Video: video_play starts YouTube video playback and shows it via Discord Go Live. Re-call with selection_id only when reusing an exact prior id.",
+    "Visualizer: stream_visualizer starts a Go Live audio visualizer for currently playing music. Optional mode: cqt, spectrum, waves, vectorscope.",
+    "Use video_search only when the user explicitly wants video options. If seeing the site, thumbnails, or layout would help you decide, browser_browse can be the better tool.",
+    "Queue: music_queue_next (after current) and music_queue_add (append) can take either direct query text or exact prior IDs. Prefer direct query for ordinary queue requests; use music_search only when the user explicitly wants options or browsing.",
+    "For a request like \"play X, then queue Y\", emit music_play for X first and music_queue_next for Y second in the same tool response. Do not say Y is queued unless music_queue_next or music_queue_add succeeds.",
+    "Other playback controls: media_stop, media_pause, media_resume, media_skip, media_now_playing. Don't chain queue_add+skip to emulate play-now.",
+    `Floor control: ${MUSIC_ACTIVE_AUTONOMY_POLICY_LINE}`,
+    MUSIC_REPLY_HANDOFF_POLICY_LINE
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Voice screen share tool docs
+// ---------------------------------------------------------------------------
+
+export function buildVoiceScreenShareToolDocs(): string[] {
+  return [
+    "start_screen_watch: begin screen watch when live visual context would help. If multiple Discord shares are live and you want a specific one, pass { target: \"display name\" }. The runtime binds to an active Discord sharer when possible and falls back automatically when needed.",
+    "A successful start_screen_watch does not always mean live pixels are ready yet. If the tool result says frameReady=false, do not claim to see the screen yet.",
+    "If start_screen_watch falls back to a link or returns linkUrl, treat that as off-screen coordination. In spoken replies, tell them to open the link you sent or the screen-share link. Do not read the full URL aloud unless they explicitly ask you to spell it out."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Voice leave channel docs
+// ---------------------------------------------------------------------------
+
+export function buildVoiceLeaveChannelDocs(): string[] {
+  return [
+    "leave_voice_channel: only when you choose to end your VC session. Goodbyes alone don't force exit."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Voice output format (spoken text rules)
+// ---------------------------------------------------------------------------
+
+export function buildVoiceOutputFormatDocs(): string[] {
+  return [
+    "=== OUTPUT FORMAT ===",
+    "If you speak, begin with one hidden audience prefix: [[TO:SPEAKER]], [[TO:ALL]], or [[TO:<participant display name>]]. This prefix is metadata only and is not spoken aloud.",
+    "You may optionally add a lease prefix immediately after [[TO:...]]: [[LEASE:ASSERTIVE]] or [[LEASE:ATOMIC]].",
+    "A lease gives your reply a brief protected runway: it resists being pushed aside by newer chatter before you start speaking, and briefly resists interruption after you start so your point can land.",
+    "ASSERTIVE: use when your reply directly answers a question, confirms an action, or delivers a tool result. The listener asked for this and should hear it.",
+    "ATOMIC: use when the reply is safety-relevant, completes a multi-step action, or corrects a dangerous misunderstanding. Rare.",
+    "No lease: ambient commentary, greetings, reactions, jokes, voluntary observations. Most replies need no lease.",
+    "Do not lease a reply just because you find it interesting. Lease it because the listener needs it.",
+    "Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags."
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Voice web search docs (voice-specific variant with onePerTurn)
+// ---------------------------------------------------------------------------
+
+export function buildVoiceWebSearchDocs({ includeBrowserBrowse = false }: { includeBrowserBrowse?: boolean } = {}): string[] {
+  return [
+    buildWebToolRoutingPolicyLine({ includeBrowserBrowse }),
+    buildWebSearchPolicyLine({ onePerTurn: true }),
+    WEB_SCRAPE_POLICY_LINE
+  ];
+}
+
+export function buildVoiceBrowserDocs(): string[] {
+  return [BROWSER_BROWSE_POLICY_LINE];
+}
+
+// ---------------------------------------------------------------------------
+// Composite: build the full TOOLS section for voice system prompt
+// ---------------------------------------------------------------------------
+
+export type VoiceSystemCapabilityFlags = {
+  webSearchEnabled: boolean;
+  browserEnabled: boolean;
+  memoryEnabled: boolean;
+  screenShareEnabled: boolean;
+};
+
+export function buildVoiceCapabilitiesDocs(
+  flags: VoiceSystemCapabilityFlags
+): string[] {
+  const sections: string[] = [];
+
+  // Tool usage philosophy (always present in voice)
+  sections.push(...buildVoiceToolUsageDocs());
+
+  // Conversation search is always available
+  sections.push(...buildConversationSearchDocs());
+
+  if (flags.memoryEnabled) {
+    sections.push(...buildVoiceMemoryToolDocs());
+  }
+
+  // Voice/music tools are always present in voice sessions
+  sections.push(...buildVoiceMusicToolDocs());
+  sections.push(...buildVoiceLeaveChannelDocs());
+
+  if (flags.webSearchEnabled) {
+    sections.push(...buildVoiceWebSearchDocs({ includeBrowserBrowse: flags.browserEnabled }));
+  }
+
+  if (flags.browserEnabled) {
+    sections.push(...buildVoiceBrowserDocs());
+  }
+
+  if (flags.screenShareEnabled) {
+    sections.push(...buildVoiceScreenShareToolDocs());
+  }
+
+  sections.push(...buildVoiceOutputFormatDocs());
+
+  return sections;
+}

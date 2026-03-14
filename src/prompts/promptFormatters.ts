@@ -13,6 +13,9 @@ import {
   getPromptVoiceGuidance,
   buildVoiceToneGuardrails
 } from "./promptCore.ts";
+import { buildTextCapabilitiesDocs, buildVoiceCapabilitiesDocs, type TextSystemCapabilityFlags, type VoiceSystemCapabilityFlags } from "./promptCapabilities.ts";
+import { getMemorySettings, getVoiceSettings, getAutomationsSettings, getDiscoverySettings, getVideoContextSettings, getVoiceStreamWatchSettings } from "../settings/agentStack.ts";
+import { isResearchEnabled, isBrowserEnabled } from "../settings/agentStack.ts";
 import { extractUrlsFromText } from "../bot/botHelpers.ts";
 
 const IMAGE_URL_RE = /\.(?:jpe?g|png|gif|webp|bmp|heic)(?:$|[?#])/i;
@@ -36,8 +39,24 @@ export function formatBehaviorMemoryFacts(facts, maxItems = 8) {
 }
 
 export function buildSystemPrompt(settings) {
-  const memoryEnabled = Boolean(settings?.memory?.enabled);
+  const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
   const textGuidance = getPromptTextGuidance(settings, DEFAULT_PROMPT_TEXT_GUIDANCE);
+  const discovery = getDiscoverySettings(settings);
+
+  const maxMediaPromptChars = Math.max(100, Math.floor(Number(discovery.maxMediaPromptChars) || 900));
+
+  const capabilityFlags: TextSystemCapabilityFlags = {
+    voiceEnabled: Boolean(getVoiceSettings(settings).enabled),
+    webSearchEnabled: isResearchEnabled(settings),
+    browserEnabled: isBrowserEnabled(settings),
+    memoryEnabled,
+    mediaGenerationEnabled: Boolean(discovery.allowReplyImages || discovery.allowReplyVideos),
+    gifsEnabled: Boolean(discovery.allowReplyGifs),
+    automationEnabled: Boolean(getAutomationsSettings(settings).enabled),
+    screenShareEnabled: Boolean(getVoiceStreamWatchSettings(settings).enabled),
+    videoContextEnabled: Boolean(getVideoContextSettings(settings).enabled),
+    maxMediaPromptChars
+  };
 
   return [
     `=== PERSONA ===`,
@@ -50,6 +69,9 @@ export function buildSystemPrompt(settings) {
       ? getPromptMemoryEnabledLine(settings)
       : getPromptMemoryDisabledLine(settings),
     getPromptImpossibleActionLine(settings),
+    `=== TOOLS ===`,
+    "If something you can do is currently disabled or budget-blocked, say it is currently unavailable with the reason. Do not claim a supported feature can never work.",
+    ...buildTextCapabilitiesDocs(settings, capabilityFlags),
     `=== LIMITS ===`,
     `Discord messages cap at ~1800 characters. Keep replies under that when possible; if you genuinely need more space your message will be automatically split across multiple posts.`,
     ...buildHardLimitsSection(settings),
@@ -59,8 +81,15 @@ export function buildSystemPrompt(settings) {
 }
 
 export function buildVoiceSystemPrompt(settings) {
-  const memoryEnabled = Boolean(settings?.memory?.enabled);
+  const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
   const voiceGuidance = getPromptVoiceGuidance(settings, DEFAULT_PROMPT_VOICE_GUIDANCE);
+
+  const capabilityFlags: VoiceSystemCapabilityFlags = {
+    webSearchEnabled: isResearchEnabled(settings),
+    browserEnabled: isBrowserEnabled(settings),
+    memoryEnabled,
+    screenShareEnabled: Boolean(getVoiceStreamWatchSettings(settings).enabled)
+  };
 
   return [
     `=== PERSONA ===`,
@@ -74,6 +103,9 @@ export function buildVoiceSystemPrompt(settings) {
       ? getPromptMemoryEnabledLine(settings)
       : getPromptMemoryDisabledLine(settings),
     getPromptImpossibleActionLine(settings),
+    `=== TOOLS ===`,
+    "If something you can do is currently disabled or budget-blocked, say it is currently unavailable with the reason. Do not claim a supported feature can never work.",
+    ...buildVoiceCapabilitiesDocs(capabilityFlags),
     `=== LIMITS ===`,
     `Voice replies should feel like live conversation. A short acknowledgement is often enough; go longer only when you genuinely have more to add.`,
     ...buildHardLimitsSection(settings),

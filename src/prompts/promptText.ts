@@ -20,14 +20,43 @@ import {
   formatImageLookupCandidates
 } from "./promptFormatters.ts";
 import {
-  buildActiveCuriosityCapabilityLine,
-  buildWebSearchPolicyLine,
-  buildWebToolRoutingPolicyLine,
-  BROWSER_BROWSE_POLICY_LINE,
-  BROWSER_SCREENSHOT_POLICY_LINE,
-  CONVERSATION_SEARCH_POLICY_LINE,
-  WEB_SCRAPE_POLICY_LINE
+  buildActiveCuriosityCapabilityLine
 } from "./toolPolicy.ts";
+
+function buildWebSearchStateLine(webSearch: unknown): string {
+  const ws = webSearch as Record<string, unknown> | null;
+  if (ws?.optedOutByUser) return "Web search: unavailable (user opted out this turn).";
+  if (!ws?.enabled) return "Web search: unavailable (disabled in settings).";
+  if (!ws?.configured) return "Web search: unavailable (no search provider configured).";
+  if (ws?.blockedByBudget || !(ws?.budget as Record<string, unknown>)?.canSearch)
+    return "Web search: unavailable (hourly budget exhausted).";
+  return "Web search: available.";
+}
+
+function buildBrowserStateLine(browserBrowse: unknown): string {
+  const bb = browserBrowse as Record<string, unknown> | null;
+  if (!bb?.enabled) return "Browser: unavailable (disabled in settings).";
+  if (!bb?.configured) return "Browser: unavailable (runtime not configured).";
+  if (bb?.blockedByBudget || !(bb?.budget as Record<string, unknown>)?.canBrowse)
+    return "Browser: unavailable (hourly budget exhausted).";
+  return "Browser: available.";
+}
+
+function buildMemoryLookupStateLine(memoryLookup: unknown): string {
+  const ml = memoryLookup as Record<string, unknown> | null;
+  if (!ml?.enabled) return "Memory lookup: unavailable this turn.";
+  return "Memory lookup: available.";
+}
+
+function buildImageLookupStateLine(imageLookup: unknown): string {
+  const il = imageLookup as Record<string, unknown> | null;
+  if (!il?.enabled) return "Image lookup: unavailable this turn.";
+  const candidates = Array.isArray((il as Record<string, unknown>)?.candidates)
+    ? ((il as Record<string, unknown>).candidates as unknown[])
+    : [];
+  if (!candidates.length) return "Image lookup: available, but no recent image references found.";
+  return `Image lookup: available (${candidates.length} recent image reference(s)).`;
+}
 
 function formatPromptTrackLabel(track) {
   const title = String(track?.title || "").trim();
@@ -116,7 +145,6 @@ export function buildReplyPrompt({
   mediaPromptCraftGuidance = null
 }) {
   const parts = [];
-  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
   const normalizedChannelMode = channelMode === "reply_channel" ? "reply_channel" : "other_channel";
   const triggerCount = Array.isArray(triggerMessageIds) ? triggerMessageIds.length : 0;
 
@@ -149,7 +177,6 @@ export function buildReplyPrompt({
     parts.push(formatConversationWindows(recentConversationHistory));
     parts.push("Use this for continuity ONLY when it clearly matches the current topic AND is recent. Old windows (hours/days ago) are background context, not active conversation — do not treat them as ongoing. A voice chat transcript from hours ago is not the same as someone just saying something to you now.");
   }
-  parts.push(CONVERSATION_SEARCH_POLICY_LINE);
 
   if (participantProfiles?.length || selfFacts?.length || loreFacts?.length) {
     parts.push("=== PEOPLE IN THIS CONVERSATION ===");
@@ -204,9 +231,6 @@ export function buildReplyPrompt({
   if (directlyAddressed) {
     parts.push("This message directly addressed you.");
   }
-  parts.push(
-    "If something you can do is currently disabled or budget-blocked, say it is currently unavailable with the reason. Do not claim a supported feature can never work."
-  );
   const ambientEagerness = Math.max(0, Math.min(100, Number(ambientReplyEagerness) || 0));
   const followupEagerness = Math.max(0, Math.min(100, Number(responseWindowEagerness) || 0));
   parts.push(`Current text continuity state: ${normalizedTextAttentionMode}.`);
@@ -360,8 +384,6 @@ export function buildReplyPrompt({
     parts.push("If asked to join VC or play music, say voice mode is currently disabled.");
   }
 
-  parts.push("=== SCREEN WATCH ===");
-
   const screenShareStatus = String(screenShare?.status || "disabled").trim().toLowerCase() || "disabled";
   const screenShareEnabled = Boolean(screenShare?.enabled);
   const screenShareAvailable =
@@ -376,149 +398,43 @@ export function buildReplyPrompt({
   const screenShareReason =
     String(screenShare?.reason || "").trim().toLowerCase() || screenShareStatus || "unavailable";
   if (screenShareAvailable) {
-    parts.push("You can start screen watch when useful.");
-    parts.push("The runtime will use native Discord screen watch when available and fall back automatically if needed.");
-    parts.push(
-      "If the user asks you to see/watch their screen or stream, set screenWatchIntent.action to start_watch."
-    );
-    parts.push(
-      "If visual context would materially improve troubleshooting/help, you may proactively set screenWatchIntent.action to start_watch."
-    );
-    parts.push(
-      "Set screenWatchIntent.confidence from 0 to 1. Use high confidence only when live visual context is clearly useful."
-    );
+    parts.push("Screen watch: available.");
   } else if (screenShareSupported) {
-    parts.push(`Screen watch exists but is currently unavailable (reason: ${screenShareReason}).`);
-    parts.push("If asked, explain it can work when available, but do not claim you can watch the screen right now.");
-    parts.push("Set screenWatchIntent.action to none.");
+    parts.push(`Screen watch: unavailable (${screenShareReason}).`);
   } else {
-    parts.push("Screen watch is not available in this runtime.");
-    parts.push("Set screenWatchIntent.action to none.");
+    parts.push("Screen watch: not available in this runtime.");
   }
-
-  parts.push("=== AUTOMATION ===");
 
   if (allowAutomationDirective) {
     const tzLabel = String(automationTimeZoneLabel || "").trim() || "local server time";
-    parts.push(`Automations are available for this guild. Scheduler timezone: ${tzLabel}.`);
-    parts.push("If the user asks to schedule/start recurring tasks, set automationAction.operation=create.");
-    parts.push("For create, set automationAction.schedule with one of:");
-    parts.push("- daily: {\"kind\":\"daily\",\"hour\":0-23,\"minute\":0-59}");
-    parts.push("- interval: {\"kind\":\"interval\",\"everyMinutes\":integer}");
-    parts.push("- once: {\"kind\":\"once\",\"atIso\":\"ISO-8601 timestamp\"}");
-    parts.push("For create, set automationAction.instruction to the exact task instruction (what to do each run).");
-    parts.push("Use automationAction.runImmediately=true only when user asks for immediate first run.");
-    parts.push("If user asks to stop/pause a recurring task, set automationAction.operation=pause with targetQuery.");
-    parts.push("If user asks to resume/re-enable, set automationAction.operation=resume with targetQuery.");
-    parts.push("If user asks to remove/delete permanently, set automationAction.operation=delete with targetQuery.");
-    parts.push("If user asks to see what is scheduled, set automationAction.operation=list.");
-    parts.push("When no automation control is requested, set automationAction.operation=none.");
+    parts.push(`Automations: available. Scheduler timezone: ${tzLabel}.`);
   }
 
-  const webSearchToolAvailable =
-    !webSearch?.optedOutByUser &&
-    Boolean(webSearch?.enabled) &&
-    Boolean(webSearch?.configured) &&
-    !webSearch?.blockedByBudget &&
-    Boolean(webSearch?.budget?.canSearch);
-  const browserBrowseToolAvailable =
-    Boolean(browserBrowse?.enabled) &&
-    Boolean(browserBrowse?.configured) &&
-    !browserBrowse?.blockedByBudget &&
-    Boolean(browserBrowse?.budget?.canBrowse);
+  parts.push(buildWebSearchStateLine(webSearch));
+  parts.push(buildBrowserStateLine(browserBrowse));
 
-  parts.push("=== WEB SEARCH ===");
-
-  if (webSearch?.optedOutByUser) {
-    parts.push("The user explicitly asked not to use web search.");
-    parts.push("Do not call web_search or web_scrape and do not claim live lookup.");
-  } else if (!webSearch?.enabled) {
-    parts.push("Live web search capability exists but is currently unavailable (disabled in settings).");
-    parts.push("Do not call web_search or web_scrape and do not claim you searched the web.");
-  } else if (!webSearch?.configured) {
-    parts.push("Live web search capability exists but is currently unavailable (no search provider is configured).");
-    parts.push("Do not call web_search or web_scrape and do not claim you searched the web.");
-  } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
-    parts.push("Live web search capability exists but is currently unavailable (hourly search budget exhausted).");
-    parts.push("Do not call web_search or web_scrape and do not claim you searched the web.");
-  } else {
-    parts.push("Live web search and direct page reading are available via the web_search and web_scrape tools.");
-    parts.push(buildWebToolRoutingPolicyLine({ includeBrowserBrowse: browserBrowseToolAvailable }));
-    parts.push(buildWebSearchPolicyLine());
-    parts.push(WEB_SCRAPE_POLICY_LINE);
-    parts.push("Use the web tools only when they materially help.");
-  }
-
-  parts.push("=== BROWSER ===");
-
-  if (!browserBrowse?.enabled) {
-    parts.push("Interactive browser capability exists but is currently unavailable (disabled in settings).");
-    parts.push("Do not call browser_browse and do not claim you browsed sites interactively.");
-  } else if (!browserBrowse?.configured) {
-    parts.push("Interactive browser capability exists but is currently unavailable (browser runtime is not configured).");
-    parts.push("Do not call browser_browse and do not claim you browsed sites interactively.");
-  } else if (browserBrowse?.blockedByBudget || !browserBrowse?.budget?.canBrowse) {
-    parts.push("Interactive browser capability exists but is currently unavailable (hourly browser budget exhausted).");
-    parts.push("Do not call browser_browse and do not claim you browsed the site.");
-  } else {
-    parts.push("Interactive browser browsing is available via the browser_browse tool.");
-    parts.push(BROWSER_BROWSE_POLICY_LINE);
-    parts.push(BROWSER_SCREENSHOT_POLICY_LINE);
-  }
-
-  parts.push("=== MEMORY LOOKUP ===");
-
-  if (!memoryLookup?.enabled) {
-    parts.push("Durable memory lookup capability exists but is currently unavailable for this turn.");
-  } else {
-    parts.push("Durable memory lookup is available via the memory_search tool.");
-    parts.push(
-      "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, call memory_search with a concise query."
-    );
-    parts.push("If the user asks for a broad dump of stored memory or everything you remember, use query \"__ALL__\".");
-    parts.push("`__ALL__` requests a capped stored-memory dump, not a ranked topical lookup.");
-  }
-
-  if (!imageLookup?.enabled) {
-    parts.push("History image lookup capability exists but is currently unavailable for this turn.");
-  } else if (!imageLookup?.candidates?.length) {
-    parts.push("History image lookup capability is available, but no recent image references were found.");
-  } else {
-    parts.push("History image lookup is available via the image_lookup tool.");
+  parts.push(buildMemoryLookupStateLine(memoryLookup));
+  parts.push(buildImageLookupStateLine(imageLookup));
+  if (imageLookup?.enabled && imageLookup?.candidates?.length) {
     parts.push("Recent image references from message history:");
     parts.push(formatImageLookupCandidates(imageLookup.candidates));
-    parts.push(
-      "If the user refers to an earlier image/photo and current message attachments are insufficient, call image_lookup with a short query or a specific image ref like IMG 3."
-    );
-    parts.push("The [IMG n] markers in recent chat are historical images, not fresh attachments on the latest user message.");
-    parts.push("Do not claim you cannot review earlier shared images when history lookup is available.");
   }
 
-  parts.push("=== VIDEO CONTEXT ===");
-
   if (videoContext?.requested && !videoContext.used) {
-    if (!videoContext.enabled) {
-      parts.push("Video link understanding capability exists but is currently unavailable (disabled in settings).");
-    } else if (videoContext.blockedByBudget || !videoContext.budget?.canLookup) {
-      parts.push(
-        "Video link understanding capability exists but is currently unavailable (hourly video context budget exhausted)."
-      );
-    } else if (videoContext.error) {
-      parts.push(`Video link context fetch failed: ${videoContext.error}`);
-    } else {
-      parts.push("Video links/attachments were detected, but no usable metadata/transcript was extracted.");
-    }
-    parts.push("Do not claim you watched or fully understood the video when context is missing.");
+    const videoReason = !videoContext.enabled
+      ? "disabled in settings"
+      : videoContext.blockedByBudget || !videoContext.budget?.canLookup
+        ? "hourly budget exhausted"
+        : videoContext.error
+          ? `fetch failed: ${videoContext.error}`
+          : "no usable metadata extracted";
+    parts.push(`Video context: unavailable (${videoReason}).`);
   }
 
   if (videoContext?.used && videoContext.videos?.length) {
     parts.push("Video context from linked or embedded videos:");
     parts.push(formatVideoFindings(videoContext));
-    parts.push("If you reference video details, cite source IDs inline like [V1] or [V2].");
-    parts.push("Treat transcripts and keyframes as partial context. Avoid overclaiming what happened in the full video.");
   }
-
-  parts.push("=== MEDIA GENERATION ===");
 
   const remainingImages = Math.max(0, Math.floor(Number(remainingReplyImages) || 0));
   const remainingVideos = Math.max(0, Math.floor(Number(remainingReplyVideos) || 0));
@@ -526,68 +442,23 @@ export function buildReplyPrompt({
   const complexImageAvailable = allowReplyComplexImages && remainingImages > 0;
   const videoGenerationAvailable = allowReplyVideos && remainingVideos > 0;
   const anyVisualGeneration = simpleImageAvailable || complexImageAvailable || videoGenerationAvailable;
+  const remainingGifs = Math.max(0, Math.floor(Number(remainingReplyGifs) || 0));
 
   if (anyVisualGeneration) {
-    parts.push(
-      `Visual generation is available (${remainingImages} image slot(s), ${remainingVideos} video slot(s) left where enabled in the rolling 24h budgets).`
-    );
-    if (simpleImageAvailable) {
-      parts.push("For a simple/quick visual, set media to {\"type\":\"image_simple\",\"prompt\":\"...\"}.");
-      parts.push("Use image_simple for straightforward concepts or fast meme-style visuals.");
-    }
-    if (complexImageAvailable) {
-      parts.push("For a detailed/composition-heavy visual, set media to {\"type\":\"image_complex\",\"prompt\":\"...\"}.");
-      parts.push("Use image_complex for cinematic/detail-rich scenes or harder visual requests.");
-    }
-    if (videoGenerationAvailable) {
-      parts.push("If a generated clip is best, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
-      parts.push("Use video when motion/animation is meaningfully better than a still image.");
-    }
-    parts.push(`Keep image/video media prompts under ${maxMediaPromptChars} chars, and always include normal reply text.`);
-    parts.push(mediaGuidance);
+    const mediaSlots: string[] = [];
+    if (simpleImageAvailable || complexImageAvailable) mediaSlots.push(`${remainingImages} image slot(s)`);
+    if (videoGenerationAvailable) mediaSlots.push(`${remainingVideos} video slot(s)`);
+    parts.push(`Media generation: available (${mediaSlots.join(", ")} remaining).`);
   } else {
-    parts.push("Reply image/video generation capability exists but is currently unavailable for this turn.");
-    parts.push("Respond with text only.");
-    parts.push("Set media to null.");
+    parts.push("Media generation: unavailable this turn. Set media to null.");
   }
 
-  parts.push("=== GIFS ===");
-  const remainingGifs = Math.max(0, Math.floor(Number(remainingReplyGifs) || 0));
   if (allowReplyGifs && remainingGifs > 0) {
-    parts.push(`Reply GIF lookup is available (${remainingGifs} GIF lookup(s) left in the rolling 24h budget).`);
-    parts.push("GIF replies are supported right now.");
-    parts.push("Do not claim you cannot send GIFs and do not claim you are text-only.");
-    parts.push("If a GIF should be sent, set media to {\"type\":\"gif\",\"prompt\":\"short search query\"}.");
-    parts.push("Use media.type=gif only when a reaction GIF genuinely improves the reply.");
-    parts.push("Keep GIF media prompts concise (under 120 chars), and always include normal reply text.");
-  } else if (gifRepliesEnabled && !gifsConfigured) {
-    parts.push("Reply GIF lookup capability exists but is currently unavailable (missing GIPHY configuration).");
-    parts.push("Do not set media.type=gif.");
+    parts.push(`GIF lookup: available (${remainingGifs} remaining).`);
   } else if (gifRepliesEnabled) {
-    parts.push("Reply GIF lookup capability exists but is currently unavailable (24h GIF budget exhausted).");
-    parts.push("Do not set media.type=gif.");
+    const gifReason = !gifsConfigured ? "missing GIPHY configuration" : "24h budget exhausted";
+    parts.push(`GIF lookup: unavailable (${gifReason}).`);
   }
-
-  if (anyVisualGeneration || (allowReplyGifs && remainingGifs > 0)) {
-    parts.push("Set at most one media object for this reply.");
-  }
-
-  parts.push("=== OUTPUT FORMAT ===");
-  parts.push("Task: write one natural Discord reply for this turn.");
-  parts.push("If recent messages are one coherent thread, you may combine and answer multiple messages in one reply.");
-  parts.push("If recent messages are unrelated, prioritize the latest message and keep the reply focused.");
-  parts.push("Return strict JSON only. Do not output markdown or code fences.");
-  parts.push("JSON format:");
-  parts.push(REPLY_JSON_SCHEMA);
-  parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
-  parts.push("When no reaction is needed, set reactionEmoji to null.");
-  parts.push("When no media should be generated, set media to null.");
-  parts.push("If a previous tool call returned images and you want to include those exact images in the final Discord reply, set media to {\"type\":\"tool_images\",\"prompt\":null}.");
-  parts.push("Use tool calls for web search, browser browsing, durable memory search, image lookup, voice control, and other supported capabilities.");
-  parts.push("Do not encode tool requests inside the JSON reply body.");
-  parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
-  parts.push("Set screenWatchIntent.action to one of start_watch|none.");
-  parts.push("When not starting screen watch, set screenWatchIntent.action=none, screenWatchIntent.confidence=0, screenWatchIntent.reason=null.");
 
   return parts.join("\n\n");
 }

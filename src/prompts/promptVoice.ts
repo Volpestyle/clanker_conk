@@ -8,17 +8,9 @@ import {
   formatConversationWindows,
   formatConversationParticipantMemory
 } from "./promptFormatters.ts";
+
 import {
-  buildWebSearchPolicyLine,
-  buildWebToolRoutingPolicyLine,
-  BROWSER_BROWSE_POLICY_LINE,
-  CONVERSATION_SEARCH_POLICY_LINE,
-  WEB_SCRAPE_POLICY_LINE
-} from "./toolPolicy.ts";
-import {
-  buildActiveMusicReplyGuidanceLines,
-  MUSIC_ACTIVE_AUTONOMY_POLICY_LINE,
-  MUSIC_REPLY_HANDOFF_POLICY_LINE
+  buildActiveMusicReplyGuidanceLines
 } from "./voiceLivePolicy.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
 import {
@@ -620,18 +612,6 @@ export function buildVoiceTurnPrompt({
   }
 
   parts.push(`Tools: ${availableToolNames.join(", ")}.`);
-  parts.push("Speak first on casual turns. Use tools to improve accuracy or execute requested actions. Always include a brief spoken acknowledgment before calling tools (e.g., 'Sure, one sec' or 'Let me pull that up') — tool calls can take several seconds and the user hears silence until you speak. Ground factual or success claims in tool results — never claim success before a tool returns.");
-
-  if (allowMemoryToolCalls) {
-    const memLines = [];
-    if (allowVoiceToolCalls) {
-      memLines.push("note_context: session-scoped facts, preferences, or plans for this conversation.");
-    }
-    memLines.push(
-      "memory_write: long-term durable facts only (namespace=speaker/guild/self, type=preference/profile/relationship/guidance/behavioral/other). Don't save chatter, prompt instructions, or session-only info."
-    );
-    parts.push(memLines.join("\n"));
-  }
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {
     const soundboardGuidance = buildVoiceSoundboardGuidanceLines(soundboardEagerness);
@@ -701,42 +681,6 @@ export function buildVoiceTurnPrompt({
     parts.push(musicLines.join("\n"));
   }
 
-  parts.push(CONVERSATION_SEARCH_POLICY_LINE);
-
-  if (webSearchToolAvailable) {
-    parts.push(buildWebToolRoutingPolicyLine({ includeBrowserBrowse: browserBrowseToolAvailable }));
-    parts.push(buildWebSearchPolicyLine({ onePerTurn: true }));
-    parts.push(WEB_SCRAPE_POLICY_LINE);
-  }
-
-  if (browserBrowseToolAvailable) {
-    parts.push(BROWSER_BROWSE_POLICY_LINE);
-  }
-
-  if (allowVoiceToolCalls) {
-    parts.push([
-      "Music: music_play starts audio-only playback (no Go Live stream). Re-call with selection_id only when reusing an exact prior id. Omit selection_id unless you already have the exact id from prompt context or a prior tool result. Never invent placeholder or markup tokens.",
-      "Video: video_play starts YouTube video playback and shows it via Discord Go Live. Re-call with selection_id only when reusing an exact prior id.",
-      "Visualizer: stream_visualizer starts a Go Live audio visualizer for currently playing music. Optional mode: cqt, spectrum, waves, vectorscope.",
-      "Use video_search only when the user explicitly wants video options. If seeing the site, thumbnails, or layout would help you decide, browser_browse can be the better tool.",
-      "Queue: music_queue_next (after current) and music_queue_add (append) can take either direct query text or exact prior IDs. Prefer direct query for ordinary queue requests; use music_search only when the user explicitly wants options or browsing.",
-      "For a request like \"play X, then queue Y\", emit music_play for X first and music_queue_next for Y second in the same tool response. Do not say Y is queued unless music_queue_next or music_queue_add succeeds.",
-      "Other playback controls: media_stop, media_pause, media_resume, media_skip, media_now_playing. Don't chain queue_add+skip to emulate play-now.",
-      `Floor control: ${MUSIC_ACTIVE_AUTONOMY_POLICY_LINE}`,
-      MUSIC_REPLY_HANDOFF_POLICY_LINE
-    ].join("\n"));
-  }
-
-  if (allowScreenShareToolCall) {
-    parts.push("start_screen_watch: begin screen watch when live visual context would help. If multiple Discord shares are live and you want a specific one, pass { target: \"display name\" }. The runtime binds to an active Discord sharer when possible and falls back automatically when needed.");
-    parts.push("A successful start_screen_watch does not always mean live pixels are ready yet. If the tool result says frameReady=false, do not claim to see the screen yet.");
-    parts.push("If start_screen_watch falls back to a link or returns linkUrl, treat that as off-screen coordination. In spoken replies, tell them to open the link you sent or the screen-share link. Do not read the full URL aloud unless they explicitly ask you to spell it out.");
-  }
-
-  if (allowVoiceToolCalls) {
-    parts.push("leave_voice_channel: only when you choose to end your VC session. Goodbyes alone don't force exit.");
-  }
-
   if (webSearch?.requested && !webSearch?.used) {
     if (webSearch.error) {
       parts.push(`Web lookup failed: ${webSearch.error}`);
@@ -769,34 +713,14 @@ export function buildVoiceTurnPrompt({
     })
   );
 
-  parts.push(
-    "If you speak, begin with one hidden audience prefix: [[TO:SPEAKER]], [[TO:ALL]], or [[TO:<participant display name>]]. This prefix is metadata only and is not spoken aloud.",
-  );
-
-  parts.push(
-    [
-      "You may optionally add a lease prefix immediately after [[TO:...]]: [[LEASE:ASSERTIVE]] or [[LEASE:ATOMIC]].",
-      "A lease gives your reply a brief protected runway: it resists being pushed aside by newer chatter before you start speaking, and briefly resists interruption after you start so your point can land.",
-      "ASSERTIVE: use when your reply directly answers a question, confirms an action, or delivers a tool result. The listener asked for this and should hear it.",
-      "ATOMIC: use when the reply is safety-relevant, completes a multi-step action, or corrects a dangerous misunderstanding. Rare.",
-      "No lease: ambient commentary, greetings, reactions, jokes, voluntary observations. Most replies need no lease.",
-      "Do not lease a reply just because you find it interesting. Lease it because the listener needs it."
-    ].join("\n")
-  );
-
+  // Per-turn inline markup allowances (soundboard, screen watch notes)
   const noteDirectiveAllowed = isDirectScreenWatchMode && hasDirectVisionFrame;
   const inlineMarkupSuffix = [
     allowInlineSoundboardDirectives ? "[[SOUNDBOARD:<ref>]]" : null,
     noteDirectiveAllowed ? "[[NOTE:<observation>]]" : null
   ].filter(Boolean).join(", ");
   if (inlineMarkupSuffix) {
-    parts.push(
-      `Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags. Only other markup allowed after those leading prefixes: ${inlineMarkupSuffix}.`
-    );
-  } else {
-    parts.push(
-      "Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags/[[...]] directives beyond those leading metadata prefixes."
-    );
+    parts.push(`Additional inline markup allowed this turn: ${inlineMarkupSuffix}.`);
   }
 
   return parts.join("\n\n");

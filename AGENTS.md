@@ -43,6 +43,25 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 - If you find tests that seem to be adding useless bloat, testing legacy things, or are redundant, please remove them.
 - If you come across code that seems to be latent or dead, please remove.
 
+#### Submodules
+
+`src/voice/clankvox` is a git submodule pointing to `Volpestyle/clankvox`. When you make changes inside `src/voice/clankvox/`, the submodule HEAD moves and clanky's tree records the new commit hash. Both repos must be committed together:
+
+1. Commit and push inside the submodule first:
+   ```sh
+   cd src/voice/clankvox
+   git add -A && git commit -m "your message"
+   git push origin master
+   ```
+2. Then back in clanky, the submodule pointer is a staged change. Include it in the clanky commit:
+   ```sh
+   cd ../../../  # back to clanky root
+   git add src/voice/clankvox
+   # stage any other clanky changes, then commit
+   ```
+
+If you forget step 2, clanky's tree still points at the old clankvox commit and anyone who clones or pulls will get stale code. Always verify `git status` shows no dirty submodule pointer before pushing clanky.
+
 #### Process
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
 - Do not run 'smoke' or 'live' tests unless the user explicitly directs you to run them, since they incur cost. E2E tests and essential unit tests are the primary focus.

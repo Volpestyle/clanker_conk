@@ -18,6 +18,11 @@ import {
   startBrowserSessionStreamPublish,
   type BrowserStreamPublishManager
 } from "../voice/voiceBrowserStreamPublish.ts";
+import {
+  isResearchEnabled,
+  isBrowserEnabled,
+  getMemorySettings
+} from "../settings/agentStack.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
@@ -299,7 +304,7 @@ const REPLY_TOOL_HANDLERS: Record<
   memory_search: executeMemorySearch,
   memory_write: executeMemoryWrite,
   conversation_search: executeConversationSearch,
-  image_lookup: async (input, _runtime, context) => await executeImageLookup(input, context),
+  image_lookup: async (input, runtime, context) => await executeImageLookup(input, runtime, context),
   start_screen_watch: async (input, runtime, context) => await executeStartScreenWatch(input, runtime, context),
   share_browser_session: async (input, runtime, context) => await executeShareBrowserSession(input, runtime, context),
   play_soundboard: executePlaySoundboard,
@@ -405,6 +410,9 @@ async function executeWebSearch(
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!isResearchEnabled(context.settings)) {
+    return { content: "Web search is currently unavailable (disabled in settings).", isError: true };
+  }
   const query = normalizeDirectiveText(
     String(input?.query || ""),
     MAX_WEB_QUERY_LEN
@@ -413,7 +421,7 @@ async function executeWebSearch(
     return { content: "Missing or empty search query.", isError: true };
   }
   if (!runtime.search?.searchAndRead) {
-    return { content: "Web search is not available.", isError: true };
+    return { content: "Web search is not available (no search provider configured).", isError: true };
   }
 
   try {
@@ -462,12 +470,15 @@ async function executeWebScrape(
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!isResearchEnabled(context.settings)) {
+    return { content: "Web scraping is currently unavailable (disabled in settings).", isError: true };
+  }
   const url = String(input?.url || "").trim().slice(0, MAX_WEB_SCRAPE_URL_LEN);
   if (!url) {
     return { content: "Missing or empty URL.", isError: true };
   }
   if (!runtime.search?.readPageSummary) {
-    return { content: "Web scraping is not available.", isError: true };
+    return { content: "Web scraping is not available (no search provider configured).", isError: true };
   }
 
   const maxChars = Math.min(
@@ -498,6 +509,9 @@ async function executeBrowserBrowse(
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!isBrowserEnabled(context.settings)) {
+    return { content: "Browser browsing is currently unavailable (disabled in settings).", isError: true };
+  }
   const query = normalizeDirectiveText(
     String(input?.query || ""),
     MAX_BROWSER_BROWSE_QUERY_LEN
@@ -630,8 +644,11 @@ async function executeMemorySearch(
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!getMemorySettings(context.settings).enabled) {
+    return { content: "Memory search is currently unavailable (disabled in settings).", isError: true };
+  }
   if (!runtime.memory?.searchDurableFacts) {
-    return { content: "Memory search is not available.", isError: true };
+    return { content: "Memory search is not available (memory runtime not configured).", isError: true };
   }
 
   try {
@@ -686,11 +703,14 @@ async function executeMemoryWrite(
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!getMemorySettings(context.settings).enabled) {
+    return { content: "Memory write is currently unavailable (disabled in settings).", isError: true };
+  }
   if (
     !runtime.memory?.searchDurableFacts ||
     !runtime.memory?.rememberDirectiveLineDetailed
   ) {
-    return { content: "Memory write is not available.", isError: true };
+    return { content: "Memory write is not available (memory runtime not configured).", isError: true };
   }
 
   try {
@@ -736,9 +756,13 @@ async function executeMemoryWrite(
 
 async function executeImageLookup(
   input: ReplyToolCallInput,
+  _runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
+  // Image lookup works on message history, not durable memory.
+  // No settings gate needed — availability is determined by whether
+  // history image candidates exist (checked at the prompt layer).
   const imageId = normalizeDirectiveText(
     String(input?.imageId || ""),
     MAX_IMAGE_LOOKUP_QUERY_LEN

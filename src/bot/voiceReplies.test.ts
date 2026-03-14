@@ -1949,8 +1949,10 @@ test("generateVoiceTurnReply includes active-music guidance only once per prompt
   });
 
   const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  const systemPrompt = String(generationPayloads[0]?.systemPrompt || "");
   assert.equal(countOccurrences(userPrompt, ACTIVE_MUSIC_REPLY_CONTEXT_LINE), 1);
-  assert.equal(countOccurrences(userPrompt, MUSIC_REPLY_HANDOFF_POLICY_LINE), 1);
+  // MUSIC_REPLY_HANDOFF_POLICY_LINE moved to system prompt as static capability doc
+  assert.equal(countOccurrences(systemPrompt, MUSIC_REPLY_HANDOFF_POLICY_LINE), 1);
 });
 
 test("generateVoiceTurnReply logs voice errors when generation fails", async () => {
@@ -2450,13 +2452,14 @@ test("generateVoiceTurnReply screen-watch prompt says not to read share links al
   });
 
   assert.equal(reply.text, "open the link i sent");
-  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  // Screen-watch link guidance moved to system prompt as static capability doc
+  const systemPrompt = String(generationPayloads[0]?.systemPrompt || "");
   assert.equal(
-    userPrompt.includes("Do not read the full URL aloud unless they explicitly ask you to spell it out."),
+    systemPrompt.includes("Do not read the full URL aloud unless they explicitly ask you to spell it out."),
     true
   );
   assert.equal(
-    userPrompt.includes("tell them to open the link you sent or the screen-share link"),
+    systemPrompt.includes("tell them to open the link you sent or the screen-share link"),
     true
   );
 });
