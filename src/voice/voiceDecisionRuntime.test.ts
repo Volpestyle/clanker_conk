@@ -117,7 +117,7 @@ test("resolveTurnTranscriptionPlan upgrades short realtime mini clips without fa
   assert.equal(plan.reason, "short_clip_prefers_full_model");
 });
 
-test("resolveRealtimeTurnTranscriptionPlan keeps mini with a full-model fallback on longer clips", () => {
+test("resolveRealtimeTurnTranscriptionPlan uses mini without fallback on longer clips", () => {
   const plan = resolveTurnTranscriptionPlan({
     mode: "openai_realtime",
     configuredModel: "gpt-4o-mini-transcribe",
@@ -126,19 +126,19 @@ test("resolveRealtimeTurnTranscriptionPlan keeps mini with a full-model fallback
   });
 
   assert.equal(plan.primaryModel, "gpt-4o-mini-transcribe");
-  assert.equal(plan.fallbackModel, "whisper-1");
-  assert.equal(plan.reason, "mini_with_full_fallback");
+  assert.equal(plan.fallbackModel, null);
+  assert.equal(plan.reason, "mini_no_fallback");
 });
 
-test("resolveTurnTranscriptionPlan gives non-realtime mini turns the full fallback", () => {
+test("resolveTurnTranscriptionPlan gives non-realtime mini turns no fallback", () => {
   const plan = resolveTurnTranscriptionPlan({
     mode: "voice_agent",
     configuredModel: "gpt-4o-mini-transcribe"
   });
 
   assert.equal(plan.primaryModel, "gpt-4o-mini-transcribe");
-  assert.equal(plan.fallbackModel, "whisper-1");
-  assert.equal(plan.reason, "mini_with_full_fallback_runtime");
+  assert.equal(plan.fallbackModel, null);
+  assert.equal(plan.reason, "mini_no_fallback_runtime");
 });
 
 test("resolveTurnTranscriptionPlan keeps non-openai providers on a single configured model", () => {
@@ -153,28 +153,28 @@ test("resolveTurnTranscriptionPlan keeps non-openai providers on a single config
   assert.equal(plan.reason, "configured_model");
 });
 
-test("transcribePcmTurnWithPlan retries with the fallback model once", async () => {
+test("transcribePcmTurnWithPlan does not retry when fallbackModel is null", async () => {
   const models: string[] = [];
   const result = await transcribePcmTurnWithPlan({
     transcribe: async ({ model }) => {
       models.push(model);
-      return model === "whisper-1" ? "stop music" : "";
+      return "";
     },
     session: { id: "session-1" },
     userId: "user-1",
     pcmBuffer: Buffer.from([1, 2, 3]),
     plan: {
       primaryModel: "gpt-4o-mini-transcribe",
-      fallbackModel: "whisper-1",
-      reason: "mini_with_full_fallback_runtime"
+      fallbackModel: null,
+      reason: "mini_no_fallback_runtime"
     },
     traceSource: "voice_music_stop_realtime",
     errorPrefix: "voice_music_transcription_failed"
   });
 
-  assert.deepEqual(models, ["gpt-4o-mini-transcribe", "whisper-1"]);
-  assert.equal(result.transcript, "stop music");
-  assert.equal(result.usedFallbackModel, true);
-  assert.equal(result.fallbackModel, "whisper-1");
-  assert.equal(result.reason, "mini_with_full_fallback_runtime");
+  assert.deepEqual(models, ["gpt-4o-mini-transcribe"]);
+  assert.equal(result.transcript, "");
+  assert.equal(result.usedFallbackModel, false);
+  assert.equal(result.fallbackModel, null);
+  assert.equal(result.reason, "mini_no_fallback_runtime");
 });

@@ -2449,7 +2449,7 @@ test("reply decider drops expired command followup sessions", async () => {
   assert.equal(decision.reason, "command_only_not_addressed");
 });
 
-test("runRealtimeTurn in voice_agent retries full ASR model after empty mini transcript", async () => {
+test("runRealtimeTurn in voice_agent trusts empty mini transcript without fallback", async () => {
   const runtimeLogs = [];
   const attemptedModels = [];
   const manager = createManager();
@@ -2460,8 +2460,7 @@ test("runRealtimeTurn in voice_agent retries full ASR model after empty mini tra
   manager.llm.transcribeAudio = async () => ({ text: "unused" });
   manager.transcribePcmTurn = async ({ model }) => {
     attemptedModels.push(String(model || ""));
-    if (model === "gpt-4o-mini-transcribe") return "";
-    return "fallback transcript";
+    return "";
   };
   manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
     allow: true,
@@ -2492,15 +2491,15 @@ test("runRealtimeTurn in voice_agent retries full ASR model after empty mini tra
     captureReason: "stream_end"
   });
 
-  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe", "whisper-1"]);
+  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe"]);
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );
   assert.equal(Boolean(addressingLog), true);
-  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "whisper-1");
-  assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback_runtime");
-  assert.equal(addressingLog?.metadata?.transcript, undefined);
-  assert.equal(addressingLog?.metadata?.transcriptChars, "fallback transcript".length);
+  assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_no_fallback_runtime");
+  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, undefined);
+  assert.equal(addressingLog?.metadata?.transcriptionUsedFallbackModel, false);
+  assert.equal(addressingLog?.metadata?.transcriptChars, 0);
 });
 
 test("runRealtimeTurn skips ASR on very short speaking_end clips", async () => {
@@ -5140,7 +5139,7 @@ test("runFileAsrTurn queues direct-addressed bot-turn-open transcripts for defer
   assert.equal(queuedTurns[0]?.transcript, "clanker wait for this point");
 });
 
-test("runFileAsrTurn retries full ASR model after empty mini transcript", async () => {
+test("runFileAsrTurn trusts empty mini transcript without fallback", async () => {
   const runtimeLogs = [];
   const attemptedModels = [];
   const manager = createManager();
@@ -5151,8 +5150,7 @@ test("runFileAsrTurn retries full ASR model after empty mini transcript", async 
   manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
   manager.transcribePcmTurn = async ({ model }) => {
     attemptedModels.push(String(model || ""));
-    if (model === "gpt-4o-mini-transcribe") return "";
-    return "fallback stt transcript";
+    return "";
   };
   manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
     allow: true,
@@ -5179,16 +5177,12 @@ test("runFileAsrTurn retries full ASR model after empty mini transcript", async 
     captureReason: "stream_end"
   });
 
-  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe", "whisper-1"]);
+  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe"]);
+  // File ASR path returns early on empty transcript (no addressing, no generation)
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );
-  assert.equal(Boolean(addressingLog), true);
-  assert.equal(addressingLog?.metadata?.mode, "openai_realtime");
-  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "whisper-1");
-  assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback");
-  assert.equal(addressingLog?.metadata?.transcript, undefined);
-  assert.equal(addressingLog?.metadata?.transcriptChars, "fallback stt transcript".length);
+  assert.equal(addressingLog, undefined);
 });
 
 test("runFileAsrTurn drops near-silent clips before ASR", async () => {

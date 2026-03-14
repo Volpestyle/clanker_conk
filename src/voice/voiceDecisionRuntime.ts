@@ -3,7 +3,6 @@ import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelp
 const OPENAI_REALTIME_SHORT_CLIP_ASR_MS = 1200;
 const PCM16_MONO_BYTES_PER_SAMPLE = 2;
 const OPENAI_MINI_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-const FULL_FALLBACK_TRANSCRIPTION_MODEL = "whisper-1";
 const DEFAULT_TRANSCRIBER_PROVIDER = "openai";
 
 export function normalizeVoiceReplyDecisionProvider(value) {
@@ -61,17 +60,12 @@ export function resolveTurnTranscriptionPlan({
     };
   }
   if (normalizedMode !== "openai_realtime") {
-    if (normalizedModel === OPENAI_MINI_TRANSCRIPTION_MODEL) {
-      return {
-        primaryModel: normalizedModel,
-        fallbackModel: FULL_FALLBACK_TRANSCRIPTION_MODEL,
-        reason: "mini_with_full_fallback_runtime"
-      };
-    }
     return {
       primaryModel: normalizedModel,
       fallbackModel: null,
-      reason: "configured_model"
+      reason: normalizedModel === OPENAI_MINI_TRANSCRIPTION_MODEL
+        ? "mini_no_fallback_runtime"
+        : "configured_model"
     };
   }
 
@@ -94,8 +88,8 @@ export function resolveTurnTranscriptionPlan({
 
   return {
     primaryModel: normalizedModel,
-    fallbackModel: FULL_FALLBACK_TRANSCRIPTION_MODEL,
-    reason: "mini_with_full_fallback"
+    fallbackModel: null,
+    reason: "mini_no_fallback"
   };
 }
 
