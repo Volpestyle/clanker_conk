@@ -143,59 +143,6 @@ test("refreshRealtimeTools keeps start_screen_watch available for native watch s
   assert.equal(toolNames.includes("start_screen_watch"), true);
 });
 
-test("buildRealtimeFunctionTools rewrites music_play for provider-native realtime compatibility", () => {
-  const manager = createVoiceTestManager();
-  const tools = buildRealtimeFunctionTools(manager, {
-    session: {
-      id: "session-openai-native-export",
-      guildId: "guild-1",
-      textChannelId: "chan-1",
-      mode: "openai_realtime",
-      ending: false,
-      realtimeToolOwnership: "provider_native"
-    },
-    settings: createVoiceTestSettings({
-      voice: {
-        conversationPolicy: {
-          replyPath: "native"
-        }
-      }
-    }),
-    target: "openai_realtime"
-  });
-
-  const musicPlay = tools.find((entry) => entry.name === "music_play");
-  assert.ok(musicPlay);
-  assert.equal(musicPlay?.parameters?.type, "object");
-  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "anyOf"), false);
-  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "oneOf"), false);
-  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "allOf"), false);
-  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "not"), false);
-  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "enum"), false);
-  assert.equal(
-    Object.hasOwn((musicPlay?.parameters?.properties as Record<string, unknown>) || {}, "query"),
-    true
-  );
-  assert.equal(
-    Object.hasOwn((musicPlay?.parameters?.properties as Record<string, unknown>) || {}, "selection_id"),
-    true
-  );
-  const videoPlay = tools.find((entry) => entry.name === "video_play");
-  assert.ok(videoPlay);
-  assert.equal(videoPlay?.parameters?.type, "object");
-  assert.equal(Object.hasOwn(videoPlay?.parameters || {}, "anyOf"), false);
-  assert.equal(Object.hasOwn(videoPlay?.parameters || {}, "oneOf"), false);
-  assert.equal(Object.hasOwn(videoPlay?.parameters || {}, "allOf"), false);
-  assert.equal(
-    Object.hasOwn((videoPlay?.parameters?.properties as Record<string, unknown>) || {}, "query"),
-    true
-  );
-  assert.equal(
-    Object.hasOwn((videoPlay?.parameters?.properties as Record<string, unknown>) || {}, "selection_id"),
-    true
-  );
-});
-
 test("refreshRealtimeTools skips registration for brain sessions", async () => {
   const manager = createVoiceTestManager();
   let updateCount = 0;

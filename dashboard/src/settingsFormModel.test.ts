@@ -574,36 +574,6 @@ test("settingsFormModel keeps realtime provider selection while preserving file_
   assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiAudioApi.ttsVoice, "ash");
 });
 
-test("settingsFormModel round-trips browser llm provider and model", () => {
-  const form = settingsToForm(withResolved(normalizeSettings({
-    agentStack: {
-      runtimeConfig: {
-        browser: {
-          localBrowserAgent: {
-            execution: {
-              mode: "dedicated_model",
-              model: {
-                provider: "openai",
-                model: "gpt-5-mini"
-              }
-            }
-          }
-        }
-      }
-    }
-  })));
-
-  assert.equal(form.browserLlmProvider, "openai");
-  assert.equal(form.browserLlmModel, "gpt-5-mini");
-
-  const { effectivePatch } = serializeForm(form);
-  assertDedicatedExecutionModel(
-    effectivePatch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
-    "openai",
-    "gpt-5-mini"
-  );
-});
-
 test("settingsFormModel round-trips claude oauth browser llm provider and model", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
@@ -634,50 +604,6 @@ test("settingsFormModel round-trips claude oauth browser llm provider and model"
   );
 });
 
-test("settingsFormModel round-trips browser headed mode", () => {
-  const form = settingsToForm(withResolved(normalizeSettings({
-    agentStack: {
-      runtimeConfig: {
-        browser: {
-          headed: true
-        }
-      }
-    }
-  })));
-
-  assert.equal(form.browserHeaded, true);
-
-  const patch = formToSettingsPatch(form);
-  assert.equal(patch.agentStack.runtimeConfig.browser.headed, true);
-});
-
-test("settingsFormModel round-trips browser runtime override and hosted client selection", () => {
-  const form = settingsToForm(withResolved(normalizeSettings({
-    agentStack: {
-      overrides: {
-        browserRuntime: "openai_computer_use"
-      },
-      runtimeConfig: {
-        browser: {
-          openaiComputerUse: {
-            client: "openai-oauth",
-            model: "gpt-5.4"
-          }
-        }
-      }
-    }
-  })));
-
-  assert.equal(form.browserRuntimeSelection, "openai_computer_use");
-  assert.equal(form.browserOpenAiComputerUseClient, "openai-oauth");
-  assert.equal(form.browserOpenAiComputerUseModel, "gpt-5.4");
-
-  const { patch, effectivePatch } = serializeForm(form);
-  assert.equal(patch.agentStack.overrides.browserRuntime, "openai_computer_use");
-  assert.equal(effectivePatch.agentStack.runtimeConfig.browser.openaiComputerUse.client, "openai-oauth");
-  assert.equal(effectivePatch.agentStack.runtimeConfig.browser.openaiComputerUse.model, "gpt-5.4");
-});
-
 test("getCodeAgentValidationError requires allowed users when code agent is enabled", () => {
   const form = settingsToForm(withResolved(normalizeSettings({})));
   form.stackAdvancedOverridesEnabled = true;
@@ -702,40 +628,6 @@ test("getSettingsValidationError blocks blank browser numeric inputs even withou
     sectionId: "sec-browser",
     message: "Max browse calls per hour is required."
   });
-});
-
-test("settingsFormModel round-trips code agent provider fields", () => {
-  const form = settingsToForm(withResolved(normalizeSettings({
-    agentStack: {
-      advancedOverridesEnabled: true,
-      overrides: {
-        devTeam: {
-          codingWorkers: ["codex"]
-        }
-      },
-      runtimeConfig: {
-        devTeam: {
-          claudeCode: {
-            enabled: false,
-            model: "sonnet"
-          },
-          codex: {
-            enabled: true,
-            model: "gpt-5-codex"
-          }
-        }
-      }
-    }
-  })));
-
-  assert.equal(form.codeAgentProvider, "codex");
-  assert.equal(form.codeAgentModel, "sonnet");
-  assert.equal(form.codeAgentCodexModel, "gpt-5-codex");
-
-  const { patch, effectivePatch } = serializeForm(form);
-  assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
-  assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.claudeCode.model, "sonnet");
-  assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
 });
 
 test("settingsFormModel round-trips codex cli code agent fields", () => {

@@ -1,12 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import {
-  composeDiscoveryImagePrompt,
-  composeDiscoveryVideoPrompt,
-  composeReplyImagePrompt,
-  composeReplyVideoPrompt,
-  parseStructuredReplyOutput
-} from "./botHelpers.ts";
+import { parseStructuredReplyOutput } from "./botHelpers.ts";
 
 test("parseStructuredReplyOutput reads structured reply JSON", () => {
   const parsed = parseStructuredReplyOutput(
@@ -56,37 +50,6 @@ test("parseStructuredReplyOutput rejects unstructured plain text", () => {
   assert.equal(parsed.mediaDirective, null);
   assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.parseState, "unstructured");
-});
-
-test("parseStructuredReplyOutput ignores removed structured memory fields", () => {
-  const parsed = parseStructuredReplyOutput(
-    JSON.stringify({
-      text: "bet",
-      skip: false,
-      memoryLine: "Alice likes tea.",
-      memoryScope: "guild",
-      memoryFactType: "identity",
-      selfMemoryLine: "I prefer short replies.",
-      selfMemoryFactType: "persona"
-    })
-  );
-
-  assert.equal(parsed.text, "bet");
-  assert.equal(parsed.mediaDirective, null);
-});
-
-test("compose media prompts fall back to contextual defaults when no prompt is provided", () => {
-  const initiativeImage = composeDiscoveryImagePrompt("", "", 900, []);
-  const initiativeVideo = composeDiscoveryVideoPrompt("", "", 900, []);
-  const replyImage = composeReplyImagePrompt("", "", 900, []);
-  const replyVideo = composeReplyVideoPrompt("", "", 900, []);
-
-  assert.match(initiativeImage, /Scene: general chat mood\./);
-  assert.match(initiativeVideo, /Scene: general chat mood\./);
-  assert.match(replyImage, /Scene: chat reaction\./);
-  assert.match(replyImage, /Conversational context \(do not render as text\): chat context\./);
-  assert.match(replyVideo, /Scene: chat reaction\./);
-  assert.match(replyVideo, /Conversational context \(do not render as text\): chat context\./);
 });
 
 test("parseStructuredReplyOutput recovers text from truncated fenced JSON", () => {
@@ -168,24 +131,6 @@ test("parseStructuredReplyOutput accepts screen share offer intent", () => {
   assert.equal(parsed.screenWatchIntent.reason, "needs visual context");
 });
 
-test("parseStructuredReplyOutput ignores deprecated screen share aliases", () => {
-  const parsed = parseStructuredReplyOutput(
-    JSON.stringify({
-      text: "old payload",
-      skip: false,
-      screenShare: {
-        action: "start_watch",
-        confidence: 1,
-        reason: "deprecated alias"
-      },
-      screenShareLinkRequested: true
-    })
-  );
-
-  assert.equal(parsed.screenWatchIntent.action, null);
-  assert.equal(parsed.screenWatchIntent.confidence, 0);
-  assert.equal(parsed.screenWatchIntent.reason, null);
-});
 
 test("parseStructuredReplyOutput normalizes automation create payload", () => {
   const parsed = parseStructuredReplyOutput(

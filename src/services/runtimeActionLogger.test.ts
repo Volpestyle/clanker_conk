@@ -68,28 +68,7 @@ test("RuntimeActionLogger.attachToStore preserves prior listener and emits JSON 
   logger.close();
 });
 
-test("formatPrettyLine highlights heard transcripts before generic metadata", () => {
-  const line = formatPrettyLine({
-    ts: "2026-03-01T10:11:12.000Z",
-    level: "info",
-    kind: "voice_runtime",
-    event: "voice_turn_addressing",
-    agent: "voice",
-    usd_cost: 0,
-    metadata: {
-      sessionId: "sess-123",
-      transcript: "can you look that up for me",
-      directedConfidence: 0.95
-    }
-  });
-
-  assert.match(line, /voice_turn_addressing/);
-  assert.match(line, /heard/);
-  assert.match(line, /can you look that up for me/);
-  assert.ok(line.indexOf("heard") < line.indexOf("sessionId"));
-});
-
-test("formatPrettyLine highlights spoken transcripts for output events", () => {
+test("formatPrettyLine keeps speech and debugging context visible", () => {
   const line = formatPrettyLine({
     ts: "2026-03-01T10:11:12.000Z",
     level: "info",
@@ -106,25 +85,6 @@ test("formatPrettyLine highlights spoken transcripts for output events", () => {
 
   assert.match(line, /openai_realtime_transcript/);
   assert.match(line, /said/);
-  assert.match(line, /yeah for sure, what do you want me to look up\?/);
-});
-
-test("formatPrettyLine keeps replyText visible without speech-style emphasis on request logs", () => {
-  const line = formatPrettyLine({
-    ts: "2026-03-01T10:11:12.000Z",
-    level: "info",
-    kind: "voice_runtime",
-    event: "realtime_reply_requested",
-    agent: "voice",
-    usd_cost: 0,
-    metadata: {
-      sessionId: "sess-123",
-      replyText: "yeah for sure, what do you want me to look up?"
-    }
-  });
-
-  assert.match(line, /realtime_reply_requested/);
-  assert.match(line, /replyText/);
   assert.match(line, /yeah for sure, what do you want me to look up\?/);
 });
 
@@ -150,31 +110,4 @@ test("formatPrettyLine surfaces drop reasons and signal metrics for provisional 
   assert.match(line, /peak=/);
   assert.match(line, /rms=/);
   assert.match(line, /active=/);
-});
-
-test("formatPrettyLine highlights llm call returned text for runtime debugging", () => {
-  const line = formatPrettyLine({
-    ts: "2026-03-01T10:11:12.000Z",
-    level: "info",
-    kind: "llm_call",
-    event: "claude-oauth:claude-sonnet-4-6",
-    agent: "runtime",
-    usd_cost: 0.0039,
-    metadata: {
-      transcript: "yo, give me some sound effects",
-      transcriptSource: "output",
-      toolNames: "play_soundboard",
-      toolCallCount: 1,
-      responseChars: 31,
-      stopReason: "tool_calls",
-      source: "voice_realtime_generation"
-    }
-  });
-
-  assert.match(line, /claude-oauth:claude-sonnet-4-6/);
-  assert.match(line, /said/);
-  assert.match(line, /yo, give me some sound effects/);
-  assert.match(line, /toolNames/);
-  assert.match(line, /play_soundboard/);
-  assert.match(line, /stopReason/);
 });

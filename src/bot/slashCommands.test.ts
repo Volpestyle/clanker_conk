@@ -78,73 +78,23 @@ function createClankSlashInteraction({
   };
 }
 
-test("handleClankSlashCommand routes /clank say to the voice session manager", async () => {
+test("handleClankSlashCommand routes each supported /clank action to the correct handler", async () => {
   const bot = createBot();
   const voiceCalls: Array<Record<string, unknown>> = [];
-  bot.voiceSessionManager.handleClankSlashCommand = async (
-    interaction: ChatInputCommandInteraction,
-    settings: Record<string, unknown> | null
-  ) => {
-    voiceCalls.push({ interaction, settings });
-  };
-
-  const slash = createClankSlashInteraction({
-    subcommand: "say"
-  });
-
-  await bot.handleClankSlashCommand(slash.interaction as ChatInputCommandInteraction);
-
-  assert.equal(voiceCalls.length, 1);
-  assert.equal(voiceCalls[0]?.interaction, slash.interaction);
-  assert.equal(slash.replies.length, 0);
-});
-
-test("handleClankSlashCommand routes /clank music subcommands to the voice session manager", async () => {
-  const bot = createBot();
-  const voiceCalls: Array<Record<string, unknown>> = [];
-  bot.voiceSessionManager.handleClankSlashCommand = async (
-    interaction: ChatInputCommandInteraction,
-    settings: Record<string, unknown> | null
-  ) => {
-    voiceCalls.push({ interaction, settings });
-  };
-
-  const slash = createClankSlashInteraction({
-    subcommand: "play",
-    subcommandGroup: "music"
-  });
-
-  await bot.handleClankSlashCommand(slash.interaction as ChatInputCommandInteraction);
-
-  assert.equal(voiceCalls.length, 1);
-  assert.equal(voiceCalls[0]?.interaction, slash.interaction);
-  assert.equal(slash.replies.length, 0);
-});
-
-test("handleClankSlashCommand routes /clank browse to the browse handler", async () => {
-  const bot = createBot();
+  const codeCalls: Array<Record<string, unknown>> = [];
   const browseCalls: Array<Record<string, unknown>> = [];
+  bot.voiceSessionManager.handleClankSlashCommand = async (
+    interaction: ChatInputCommandInteraction,
+    settings: Record<string, unknown> | null
+  ) => {
+    voiceCalls.push({ interaction, settings });
+  };
   bot.handleClankBrowseSlashCommand = async (
     interaction: ChatInputCommandInteraction,
     settings: Record<string, unknown> | null
   ) => {
     browseCalls.push({ interaction, settings });
   };
-
-  const slash = createClankSlashInteraction({
-    subcommand: "browse"
-  });
-
-  await bot.handleClankSlashCommand(slash.interaction as ChatInputCommandInteraction);
-
-  assert.equal(browseCalls.length, 1);
-  assert.equal(browseCalls[0]?.interaction, slash.interaction);
-  assert.equal(slash.replies.length, 0);
-});
-
-test("handleClankSlashCommand routes /clank code to the code handler", async () => {
-  const bot = createBot();
-  const codeCalls: Array<Record<string, unknown>> = [];
   bot.handleClankCodeSlashCommand = async (
     interaction: ChatInputCommandInteraction,
     settings: Record<string, unknown> | null
@@ -152,15 +102,28 @@ test("handleClankSlashCommand routes /clank code to the code handler", async () 
     codeCalls.push({ interaction, settings });
   };
 
-  const slash = createClankSlashInteraction({
-    subcommand: "code"
-  });
+  const cases = [
+    { subcommand: "say", subcommandGroup: null, sink: voiceCalls },
+    { subcommand: "play", subcommandGroup: "music", sink: voiceCalls },
+    { subcommand: "browse", subcommandGroup: null, sink: browseCalls },
+    { subcommand: "code", subcommandGroup: null, sink: codeCalls }
+  ] as const;
 
-  await bot.handleClankSlashCommand(slash.interaction as ChatInputCommandInteraction);
+  for (const testCase of cases) {
+    const slash = createClankSlashInteraction({
+      subcommand: testCase.subcommand,
+      subcommandGroup: testCase.subcommandGroup
+    });
 
+    await bot.handleClankSlashCommand(slash.interaction as ChatInputCommandInteraction);
+
+    assert.equal(testCase.sink.at(-1)?.interaction, slash.interaction);
+    assert.equal(slash.replies.length, 0);
+  }
+
+  assert.equal(voiceCalls.length, 2);
+  assert.equal(browseCalls.length, 1);
   assert.equal(codeCalls.length, 1);
-  assert.equal(codeCalls[0]?.interaction, slash.interaction);
-  assert.equal(slash.replies.length, 0);
 });
 
 test("handleMessage ignores slash command invocation messages so they do not trigger normal text replies", async () => {

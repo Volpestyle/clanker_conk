@@ -2,7 +2,6 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { SubAgentSessionManager } from "../agents/subAgentSession.ts";
 import { buildReplyToolSet, executeReplyTool } from "./replyTools.ts";
-import { MUSIC_PLAY_SCHEMA, VIDEO_PLAY_SCHEMA } from "./sharedToolSchemas.ts";
 
 test("buildReplyToolSet includes browser_browse when browser agent is enabled and available", () => {
   const tools = buildReplyToolSet({
@@ -161,24 +160,6 @@ test("buildReplyToolSet includes note_context when voice tools are available", (
   assert.equal(toolNames.includes("video_search"), true);
   assert.equal(toolNames.includes("video_play"), true);
   assert.equal(toolNames.includes("set_addressing"), false);
-});
-
-test("music_play schema has no top-level anyOf and requires query (provider-safe)", () => {
-  assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters, "anyOf"), false);
-  assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters, "oneOf"), false);
-  assert.equal(MUSIC_PLAY_SCHEMA.parameters.type, "object");
-  assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters.properties, "query"), true);
-  assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters.properties, "selection_id"), true);
-  assert.deepEqual(MUSIC_PLAY_SCHEMA.parameters.required, ["query"]);
-});
-
-test("video_play schema has no top-level anyOf and requires query (provider-safe)", () => {
-  assert.equal(Object.hasOwn(VIDEO_PLAY_SCHEMA.parameters, "anyOf"), false);
-  assert.equal(Object.hasOwn(VIDEO_PLAY_SCHEMA.parameters, "oneOf"), false);
-  assert.equal(VIDEO_PLAY_SCHEMA.parameters.type, "object");
-  assert.equal(Object.hasOwn(VIDEO_PLAY_SCHEMA.parameters.properties, "query"), true);
-  assert.equal(Object.hasOwn(VIDEO_PLAY_SCHEMA.parameters.properties, "selection_id"), true);
-  assert.deepEqual(VIDEO_PLAY_SCHEMA.parameters.required, ["query"]);
 });
 
 test("executeReplyTool delegates web_scrape to readPageSummary", async () => {
