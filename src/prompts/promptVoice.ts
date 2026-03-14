@@ -366,7 +366,8 @@ export function buildVoiceTurnPrompt({
               .slice(0, 240)
           )
           .filter(Boolean)
-          .slice(-12)
+          .slice(-12),
+        brainContextMode: String(normalizedConversationContext.streamWatchBrainContext.brainContextMode || "context_brain")
       }
       : null;
   const webSearchToolAvailable = Boolean(
@@ -404,6 +405,8 @@ export function buildVoiceTurnPrompt({
       const actorLabel = normalizedRuntimeEventContext.actorDisplayName || speaker;
       if (normalizedRuntimeEventContext.eventType === "share_start") {
         parts.push(`Voice runtime event cue: ${actorLabel} started sharing their screen.`);
+      } else if (normalizedRuntimeEventContext.eventType === "direct_frame") {
+        parts.push(`Voice runtime event cue: A new frame from ${actorLabel}'s screen share.`);
       } else {
         parts.push(`Voice runtime event cue: Something notable just happened on ${actorLabel}'s screen.`);
       }
@@ -554,6 +557,7 @@ export function buildVoiceTurnPrompt({
         : "Screen watch: active, waiting for the first frame. Do not call start_screen_watch again — it is already running."
     );
   }
+  const isDirectScreenWatchMode = normalizedStreamWatchBrainContext?.brainContextMode === "direct";
   if (hasDirectVisionFrame) {
     const screenContextParts = [
       "Live screen watch: You can see the user's screen directly in the attached image.",
@@ -564,8 +568,15 @@ export function buildVoiceTurnPrompt({
         : null
     ];
     if (normalizedStreamWatchBrainContext?.notes?.length) {
-      screenContextParts.push("Recent screen observations:");
+      screenContextParts.push("Your previous observations:");
       screenContextParts.push(...normalizedStreamWatchBrainContext.notes.map((note) => `- ${note}`));
+    }
+    if (isDirectScreenWatchMode) {
+      screenContextParts.push(
+        "You may end your reply with [[NOTE:your observation]] to record a private note about what you see. Notes are never spoken aloud. " +
+        "Use notes to track what is on screen so you can notice changes across frames. " +
+        "You can speak and note in the same turn, or skip speech and just note: [SKIP] [[NOTE:...]]."
+      );
     }
     parts.push(screenContextParts.filter(Boolean).join("\n"));
   } else if (normalizedStreamWatchBrainContext?.notes?.length) {
@@ -773,11 +784,20 @@ export function buildVoiceTurnPrompt({
     ].join("\n")
   );
 
-  parts.push(
-    allowInlineSoundboardDirectives
-      ? "Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags. Only other markup allowed after those leading prefixes: [[SOUNDBOARD:<ref>]]."
-      : "Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags/[[...]] directives beyond those leading metadata prefixes."
-  );
+  const noteDirectiveAllowed = isDirectScreenWatchMode && hasDirectVisionFrame;
+  const inlineMarkupSuffix = [
+    allowInlineSoundboardDirectives ? "[[SOUNDBOARD:<ref>]]" : null,
+    noteDirectiveAllowed ? "[[NOTE:<observation>]]" : null
+  ].filter(Boolean).join(", ");
+  if (inlineMarkupSuffix) {
+    parts.push(
+      `Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags. Only other markup allowed after those leading prefixes: ${inlineMarkupSuffix}.`
+    );
+  } else {
+    parts.push(
+      "Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags/[[...]] directives beyond those leading metadata prefixes."
+    );
+  }
 
   return parts.join("\n\n");
 }

@@ -945,10 +945,15 @@ export function getStreamWatchBrainContextForPrompt(session, settings = null) {
   const streamWatch = session.streamWatch || {};
 
   const brainContextSettings = resolveStreamWatchBrainContextSettings(settings);
-  if (!brainContextSettings.enabled) return null;
+  const streamWatchSettings = settings?.voice?.streamWatch || {};
+  const brainContextMode = String(streamWatchSettings.brainContextMode || "context_brain");
+
+  // In direct mode, always return context (even with empty notes) so the
+  // prompt builder receives brainContextMode and can inject [[NOTE:...]] instructions.
+  if (!brainContextSettings.enabled && brainContextMode !== "direct") return null;
 
   const entries = getStreamWatchBrainContextEntries(session, brainContextSettings.maxEntries);
-  if (!entries.length) return null;
+  if (!entries.length && brainContextMode !== "direct") return null;
 
   const now = Date.now();
   const notes = entries
@@ -961,7 +966,7 @@ export function getStreamWatchBrainContextForPrompt(session, settings = null) {
     })
     .slice(-brainContextSettings.maxEntries);
 
-  if (!notes.length) return null;
+  if (!notes.length && brainContextMode !== "direct") return null;
 
   const last = entries[entries.length - 1] || null;
   return {
@@ -970,7 +975,8 @@ export function getStreamWatchBrainContextForPrompt(session, settings = null) {
     lastAt: Number(last?.at || 0) || null,
     provider: last?.provider || streamWatch.lastBrainContextProvider || null,
     model: last?.model || streamWatch.lastBrainContextModel || null,
-    active: Boolean(streamWatch.active)
+    active: Boolean(streamWatch.active),
+    brainContextMode
   };
 }
 
@@ -1053,11 +1059,11 @@ async function generateVisionFallbackStreamWatchBrainContext(manager: StreamWatc
     "Return strict JSON only.",
     "The note must be one short factual private note, max 16 words.",
     "urgency decides whether this frame warrants unprompted spoken commentary:",
-    '"high" = something genuinely reaction-worthy happened that you would want to speak about unprompted — a dramatic moment, a visible error/crash, a funny or surprising event, a major state change like winning/losing/dying.',
-    '"low" = the scene changed but nothing demands a spoken reaction right now.',
-    '"none" = the frame is essentially the same as before, or is idle/static UI.',
+    '"high" = something worth commenting on — a scene change, an interesting detail, an error or warning, a new app/page/tab, a notification, a funny or surprising element, a person joining or leaving, a visible state change, or anything a curious friend watching over your shoulder might remark on.',
+    '"low" = the scene is mildly different from before but nothing particularly interesting to mention.',
+    '"none" = the frame is essentially identical to the previous observation.',
     "Use your observation history to detect meaningful changes, trends, and escalation. A gradual shift that would surprise a returning viewer can be high even if each individual frame looked similar to the last.",
-    "Be conservative with high — most frames are none or low. Reserve high for moments a human spectator would genuinely react to out loud.",
+    "Prefer high when in doubt between high and low — it is better to notice too much than too little. The voice brain will decide whether to actually speak.",
     "Do not write dialogue or commands."
   ].join(" ");
   const recentTranscript = getRecentTranscriptSnippet(session);
@@ -1938,6 +1944,124 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
   };
 }
 
+/**
+ * Direct mode: the main voice brain sees screen frames directly and decides
+ * whether to speak.  No vision triage model, no urgency classification.
+ * The brain can write [[NOTE:...]] directives for private self-memory.
+ * Every frame that passes the interval gate is sent as a brain turn.
+ */
+async function maybeTriggerDirectStreamWatchBrainTurn(manager: StreamWatchManager, {
+  session,
+  settings,
+  streamWatchSettings,
+  streamerUserId = null,
+  source = "api_stream_ingest"
+}: {
+  session: StreamWatchSession;
+  settings: Record<string, unknown> | null;
+  streamWatchSettings: Record<string, unknown>;
+  streamerUserId?: string | null;
+  source?: string;
+}) {
+  if (!session || session.ending) return;
+  if (typeof manager.runRealtimeBrainReply !== "function") return;
+
+  const autonomousCommentaryEnabled =
+    streamWatchSettings.autonomousCommentaryEnabled !== undefined
+      ? Boolean(streamWatchSettings.autonomousCommentaryEnabled)
+      : true;
+  if (!autonomousCommentaryEnabled) return;
+
+  // Gate: pending work or active captures
+  if (session.pendingResponse) return;
+  if (isStreamWatchPlaybackBusy(session)) return;
+  if (hasQueuedVoiceWork(manager, session)) return;
+
+  // Gate: audio quiet window — avoid talking over active conversation
+  const now = Date.now();
+  const sinceLastInboundAudio = now - Number(session.lastInboundAudioAt || 0);
+  if (Number(session.lastInboundAudioAt || 0) > 0 && sinceLastInboundAudio < STREAM_WATCH_AUDIO_QUIET_WINDOW_MS) return;
+
+  // Gate: interval — direct mode uses its own interval setting
+  const directMinIntervalSeconds = clamp(
+    Number(streamWatchSettings.directMinIntervalSeconds) || 10,
+    3,
+    120
+  );
+  if (now - Number(session.streamWatch?.lastCommentaryAt || 0) < directMinIntervalSeconds * 1000) return;
+
+  const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
+  if (!bufferedFrame) return;
+
+  const frozenFrameSnapshot = {
+    mimeType: String(session.streamWatch?.latestFrameMimeType || "image/jpeg"),
+    dataBase64: bufferedFrame
+  };
+  const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
+  const firstFrame = Number(session.streamWatch?.ingestedFrameCount || 0) <= 1;
+  const triggerReason = firstFrame ? "share_start" : "direct_frame";
+  const normalizedStreamerUserId = String(streamerUserId || "").trim() || null;
+  const botUserId = String(manager.client.user?.id || "").trim() || null;
+  const transcript = firstFrame
+    ? `[${speakerName} started screen sharing. You can see the latest frame.]`
+    : `[A new frame from ${speakerName}'s screen share is available.]`;
+
+  session.streamWatch.lastCommentaryAt = now;
+
+  void manager.runRealtimeBrainReply({
+    session,
+    settings,
+    userId: String(session.streamWatch?.targetUserId || streamerUserId || manager.client.user?.id || ""),
+    transcript,
+    inputKind: "event",
+    directAddressed: false,
+    source: `stream_watch_brain_turn:${triggerReason}`,
+    frozenFrameSnapshot,
+    runtimeEventContext: {
+      category: "screen_share",
+      eventType: triggerReason,
+      actorUserId: normalizedStreamerUserId,
+      actorDisplayName: speakerName,
+      actorRole:
+        normalizedStreamerUserId && botUserId && normalizedStreamerUserId === botUserId
+          ? "self"
+          : normalizedStreamerUserId
+            ? "other"
+            : "unknown",
+      hasVisibleFrame: true
+    }
+  }).catch((error: unknown) => {
+    manager.store.logAction({
+      kind: "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: manager.client.user?.id || null,
+      content: `stream_watch_direct_brain_turn_failed: ${String((error as Error)?.message || error)}`,
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "api_stream_ingest"),
+        triggerReason
+      }
+    });
+  });
+
+  manager.store.logAction({
+    kind: "voice_runtime",
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    userId: manager.client.user?.id || null,
+    content: "stream_watch_commentary_requested",
+    metadata: {
+      sessionId: session.id,
+      source: String(source || "api_stream_ingest"),
+      streamerUserId: streamerUserId || null,
+      commentaryMode: "direct_brain_turn",
+      triggerReason,
+      brainContextMode: "direct"
+    }
+  });
+}
+
 export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchManager, {
   session,
   settings,
@@ -1950,6 +2074,20 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
 
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
   const streamWatchSettings = resolvedSettings?.voice?.streamWatch || {};
+  const brainContextMode = String(streamWatchSettings.brainContextMode || "context_brain");
+
+  // In direct mode, the main brain sees frames directly — no vision triage model.
+  if (brainContextMode === "direct") {
+    return maybeTriggerDirectStreamWatchBrainTurn(manager, {
+      session,
+      settings: resolvedSettings,
+      streamWatchSettings,
+      streamerUserId,
+      source
+    });
+  }
+
+  // --- context_brain mode (default): vision triage → urgency → brain ---
 
   // Keep the rolling notes fresh; they become normal prompt context for any later brain turn.
   let brainContextUpdate = null;

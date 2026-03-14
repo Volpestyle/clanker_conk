@@ -19,6 +19,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import {
   SOUNDBOARD_MAX_CANDIDATES,
+  extractNoteDirectives,
   formatSoundboardCandidateLine,
   isRealtimeMode,
   normalizeVoiceAddressingTargetToken,
@@ -32,6 +33,7 @@ import {
 import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
 
 import { normalizeVoiceOutputLeaseMode } from "./voiceOutputLease.ts";
+import { appendStreamWatchBrainContextEntry } from "./voiceStreamWatch.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type {
   InFlightAcceptedBrainTurn,
@@ -426,7 +428,8 @@ export async function runVoiceReplyPipeline(
   if (host.maybeSupersedeRealtimeReplyBeforePlayback({
     session,
     source: `${source}:generation_preflight`,
-    generationStartedAtMs: latencyFinalizedAtMs || generationStartedAt
+    generationStartedAtMs: latencyFinalizedAtMs || generationStartedAt,
+    replyUserId: params.userId || null
   })) {
     clearInFlightAcceptedBrainTurn();
     return false;
@@ -833,7 +836,10 @@ export async function runVoiceReplyPipeline(
     });
   }
 
-  const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
+  // Extract [[NOTE:...]] directives before normalization so that
+  // `[SKIP] [[NOTE:...]]` correctly resolves to a skip + stored note.
+  const noteExtraction = extractNoteDirectives(generatedPayload?.text);
+  const replyText = normalizeVoiceText(noteExtraction.text || "", STT_REPLY_MAX_CHARS);
   const playedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.playedSoundboardRefs);
   const streamedSentenceCount = Math.max(0, Number(generatedPayload?.streamedSentenceCount || 0));
   const streamedRequestedRealtimeUtterance = Boolean(generatedPayload?.streamedRequestedRealtimeUtterance);
@@ -863,11 +869,33 @@ export async function runVoiceReplyPipeline(
     session.inFlightAcceptedBrainTurn.outputLeaseMode = replyOutputLeaseMode;
   }
 
+  // Store any [[NOTE:...]] directives the brain wrote as private self-notes.
+  // These persist as brainContextEntries and are injected into future turns
+  // so the brain can maintain its own visual memory without a separate triage model.
+  const storeExtractedNotes = () => {
+    if (noteExtraction.notes.length === 0) return;
+    if (!session.streamWatch?.active) return;
+    const settingsObj = params.settings as Record<string, Record<string, Record<string, unknown>>> | null;
+    const maxEntries = Number(settingsObj?.voice?.streamWatch?.directMaxEntries) || 12;
+    for (const note of noteExtraction.notes) {
+      appendStreamWatchBrainContextEntry({
+        session,
+        text: note,
+        at: Date.now(),
+        provider: null,
+        model: null,
+        speakerName: null,
+        maxEntries
+      });
+    }
+  };
+
   const playbackPlan = host.buildVoiceReplyPlaybackPlan({
     replyText,
     trailingSoundboardRefs: []
   });
   if (!playbackPlan.spokenText && playedSoundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
+    storeExtractedNotes();
     logReplySkipped({
       host,
       params: { ...params, source },
@@ -1012,6 +1040,7 @@ export async function runVoiceReplyPipeline(
         addressing: generatedVoiceAddressing
       });
     }
+    storeExtractedNotes();
     host.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,

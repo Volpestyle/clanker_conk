@@ -44,6 +44,8 @@ const REALTIME_MEMORY_FACT_LIMIT = 8;
 export const SOUNDBOARD_MAX_CANDIDATES = 40;
 const OPENAI_REALTIME_MIN_COMMIT_AUDIO_MS = 100;
 const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
+const NOTE_DIRECTIVE_RE = /\[\[NOTE:\s*([\s\S]*?)\s*\]\]/gi;
+const NOTE_DIRECTIVE_MAX_LEN = 220;
 const OPENAI_TRANSCRIPT_CONTROL_TOKEN_RE = /<\|[^|>]+?\|>/g;
 const OPENAI_TRANSCRIPT_RESERVED_AUDIO_MARKER_RE =
   /\b(?:vq_[a-z]+_audio_[a-z0-9_]+|audio_future\d*|end_of_task)\b/gi;
@@ -375,6 +377,43 @@ export function parseSoundboardDirectiveSequence(rawText) {
     references,
     sequence
   };
+}
+
+/**
+ * Extract trailing [[NOTE:...]] directives from raw LLM output.
+ * Notes are private observations the brain writes for itself — they are
+ * never spoken aloud.  Call this on the raw generation text *before*
+ * normalizeSkipSentinel / normalizeVoiceReplyText so that a
+ * `[SKIP] [[NOTE:...]]` output correctly resolves to a skip + stored note.
+ *
+ * Returns { text, notes } where `text` has all [[NOTE:...]] stripped and
+ * `notes` is the extracted note strings (usually 0 or 1).
+ */
+export function extractNoteDirectives(rawText: unknown): {
+  text: string;
+  notes: string[];
+} {
+  const text = String(rawText || "").trim();
+  if (!text) return { text: "", notes: [] };
+
+  const notes: string[] = [];
+  NOTE_DIRECTIVE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null = null;
+  while ((match = NOTE_DIRECTIVE_RE.exec(text))) {
+    const note = String(match?.[1] || "").trim().slice(0, NOTE_DIRECTIVE_MAX_LEN);
+    if (note) notes.push(note);
+  }
+  NOTE_DIRECTIVE_RE.lastIndex = 0;
+
+  if (notes.length === 0) return { text, notes: [] };
+
+  const withoutNotes = text
+    .replace(NOTE_DIRECTIVE_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  NOTE_DIRECTIVE_RE.lastIndex = 0;
+
+  return { text: withoutNotes, notes };
 }
 
 export function shortError(text) {

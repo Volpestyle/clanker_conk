@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { createTestSettings } from "../testSettings.ts";
 import {
+  extractNoteDirectives,
   inspectAsrTranscript,
   isBotNameAddressed,
   extractSoundboardDirective,
@@ -333,4 +334,36 @@ test("isBotNameAddressed normalizes punctuation and accents for exact matching",
     }),
     false
   );
+});
+
+// --- extractNoteDirectives ---
+
+test("extractNoteDirectives extracts a trailing [[NOTE:...]] and strips it from text", () => {
+  const result = extractNoteDirectives("oh nice, you opened Chrome [[NOTE:user switched to Chrome]]");
+  assert.equal(result.text, "oh nice, you opened Chrome");
+  assert.deepEqual(result.notes, ["user switched to Chrome"]);
+});
+
+test("extractNoteDirectives handles [SKIP] with a trailing note", () => {
+  const result = extractNoteDirectives("[SKIP] [[NOTE:still on the desktop, nothing changed]]");
+  assert.equal(result.text, "[SKIP]");
+  assert.deepEqual(result.notes, ["still on the desktop, nothing changed"]);
+});
+
+test("extractNoteDirectives returns original text when no notes present", () => {
+  const result = extractNoteDirectives("just a normal reply with no directives");
+  assert.equal(result.text, "just a normal reply with no directives");
+  assert.deepEqual(result.notes, []);
+});
+
+test("extractNoteDirectives handles empty and null input", () => {
+  assert.deepEqual(extractNoteDirectives(""), { text: "", notes: [] });
+  assert.deepEqual(extractNoteDirectives(null), { text: "", notes: [] });
+  assert.deepEqual(extractNoteDirectives(undefined), { text: "", notes: [] });
+});
+
+test("extractNoteDirectives truncates notes to max length", () => {
+  const longNote = "a".repeat(300);
+  const result = extractNoteDirectives(`hello [[NOTE:${longNote}]]`);
+  assert.equal(result.notes[0]?.length, 220);
 });

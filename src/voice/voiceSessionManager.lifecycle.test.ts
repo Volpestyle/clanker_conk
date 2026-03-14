@@ -3942,8 +3942,8 @@ test("requestRealtimeTextUtterance prefers playback-specific realtime client met
   assert.equal(playbackPrompts.length, 1);
 });
 
-test("capture abort drains queued assistant speech once a non-turn capture stops blocking playback", () => {
-  const { manager, logs } = createManager();
+test("utterance fires immediately even during active capture (floor-taking symmetry)", () => {
+  const { manager } = createManager();
   const prompts = [];
   const voxClient = new EventEmitter();
   voxClient.subscribeUser = () => {};
@@ -3975,6 +3975,8 @@ test("capture abort drains queued assistant speech once a non-turn capture stops
     settings: session.settingsSnapshot
   });
 
+  // Active captures no longer block bot speech — the bot speaks while
+  // humans are talking, just like a person in a call.
   const queued = manager.requestRealtimeTextUtterance({
     session,
     text: "yo what's up",
@@ -3982,23 +3984,12 @@ test("capture abort drains queued assistant speech once a non-turn capture stops
   });
 
   assert.equal(queued, true);
-  assert.equal(prompts.length, 0);
-  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
-
-  const capture = session.userCaptures.get("speaker-1");
-  assert.ok(capture);
-  capture.abort("capture_suppressed");
-
+  // Utterance fires immediately, not deferred until capture ends.
   assert.equal(prompts.length, 1);
   assert.match(prompts[0] || "", /yo what's up/i);
-  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 0);
-  assert.equal(
-    logs.some((entry) => entry?.content === "realtime_assistant_utterance_queue_drained"),
-    true
-  );
 });
 
-test("promoted capture finalization does not revive queued assistant speech before downstream turn admission", async () => {
+test("utterance fires immediately during promoted capture (floor-taking symmetry)", async () => {
   const { manager } = createManager();
   manager.shouldUsePerUserTranscription = () => false;
   manager.shouldUseSharedTranscription = () => false;
@@ -4041,6 +4032,7 @@ test("promoted capture finalization does not revive queued assistant speech befo
   voxClient.emit("userAudio", "speaker-1", speechPcm);
   await flushMicrotasks();
 
+  // Active captures (even promoted ones) no longer block bot speech.
   const queued = manager.requestRealtimeTextUtterance({
     session,
     text: "old queued line",
@@ -4048,16 +4040,9 @@ test("promoted capture finalization does not revive queued assistant speech befo
   });
 
   assert.equal(queued, true);
-  assert.equal(prompts.length, 0);
-  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
-
-  const capture = session.userCaptures.get("speaker-1");
-  assert.ok(capture);
-  capture.finalize("stream_end");
-
-  assert.equal(prompts.length, 0);
-  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
-  assert.equal(queuedTurns.length, 1);
+  // Utterance fires immediately — not deferred.
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0] || "", /old queued line/i);
 });
 
 test("forwardRealtimeTextTurnToBrain logs prompt details for bridge-style realtime turns", async () => {

@@ -479,6 +479,20 @@ Native subscription tuning and music Go Live visualizer settings live under `voi
 
 There is no separate standalone settings block for outbound native publish. Music playback reuses `voice.streamWatch.visualizerMode` to choose between the shared audio-visualizer path and the legacy source-video relay path.
 
+### Brain Context Mode
+
+`voice.streamWatch.brainContextMode` controls how the bot processes screen share frames:
+
+- **`context_brain`** (default): A separate vision triage model analyzes each frame and produces a short note + urgency classification (`high` / `low` / `none`). Only `high` urgency frames trigger a main brain turn. Notes accumulate as rolling context injected into all subsequent voice brain replies.
+
+- **`direct`**: No vision triage model. Frames are sent directly to the main voice brain as image attachments. The brain sees the screen itself and decides whether to speak. The brain can write `[[NOTE:your observation]]` directives to maintain private self-notes about what it has seen — these persist as rolling context for future turns, but the images themselves are ephemeral (fire and forget). A `[SKIP] [[NOTE:...]]` output means "I see this, I'm noting it, but I have nothing to say right now."
+
+Direct mode settings:
+- `directMinIntervalSeconds` (default: 10, range: 3–120): minimum gap between direct brain turns
+- `directMaxEntries` (default: 12): maximum rolling self-note buffer size
+
+Direct mode is more aligned with agent autonomy — the bot decides what is interesting, not a separate triage model. It is also more expensive per frame since the main brain processes the full conversation context plus an image on each turn.
+
 ## Observability
 
 ### Stream discovery layer (implemented)

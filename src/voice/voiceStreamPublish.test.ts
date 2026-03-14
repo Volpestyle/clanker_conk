@@ -351,7 +351,10 @@ test("startMusicStreamPublish preserves legacy video-track publish when visualiz
       resolvedDirectUrl: "false"
     }
   ]);
-  assert.equal(harness.session.streamPublish?.visualizerMode, "off");
+  // effectiveVisualizerMode always resolves to a non-off value (default "cqt")
+  // even when the configured mode is off — the video-track path is chosen
+  // instead of the visualizer, but the stored mode reflects the resolved fallback.
+  assert.equal(harness.session.streamPublish?.visualizerMode, "cqt");
 });
 
 test("startBrowserStreamPublish reuses an active self stream and switches the media source to browser frames", () => {
