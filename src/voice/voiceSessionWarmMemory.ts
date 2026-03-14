@@ -54,15 +54,23 @@ export interface WarmMemorySnapshot {
   sourceTranscript: string;
 }
 
+export interface IngestEmbeddingEntry {
+  /** The transcript text this embedding was computed for. */
+  transcript: string;
+  /** The embedding vector and model. */
+  embedding: number[];
+  model: string;
+}
+
 export interface WarmMemoryState {
   /** Current topic fingerprint. Null until first turn completes. */
   topicFingerprint: TopicFingerprint | null;
   /** Cached memory snapshot from the last completed turn. */
   snapshot: WarmMemorySnapshot | null;
-  /** The last ingest embedding vector (captured from memory ingest). */
-  lastIngestEmbedding: { embedding: number[]; model: string } | null;
-  /** Promise for the in-flight ingest embedding (resolves with the vector). */
-  pendingIngestEmbedding: Promise<{ embedding: number[]; model: string } | null> | null;
+  /** The last resolved ingest embedding, keyed by transcript. */
+  lastIngestEmbedding: IngestEmbeddingEntry | null;
+  /** Promise for the in-flight ingest embedding (resolves with keyed entry). */
+  pendingIngestEmbedding: Promise<IngestEmbeddingEntry | null> | null;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────

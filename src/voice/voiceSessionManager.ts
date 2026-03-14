@@ -6095,6 +6095,7 @@ export class VoiceSessionManager {
         this.memory &&
         typeof this.memory.getQueryEmbeddingForRetrieval === "function"
       ) {
+        const transcriptForKey = normalizedTranscript;
         const embeddingPromise = this.memory
           .getQueryEmbeddingForRetrieval({
             queryText: normalizedTranscript,
@@ -6108,11 +6109,13 @@ export class VoiceSessionManager {
           })
           .then((result) => {
             if (result?.embedding?.length && result?.model) {
-              session.warmMemory.lastIngestEmbedding = {
+              const entry = {
+                transcript: transcriptForKey,
                 embedding: result.embedding,
                 model: result.model
               };
-              return { embedding: result.embedding, model: result.model };
+              session.warmMemory.lastIngestEmbedding = entry;
+              return entry;
             }
             return null;
           })
@@ -7579,6 +7582,11 @@ export class VoiceSessionManager {
           this.refreshSessionUserFactProfile(session, stateUserId);
         } else if (movedOutOfSession) {
           session.factProfiles?.delete?.(stateUserId);
+        }
+        // Participant change invalidates warm memory snapshot since it
+        // contains participant-dependent fact profiles and behavioral context.
+        if (session.warmMemory?.snapshot) {
+          session.warmMemory.snapshot = null;
         }
         const recordedEvent = this.recordVoiceMembershipEvent({
           session,

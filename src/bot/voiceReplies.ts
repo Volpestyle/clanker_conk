@@ -866,16 +866,23 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
 
   if (activeVoiceSession?.warmMemory) {
     const wm = activeVoiceSession.warmMemory;
+    // Resolve the pending ingest embedding — keyed by transcript to prevent
+    // cross-turn contamination when multiple transcripts land quickly.
+    let ingestEntry: import("../voice/voiceSessionWarmMemory.ts").IngestEmbeddingEntry | null = null;
     if (wm.pendingIngestEmbedding) {
       try {
-        turnEmbedding = await wm.pendingIngestEmbedding;
+        ingestEntry = await wm.pendingIngestEmbedding;
       } catch {
-        turnEmbedding = null;
+        ingestEntry = null;
       }
       wm.pendingIngestEmbedding = null;
     }
-    if (!turnEmbedding && wm.lastIngestEmbedding) {
-      turnEmbedding = wm.lastIngestEmbedding;
+    if (!ingestEntry && wm.lastIngestEmbedding) {
+      ingestEntry = wm.lastIngestEmbedding;
+    }
+    // Only use the embedding if it matches THIS turn's transcript
+    if (ingestEntry && ingestEntry.transcript === incomingTranscript) {
+      turnEmbedding = { embedding: ingestEntry.embedding, model: ingestEntry.model };
     }
 
     const warmResult = resolveWarmMemory(wm, turnEmbedding);
@@ -1106,7 +1113,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     }
   });
 
-  // Capture warm snapshot for subsequent turns
+  // Capture warm snapshot for subsequent turns (only after full retrieval)
   if (activeVoiceSession?.warmMemory) {
     captureWarmSnapshot(activeVoiceSession.warmMemory, {
       continuity: {
@@ -1118,12 +1125,14 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       capturedAt: Date.now(),
       sourceTranscript: incomingTranscript
     });
-    // Update topic fingerprint with this turn's embedding
-    if (turnEmbedding) {
-      updateTopicFingerprint(activeVoiceSession.warmMemory, turnEmbedding, "user");
-    }
   }
   } // close else (full retrieval path)
+
+  // Always update the topic fingerprint — even on warm-hit turns — so
+  // gradual drift is tracked and the fingerprint stays current.
+  if (activeVoiceSession?.warmMemory && turnEmbedding) {
+    updateTopicFingerprint(activeVoiceSession.warmMemory, turnEmbedding, "user");
+  }
 
   const voiceGenerationBinding = getResolvedVoiceGenerationBinding(settings);
   const replyGeneration = getReplyGenerationSettings(settings);
