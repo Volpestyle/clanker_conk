@@ -6,6 +6,21 @@ const NATIVE_DISCORD_FRAME_DECODE_TIMEOUT_MS = 2_000;
 
 let cachedFfmpegPath: string | null | undefined;
 
+async function waitForNonEmptyFile(path: string, timeoutMs: number): Promise<Buffer | null> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= timeoutMs) {
+    const file = Bun.file(path);
+    if (await file.exists()) {
+      const output = Buffer.from(await file.arrayBuffer());
+      if (output.length > 0) {
+        return output;
+      }
+    }
+    await Bun.sleep(25);
+  }
+  return null;
+}
+
 function resolveFfmpegPath(): string | null {
   if (cachedFfmpegPath !== undefined) {
     return cachedFfmpegPath;
@@ -321,24 +336,23 @@ export async function decodeNativeDiscordVideoFrameToStillImage({
   }, NATIVE_DISCORD_FRAME_DECODE_TIMEOUT_MS);
 
   try {
+    const output = await waitForNonEmptyFile(outputPath, NATIVE_DISCORD_FRAME_DECODE_TIMEOUT_MS);
+    if (output) {
+      try {
+        process.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+      return {
+        mimeType: "image/jpeg",
+        dataBase64: output.toString("base64")
+      };
+    }
+
     const [stderrText, exitCode] = await Promise.all([
       new Response(process.stderr).text(),
       process.exited
     ]);
-
-    // Check output file first — ffmpeg may have produced valid output even
-    // if it was killed for timeout or exited non-zero.
-    const outputFile = Bun.file(outputPath);
-    const outputExists = await outputFile.exists();
-    if (outputExists) {
-      const output = Buffer.from(await outputFile.arrayBuffer());
-      if (output.length > 0) {
-        return {
-          mimeType: "image/jpeg",
-          dataBase64: output.toString("base64")
-        };
-      }
-    }
 
     if (killedForTimeout) {
       throw new Error(`ffmpeg_decode_timeout:${stderrText.trim().slice(0, 500) || "no_stderr"}`);
