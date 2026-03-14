@@ -16,3 +16,6 @@ tests/e2e/.settings-snapshot.json
 # Audio test fixtures (binary, regenerated on first run)
 tests/fixtures/*.wav
 tests/fixtures/*.pcm
+
+# Xcode derived data
+.deriveddata-ios-setup-refresh/

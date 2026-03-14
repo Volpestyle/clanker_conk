@@ -121,6 +121,20 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
       ),
       replyPath: normalizedReplyPath,
       ttsMode: normalizedTtsMode,
+      thinking:
+        normalizeString(
+          conversationPolicy.thinking,
+          DEFAULT_SETTINGS.voice.conversationPolicy.thinking,
+          20
+        ).toLowerCase() === "think_aloud"
+          ? "think_aloud"
+          : normalizeString(
+              conversationPolicy.thinking,
+              DEFAULT_SETTINGS.voice.conversationPolicy.thinking,
+              20
+            ).toLowerCase() === "enabled"
+            ? "enabled"
+            : "disabled",
       operationalMessages: normalizeOperationalMessages(
         conversationPolicy.operationalMessages,
         DEFAULT_SETTINGS.voice.conversationPolicy.operationalMessages

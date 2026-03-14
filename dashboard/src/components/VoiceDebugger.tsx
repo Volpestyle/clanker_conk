@@ -696,7 +696,7 @@ function reconstructTurns(classified: ClassifiedEvent[]): ReconstructedTurn[] {
     }
 
     // Determine outcome
-    const lastFailed = stages.findLast((s) => s.status === "failed");
+    const lastFailed = [...stages].reverse().find((s) => s.status === "failed");
     const allPassed = stages.every(
       (s) => s.status === "passed" || s.status === "pending"
     );

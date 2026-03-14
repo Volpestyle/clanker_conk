@@ -156,7 +156,7 @@ Important tables:
 
 Entrypoint: Discord `messageCreate` handling in `src/bot.ts` for the selfbot user session.
 
-This fork is message-first. Any legacy interaction or app-command codepaths inherited from the bot-oriented codebase are compatibility leftovers, not the canonical control surface.
+This fork is message-first, but slash/app commands remain intentional fallback control surfaces for directly invoking capabilities when explicit operator control is useful. They complement the primary conversational surface rather than replacing it.
 
 Main stages:
 

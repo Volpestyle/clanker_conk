@@ -412,7 +412,6 @@ export function settingsToForm(settings: unknown) {
   const defaultVideoContext = defaults.videoContext;
   const defaultVision = defaults.vision;
   const defaultVoice = defaults.voice;
-  const defaultVoiceTranscription = defaults.voice.transcription;
   const defaultVoiceXai = defaults.voice.xai;
   const defaultVoiceOpenAiRealtime = defaults.voice.openaiRealtime;
   const defaultVoiceElevenLabsRealtime = defaults.voice.elevenLabsRealtime;
@@ -721,7 +720,7 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.openaiAudioApi?.ttsSpeed ?? defaults.voice.openaiAudioApi.ttsSpeed,
     voiceAsrEnabled: resolved?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
     voiceTranscriptionProvider:
-      resolved?.voice?.transcriptionProvider ?? defaultVoiceTranscription.provider ?? "openai",
+      resolved?.voice?.transcriptionProvider ?? defaultVoice.transcriptionProvider ?? "openai",
     voiceTextOnlyMode: resolved?.voice?.textOnlyMode ?? defaultVoice.textOnlyMode ?? false,
     voiceOperationalMessages: resolved?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "minimal",
     maxMessages: resolved?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
