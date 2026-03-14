@@ -9,18 +9,23 @@
 /* Begin PBXBuildFile section */
 		02DA752124881997C6A61E28 /* StatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 930D3294E39DDBC9D7353687 /* StatusDot.swift */; };
 		0ABB2A76F3730C288C2CC16A /* PulseConnectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 869448171F682226E4C2CE8F /* PulseConnectionState.swift */; };
+		164AC2CFF4A053245569A935 /* VoiceTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DA80C059EB314528E6B7D12 /* VoiceTab.swift */; };
 		199F78903ABA4C09EC7C2F7C /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 188DE079A3C48E839E2181A2 /* ConnectionStore.swift */; };
 		1DAD44C57C6F1C7C9C4B8AF0 /* RelativeTimestamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 740EE30FED1F2F0F03465F6B /* RelativeTimestamp.swift */; };
+		259E9A4716FED0F081AE0F3C /* MemoryFact.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9DCEB2AFA1F26221751099E /* MemoryFact.swift */; };
 		3929013A73D6C104F9DBB61E /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEADEAFF0CAE9533551AEA9 /* SetupView.swift */; };
 		39DB805B73B3C94FE83316D9 /* FilterChips.swift in Sources */ = {isa = PBXBuildFile; fileRef = 359880E88AD2D2363C8C9580 /* FilterChips.swift */; };
 		3A99058F6BFD4F2A5F7C473A /* MetricText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 173C00809F21ABC7E39D4AA1 /* MetricText.swift */; };
 		3CC1AA3B16489A8D585F6FC2 /* SSEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0FEFECEE3620B4FE3B77659 /* SSEClient.swift */; };
+		46C665FE8C3D6854FF54DCAC /* MemoryTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08EE0707E7CE800C67FF19DB /* MemoryTab.swift */; };
 		4A5723A18BACAA91F324E19E /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8229C47A563B9CFAFE03698A /* KeychainStore.swift */; };
 		5A78C67C58FB0D8F19D7BD10 /* ClankyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A82C80603DFEAB78A5F68C /* ClankyApp.swift */; };
 		5D22BC08D9F869869EBDADC2 /* BonjourBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1F211A8DDAE307E76F3FDB /* BonjourBrowser.swift */; };
+		771AC7A084B51598FF3AC891 /* MemoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54843E77A248A0726227A16E /* MemoryStore.swift */; };
 		774AC383BC47EC41330A54FF /* BonjourDiscoveryLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63333F7EC156C580625A3B1D /* BonjourDiscoveryLogic.swift */; };
 		889F8B3D0B3409E8D9623520 /* ActivityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47291789600C774B0601783 /* ActivityStore.swift */; };
 		891B80364285F4D67B8CAE61 /* ClankyClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B40826527D25E949CC79EA4 /* ClankyClient.swift */; };
+		942E1343B4BEC5FD8A3BB8DF /* VoiceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA9B1FF188B64A16C6100EDF /* VoiceStore.swift */; };
 		94726E78F64C8EC7E5C35D8A /* PulseConnectionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E90866977373AD614593F10C /* PulseConnectionStateTests.swift */; };
 		96C779E5D756CEFE7CE92BBA /* HapticEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A86088B15532564572E0A56C /* HapticEngine.swift */; };
 		9F8CEE63468EFB989ABD6363 /* ClankyAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DB6B02E0963658583B07883 /* ClankyAction.swift */; };
@@ -32,6 +37,7 @@
 		DAC1A912D57917BB9A0486AD /* Stats.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2BCDA09EF1796B414E48660 /* Stats.swift */; };
 		E8DACD310A54F2D6B848F46A /* ActionRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59D141D40F3B5437285D6B18 /* ActionRow.swift */; };
 		ECB9FE337084AB625EDE0566 /* BonjourDiscoveryLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF9988AE148C0C7D39E351A /* BonjourDiscoveryLogicTests.swift */; };
+		EDDEF8E80EEF00134EEC6D60 /* VoiceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B34A3F99FFB67F40DD9F42 /* VoiceSession.swift */; };
 		F6BD2C22A592E964BF98BEEF /* ClankyClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41742759F1A548CEDAC4114B /* ClankyClientTests.swift */; };
 		FBC9A278FAC23463C7949720 /* Connection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0A5750DC48CF53C59F3764D /* Connection.swift */; };
 /* End PBXBuildFile section */
@@ -47,6 +53,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		08EE0707E7CE800C67FF19DB /* MemoryTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryTab.swift; sourceTree = "<group>"; };
 		0F135E4A4800D517F115F314 /* ActionDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionDetail.swift; sourceTree = "<group>"; };
 		1636BF04E21C3FA7F2167DBE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		173C00809F21ABC7E39D4AA1 /* MetricText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricText.swift; sourceTree = "<group>"; };
@@ -58,8 +65,10 @@
 		41742759F1A548CEDAC4114B /* ClankyClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClankyClientTests.swift; sourceTree = "<group>"; };
 		4A1F211A8DDAE307E76F3FDB /* BonjourBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourBrowser.swift; sourceTree = "<group>"; };
 		50B427E9B17AB6890BB7EB42 /* PulseTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulseTab.swift; sourceTree = "<group>"; };
+		54843E77A248A0726227A16E /* MemoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryStore.swift; sourceTree = "<group>"; };
 		59D141D40F3B5437285D6B18 /* ActionRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionRow.swift; sourceTree = "<group>"; };
 		5B40826527D25E949CC79EA4 /* ClankyClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClankyClient.swift; sourceTree = "<group>"; };
+		5DA80C059EB314528E6B7D12 /* VoiceTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTab.swift; sourceTree = "<group>"; };
 		63333F7EC156C580625A3B1D /* BonjourDiscoveryLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourDiscoveryLogic.swift; sourceTree = "<group>"; };
 		6DD5553116B7B3FC4526C675 /* StatsBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsBar.swift; sourceTree = "<group>"; };
 		740EE30FED1F2F0F03465F6B /* RelativeTimestamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTimestamp.swift; sourceTree = "<group>"; };
@@ -67,7 +76,9 @@
 		869448171F682226E4C2CE8F /* PulseConnectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulseConnectionState.swift; sourceTree = "<group>"; };
 		930D3294E39DDBC9D7353687 /* StatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusDot.swift; sourceTree = "<group>"; };
 		A86088B15532564572E0A56C /* HapticEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticEngine.swift; sourceTree = "<group>"; };
+		A9DCEB2AFA1F26221751099E /* MemoryFact.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryFact.swift; sourceTree = "<group>"; };
 		B0FEFECEE3620B4FE3B77659 /* SSEClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSEClient.swift; sourceTree = "<group>"; };
+		B1B34A3F99FFB67F40DD9F42 /* VoiceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSession.swift; sourceTree = "<group>"; };
 		B47291789600C774B0601783 /* ActivityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityStore.swift; sourceTree = "<group>"; };
 		CCF9988AE148C0C7D39E351A /* BonjourDiscoveryLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourDiscoveryLogicTests.swift; sourceTree = "<group>"; };
 		D0A5750DC48CF53C59F3764D /* Connection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Connection.swift; sourceTree = "<group>"; };
@@ -77,15 +88,18 @@
 		EEEADEAFF0CAE9533551AEA9 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
 		EFF620C4BFD866DAB0E8E725 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
 		F9A82C80603DFEAB78A5F68C /* ClankyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClankyApp.swift; sourceTree = "<group>"; };
+		FA9B1FF188B64A16C6100EDF /* VoiceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
 		16B310F06C528FC4B69B6CF2 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				4DF70DBD5207BAEFCBC1A449 /* Memory */,
 				1B0048CEE250857C0CD3E608 /* Pulse */,
 				DEB03DBE059B69DD00817ACF /* Setup */,
 				330603CDCC19953391F1F159 /* Shared */,
+				9070BD115EA122F862F7267C /* Voice */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -136,6 +150,14 @@
 			path = ClankyApp;
 			sourceTree = "<group>";
 		};
+		4DF70DBD5207BAEFCBC1A449 /* Memory */ = {
+			isa = PBXGroup;
+			children = (
+				08EE0707E7CE800C67FF19DB /* MemoryTab.swift */,
+			);
+			path = Memory;
+			sourceTree = "<group>";
+		};
 		66B21D80E4C6EABC1ECAF4C7 /* Extensions */ = {
 			isa = PBXGroup;
 			children = (
@@ -149,8 +171,18 @@
 			children = (
 				B47291789600C774B0601783 /* ActivityStore.swift */,
 				188DE079A3C48E839E2181A2 /* ConnectionStore.swift */,
+				54843E77A248A0726227A16E /* MemoryStore.swift */,
+				FA9B1FF188B64A16C6100EDF /* VoiceStore.swift */,
 			);
 			path = Stores;
+			sourceTree = "<group>";
+		};
+		9070BD115EA122F862F7267C /* Voice */ = {
+			isa = PBXGroup;
+			children = (
+				5DA80C059EB314528E6B7D12 /* VoiceTab.swift */,
+			);
+			path = Voice;
 			sourceTree = "<group>";
 		};
 		C5081C1F501256E57716E784 /* Core */ = {
@@ -182,7 +214,9 @@
 			children = (
 				2DB6B02E0963658583B07883 /* ClankyAction.swift */,
 				D0A5750DC48CF53C59F3764D /* Connection.swift */,
+				A9DCEB2AFA1F26221751099E /* MemoryFact.swift */,
 				D2BCDA09EF1796B414E48660 /* Stats.swift */,
+				B1B34A3F99FFB67F40DD9F42 /* VoiceSession.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -308,6 +342,9 @@
 				39DB805B73B3C94FE83316D9 /* FilterChips.swift in Sources */,
 				96C779E5D756CEFE7CE92BBA /* HapticEngine.swift in Sources */,
 				4A5723A18BACAA91F324E19E /* KeychainStore.swift in Sources */,
+				259E9A4716FED0F081AE0F3C /* MemoryFact.swift in Sources */,
+				771AC7A084B51598FF3AC891 /* MemoryStore.swift in Sources */,
+				46C665FE8C3D6854FF54DCAC /* MemoryTab.swift in Sources */,
 				3A99058F6BFD4F2A5F7C473A /* MetricText.swift in Sources */,
 				D9CD4B5B8E0C7A9FA57ABAF4 /* PanelView.swift in Sources */,
 				0ABB2A76F3730C288C2CC16A /* PulseConnectionState.swift in Sources */,
@@ -318,6 +355,9 @@
 				DAC1A912D57917BB9A0486AD /* Stats.swift in Sources */,
 				A85E489A33C0714548B53737 /* StatsBar.swift in Sources */,
 				02DA752124881997C6A61E28 /* StatusDot.swift in Sources */,
+				EDDEF8E80EEF00134EEC6D60 /* VoiceSession.swift in Sources */,
+				942E1343B4BEC5FD8A3BB8DF /* VoiceStore.swift in Sources */,
+				164AC2CFF4A053245569A935 /* VoiceTab.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

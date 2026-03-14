@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// PULSE tab — real-time action feed. The heartbeat of the app.
+/// PULSE tab — real-time action feed with rich stats dashboard.
 struct PulseTab: View {
     @Environment(ActivityStore.self) private var activity
     @Environment(ConnectionStore.self) private var connection
@@ -9,12 +9,12 @@ struct PulseTab: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Connection header
-                connectionHeader
+                // Runtime status header
+                runtimeHeader
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
 
-                // Stats bar
+                // Stats dashboard
                 StatsBar(stats: activity.stats)
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
@@ -35,25 +35,47 @@ struct PulseTab: View {
         }
     }
 
-    // MARK: - Connection Header
+    // MARK: - Runtime Header
 
-    private var connectionHeader: some View {
-        HStack(spacing: 8) {
-            StatusDot(status: connection.status)
+    private var runtimeHeader: some View {
+        VStack(spacing: 6) {
+            // Top row: connection status + cost today
+            HStack(spacing: 8) {
+                StatusDot(status: connection.status)
 
-            Text(connection.status.label)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .tracking(1)
-                .foregroundStyle(connection.status.isConnected ? .primary : .secondary)
+                Text(connection.status.label)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(1)
+                    .foregroundStyle(connection.status.isConnected ? .primary : .secondary)
 
-            Spacer()
+                if let stats = activity.stats {
+                    // Gateway health indicator
+                    if stats.gatewayHealthy {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(Color.positive)
+                    } else {
+                        Image(systemName: "bolt.trianglebadge.exclamationmark")
+                            .font(.system(size: 8))
+                            .foregroundStyle(Color.orange)
+                    }
 
-            if let stats = activity.stats {
-                CostText(amount: stats.costToday, size: 13)
-                Text("TODAY")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .tracking(0.6)
-                    .foregroundStyle(.tertiary)
+                    if stats.guildCount > 0 {
+                        Text("\(stats.guildCount) guild\(stats.guildCount == 1 ? "" : "s")")
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                Spacer()
+
+                if let stats = activity.stats {
+                    CostText(amount: stats.costToday, size: 13)
+                    Text("TODAY")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .tracking(0.6)
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
     }

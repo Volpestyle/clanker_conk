@@ -10,11 +10,20 @@ struct StatsPayload: Codable, Sendable {
         let isReady: Bool?
         let publicHttps: PublicHttpsInfo?
         let guildCount: Int?
+        let userTag: String?
+        let gateway: GatewayInfo?
 
         struct PublicHttpsInfo: Codable, Sendable {
             let enabled: Bool?
             let publicUrl: String?
             let status: String?
+        }
+
+        struct GatewayInfo: Codable, Sendable {
+            let hasConnectedAtLeastOnce: Bool?
+            let reconnectInFlight: Bool?
+            let reconnectAttempts: Int?
+            let lastGatewayEventAt: String?
         }
     }
 
@@ -22,6 +31,7 @@ struct StatsPayload: Codable, Sendable {
         let totalCostUsd: Double?
         let last24h: Last24h?
         let dailyCost: DailyCost?
+        let performance: PerformanceInfo?
 
         struct Last24h: Codable, Sendable {
             let actionCount: Int?
@@ -34,12 +44,37 @@ struct StatsPayload: Codable, Sendable {
 
         struct DailyCost: Codable, Sendable {
             let totalUsd: Double?
+            let rows: [DailyCostRow]?
+        }
+
+        struct DailyCostRow: Codable, Sendable {
+            let day: String?
+            let usd: Double?
+        }
+
+        struct PerformanceInfo: Codable, Sendable {
+            let replyLatency: ReplyLatencyInfo?
+
+            struct ReplyLatencyInfo: Codable, Sendable {
+                let sampleCount: Int?
+                let totalMs: LatencyBucket?
+
+                struct LatencyBucket: Codable, Sendable {
+                    let p50: Double?
+                    let p90: Double?
+                    let p99: Double?
+                }
+            }
         }
     }
 
     // Convenience accessors
     var costToday: Double {
         stats?.dailyCost?.totalUsd ?? stats?.totalCostUsd ?? 0
+    }
+
+    var totalCostAllTime: Double {
+        stats?.totalCostUsd ?? 0
     }
 
     var actionCount24h: Int {
@@ -80,6 +115,23 @@ struct StatsPayload: Codable, Sendable {
 
     var tunnelUrl: String? {
         runtime?.publicHttps?.publicUrl
+    }
+
+    var dailyCostRows: [StatsInfo.DailyCostRow] {
+        stats?.dailyCost?.rows ?? []
+    }
+
+    var latencyP50Ms: Double? {
+        stats?.performance?.replyLatency?.totalMs?.p50
+    }
+
+    var latencyP90Ms: Double? {
+        stats?.performance?.replyLatency?.totalMs?.p90
+    }
+
+    var gatewayHealthy: Bool {
+        runtime?.gateway?.hasConnectedAtLeastOnce == true &&
+        runtime?.gateway?.reconnectInFlight != true
     }
 }
 

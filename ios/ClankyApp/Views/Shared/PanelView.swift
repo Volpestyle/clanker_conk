@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Reusable glass panel container — thin borders, monospaced header, liquid glass material.
+/// Reusable panel container — thin borders, monospaced header, native grouped background.
 struct PanelView<Content: View>: View {
     let label: String
     var trailing: String? = nil
@@ -32,7 +32,7 @@ struct PanelView<Content: View>: View {
             content()
                 .padding(12)
         }
-        .background(.ultraThinMaterial)
+        .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -41,14 +41,14 @@ struct PanelView<Content: View>: View {
     }
 }
 
-/// Minimal panel without header — just glass + border.
+/// Minimal panel without header — just background + border.
 struct GlassCard<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         content()
             .padding(12)
-            .background(.ultraThinMaterial)
+            .background(Color(.secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)

@@ -80,6 +80,13 @@ struct ClankyClient: Sendable {
         )
     }
 
+    // MARK: - Generic fetch
+
+    /// Public fetch for stores that need custom API calls.
+    func fetch(_ method: String, path: String) async throws -> (Data, URLResponse) {
+        return try await request(method, path: path)
+    }
+
     // MARK: - Private
 
     private func request(_ method: String, path: String) async throws -> (Data, URLResponse) {

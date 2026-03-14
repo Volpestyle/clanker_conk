@@ -4,6 +4,8 @@ import SwiftUI
 struct ClankyApp: App {
     @State private var connectionStore = ConnectionStore()
     @State private var activityStore = ActivityStore()
+    @State private var voiceStore = VoiceStore()
+    @State private var memoryStore = MemoryStore()
 
     var body: some Scene {
         WindowGroup {
@@ -11,8 +13,13 @@ struct ClankyApp: App {
                 ContentView()
                     .environment(connectionStore)
                     .environment(activityStore)
+                    .environment(voiceStore)
+                    .environment(memoryStore)
                     .task {
                         await activityStore.connect(using: connectionStore)
+                    }
+                    .task {
+                        await voiceStore.connect(using: connectionStore)
                     }
             } else {
                 SetupView()
@@ -25,6 +32,7 @@ struct ClankyApp: App {
 struct ContentView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(ActivityStore.self) private var activity
+    @Environment(VoiceStore.self) private var voice
 
     var body: some View {
         TabView {
@@ -33,19 +41,19 @@ struct ContentView: View {
             }
 
             Tab("VOICE", systemImage: "waveform") {
-                PlaceholderTab(title: "VOICE", subtitle: "Phase 2")
+                VoiceTab()
             }
 
             Tab("BRAIN", systemImage: "brain") {
-                PlaceholderTab(title: "BRAIN", subtitle: "Phase 3")
+                PlaceholderTab(title: "BRAIN", subtitle: "Coming Soon")
             }
 
             Tab("MEMORY", systemImage: "memorychip") {
-                PlaceholderTab(title: "MEMORY", subtitle: "Phase 3")
+                MemoryTab()
             }
 
             Tab("CMD", systemImage: "terminal") {
-                PlaceholderTab(title: "COMMAND", subtitle: "Phase 4")
+                PlaceholderTab(title: "COMMAND", subtitle: "Coming Soon")
             }
         }
         .tabViewStyle(.tabBarOnly)
