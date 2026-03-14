@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
   PublicHttpsEntrypoint,
   extractCloudflaredPublicUrl,
+  isBenignCloudflaredLine,
   resolvePublicHttpsTargetUrl
 } from "./publicHttpsEntrypoint.ts";
 
@@ -17,6 +18,21 @@ test("extractCloudflaredPublicUrl returns trycloudflare URL from line", () => {
 test("extractCloudflaredPublicUrl returns empty string when line has no URL", () => {
   const extracted = extractCloudflaredPublicUrl("cloudflared connected to edge");
   assert.equal(extracted, "");
+});
+
+test("isBenignCloudflaredLine detects remote cancel noise", () => {
+  assert.equal(
+    isBenignCloudflaredLine(
+      '2026-03-13T19:59:00Z ERR Request failed error="stream 21 canceled by remote with error code 0"'
+    ),
+    true
+  );
+  assert.equal(
+    isBenignCloudflaredLine(
+      '2026-03-13T18:58:30Z ERR failed to serve tunnel connection error="accept stream listener encountered a failure while serving"'
+    ),
+    false
+  );
 });
 
 test("resolvePublicHttpsTargetUrl falls back to localhost dashboard", () => {
@@ -178,6 +194,23 @@ test("PublicHttpsEntrypoint handleCloudflaredLine updates ready, starting, and e
     actions.some((entry) => String(entry.content).includes("public_https_entrypoint_log_stderr")),
     true
   );
+});
+
+test("PublicHttpsEntrypoint ignores remote-cancel stderr noise", () => {
+  const { entrypoint, actions } = createEntrypoint({
+    publicHttpsEnabled: true
+  });
+  entrypoint.state.status = "ready";
+  entrypoint.state.publicUrl = "https://fancy-cat-bot.trycloudflare.com";
+
+  entrypoint.handleCloudflaredLine(
+    '2026-03-13T19:59:00Z ERR Request failed error="stream 21 canceled by remote with error code 0"',
+    "stderr"
+  );
+
+  assert.equal(entrypoint.state.status, "ready");
+  assert.equal(entrypoint.state.lastError, "");
+  assert.equal(actions.length, 0);
 });
 
 test("PublicHttpsEntrypoint logAction sanitizes output and tolerates missing store logger", () => {

@@ -87,7 +87,8 @@ struct PulseTab: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        if activity.isConnected {
+        switch pulseConnectionState {
+        case .waitingForEvents:
             VStack(spacing: 8) {
                 Text("WAITING FOR EVENTS")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -98,9 +99,10 @@ struct PulseTab: View {
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
-        } else {
+
+        case .connecting:
             VStack(spacing: 8) {
-                Text("DISCONNECTED")
+                Text("CONNECTING TO PULSE")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .tracking(1)
                     .foregroundStyle(.secondary)
@@ -108,6 +110,33 @@ struct PulseTab: View {
                 ProgressView()
                     .scaleEffect(0.8)
             }
+
+        case .disconnected:
+            VStack(spacing: 8) {
+                Text("DISCONNECTED")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .tracking(1)
+                    .foregroundStyle(.secondary)
+
+                Image(systemName: "wifi.exclamationmark")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.tertiary)
+
+                Text("Trying to reconnect")
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+
+        case nil:
+            EmptyView()
         }
+    }
+
+    private var pulseConnectionState: PulseConnectionState? {
+        PulseConnectionState.resolve(
+            connectionStatus: connection.status,
+            activityStreamStatus: connection.activityStreamStatus,
+            hasActions: !activity.filteredActions.isEmpty
+        )
     }
 }

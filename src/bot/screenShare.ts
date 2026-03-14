@@ -82,6 +82,8 @@ type ScreenWatchVoiceSessionLike = {
   streamWatch?: {
     active?: boolean;
     targetUserId?: string | null;
+    latestFrameMimeType?: string | null;
+    latestFrameDataBase64?: string | null;
   } | null;
   nativeScreenShare?: {
     sharers?: Map<string, {
@@ -138,6 +140,8 @@ export interface ScreenShareRuntime extends BotContext {
       reason?: string;
       targetUserId?: string | null;
       fallback?: string | null;
+      reused?: boolean;
+      frameReady?: boolean;
     }>;
   } | null;
   composeVoiceOperationalMessage: (payload: {
@@ -681,14 +685,41 @@ function shouldSuppressLinkFallbackDueToNativeWatch(
   return transportStatus === "ready" || hasDecodedFrame || targetHasSharerState;
 }
 
-function buildNativeWatchAlreadyActiveResult(targetUserId: string | null) {
+function isNativeWatchFrameReady(
+  runtime: ScreenShareRuntime,
+  {
+    guildId,
+    targetUserId = null
+  }: {
+    guildId: string;
+    targetUserId?: string | null;
+  }
+) {
+  const session = getScreenWatchSession(runtime, guildId);
+  if (!session || session.ending) return false;
+
+  const activeTargetUserId = String(session.streamWatch?.targetUserId || "").trim() || null;
+  const normalizedTargetUserId = String(targetUserId || "").trim() || activeTargetUserId;
+  if (!normalizedTargetUserId) return false;
+  if (activeTargetUserId && activeTargetUserId !== normalizedTargetUserId) return false;
+
+  const latestFrameMimeType = String(session.streamWatch?.latestFrameMimeType || "").trim().toLowerCase();
+  const latestFrameDataBase64 = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
+  const hasBufferedFrame = latestFrameMimeType.startsWith("image/") && latestFrameDataBase64.length > 0;
+  const hasDecodedFrame = Number(session.nativeScreenShare?.lastDecodeSuccessAt || 0) > 0;
+  return hasBufferedFrame || hasDecodedFrame;
+}
+
+function buildNativeWatchAlreadyActiveResult(targetUserId: string | null, frameReady: boolean) {
   return {
     started: true,
+    reused: true,
     appendText: "",
     transport: "native" as const,
     linkUrl: null,
-    reason: "native_watch_already_active",
-    targetUserId
+    reason: frameReady ? "frame_context_ready" : "waiting_for_frame_context",
+    targetUserId,
+    frameReady
   };
 }
 
@@ -821,6 +852,19 @@ async function tryStartNativeScreenWatch(
     };
   }
 
+  if (shouldSuppressLinkFallbackDueToNativeWatch(runtime, {
+    guildId,
+    targetUserId: targetSelection.targetUserId
+  })) {
+    return buildNativeWatchAlreadyActiveResult(
+      targetSelection.targetUserId,
+      isNativeWatchFrameReady(runtime, {
+        guildId,
+        targetUserId: targetSelection.targetUserId
+      })
+    );
+  }
+
   const result = await voiceManager.enableWatchStreamForUser({
     guildId,
     requesterUserId,
@@ -861,15 +905,19 @@ async function tryStartNativeScreenWatch(
       targetUserId: result?.targetUserId || targetSelection.targetUserId,
       explicitTargetRequested: Boolean(normalizedTargetUserId),
       selectionReason: targetSelection.reason,
-      transport: "native"
+      transport: "native",
+      reused: Boolean(result?.reused),
+      frameReady: Boolean(result?.frameReady)
     }
   });
 
   return {
     started: true,
+    reused: Boolean(result?.reused),
     reason: String(result?.reason || "watching_started"),
     targetUserId: String(result?.targetUserId || targetSelection.targetUserId || "").trim() || null,
-    transport: "native"
+    transport: "native",
+    frameReady: Boolean(result?.frameReady)
   };
 }
 
@@ -996,7 +1044,13 @@ async function tryStartLinkFallback(
         stage: "pre_create"
       }
     });
-    return buildNativeWatchAlreadyActiveResult(requestedTargetUserId);
+    return buildNativeWatchAlreadyActiveResult(
+      requestedTargetUserId,
+      isNativeWatchFrameReady(runtime, {
+        guildId,
+        targetUserId: requestedTargetUserId
+      })
+    );
   }
 
   const resolveChannel =
@@ -1127,7 +1181,13 @@ async function tryStartLinkFallback(
         stage: "post_compose"
       }
     });
-    return buildNativeWatchAlreadyActiveResult(requestedTargetUserId);
+    return buildNativeWatchAlreadyActiveResult(
+      requestedTargetUserId,
+      isNativeWatchFrameReady(runtime, {
+        guildId,
+        targetUserId: requestedTargetUserId
+      })
+    );
   }
   if (!appendText) {
     return {
@@ -1359,6 +1419,7 @@ export async function startVoiceScreenWatch(
   expiresInMinutes?: number | null;
   targetUserId?: string | null;
   fallback?: string | null;
+  frameReady?: boolean;
 }> {
   if (signal?.aborted) {
     throw signal.reason instanceof Error ? signal.reason : new Error("AbortError: Screen watch start cancelled");

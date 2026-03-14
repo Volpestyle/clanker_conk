@@ -55,6 +55,45 @@ enum BonjourDiscoveryLogic {
         return absoluteString
     }
 
+    static func isEphemeralCloudflareTunnel(_ rawValue: String?) -> Bool {
+        guard
+            let normalized = normalizedTunnelURL(rawValue),
+            let url = URL(string: normalized),
+            let host = url.host?.lowercased()
+        else {
+            return false
+        }
+        return host.hasSuffix(".trycloudflare.com")
+    }
+
+    static func replacementTunnelURL(
+        currentInput: String,
+        previousAutoFilledTunnelURL: String?,
+        discoveredTunnelURL: String?
+    ) -> String? {
+        guard let discovered = normalizedTunnelURL(discoveredTunnelURL) else {
+            return nil
+        }
+
+        let trimmedCurrentInput = currentInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedCurrentInput.isEmpty {
+            return discovered
+        }
+
+        let current = normalizedTunnelURL(trimmedCurrentInput)
+        let previousAutoFilled = normalizedTunnelURL(previousAutoFilledTunnelURL)
+
+        if current == discovered {
+            return nil
+        }
+
+        if let previousAutoFilled, current == previousAutoFilled {
+            return discovered
+        }
+
+        return nil
+    }
+
     private static func bestService(from services: [BonjourDiscoveredService]) -> BonjourDiscoveredService? {
         services.sorted(by: compareServices).first
     }

@@ -91,6 +91,7 @@ interface QueueRealtimeTurnArgs {
   usedFallbackModelForTranscriptOverride?: boolean;
   transcriptLogprobsOverride?: VoiceTranscriptLogprob[] | null;
   bridgeUtteranceId?: number | null;
+  serverVadConfirmed?: boolean;
 }
 
 interface RunRealtimeTurnArgs extends QueueRealtimeTurnArgs {
@@ -446,6 +447,7 @@ export class TurnProcessor {
         decisionAddressingState?.currentSpeakerDirectedConfidence,
         0
       ),
+      heard: transcript || null,
       transcriptChars: transcript ? transcript.length : 0,
       transcriptionModelPrimary: logContext?.transcriptionModelPrimary || undefined,
       transcriptionModelFallback: logContext?.transcriptionModelFallback ?? undefined,
@@ -973,7 +975,8 @@ export class TurnProcessor {
     transcriptionPlanReasonOverride = "",
     usedFallbackModelForTranscriptOverride = false,
     transcriptLogprobsOverride = null,
-    bridgeUtteranceId = null
+    bridgeUtteranceId = null,
+    serverVadConfirmed = false
   }: QueueRealtimeTurnArgs): RealtimeQueuedTurn | null {
     if (!session || session.ending) return null;
     const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
@@ -1005,6 +1008,7 @@ export class TurnProcessor {
         : null,
       bridgeUtteranceId: Math.max(0, Number(bridgeUtteranceId || 0)) || null,
       bridgeRevision: 1,
+      serverVadConfirmed: Boolean(serverVadConfirmed),
       musicWakeFollowupEligibleAtCapture: Boolean(musicWakeFollowupEligibleAtCapture),
       mergedTurnCount: 1,
       droppedHeadBytes: 0
@@ -1044,7 +1048,8 @@ export class TurnProcessor {
       ),
       bridgeUtteranceId:
         Math.max(0, Number(incomingTurn.bridgeUtteranceId || existingTurn.bridgeUtteranceId || 0)) || null,
-      bridgeRevision: Math.max(1, Number(existingTurn.bridgeRevision || 1)) + 1
+      bridgeRevision: Math.max(1, Number(existingTurn.bridgeRevision || 1)) + 1,
+      serverVadConfirmed: Boolean(existingTurn.serverVadConfirmed || incomingTurn.serverVadConfirmed)
     };
   }
 
@@ -1261,7 +1266,8 @@ export class TurnProcessor {
     transcriptionPlanReasonOverride = "",
     usedFallbackModelForTranscriptOverride = false,
     transcriptLogprobsOverride = null,
-    bridgeUtteranceId = null
+    bridgeUtteranceId = null,
+    serverVadConfirmed = false
   }: QueueRealtimeTurnArgs) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
@@ -1281,7 +1287,8 @@ export class TurnProcessor {
       transcriptionPlanReasonOverride,
       usedFallbackModelForTranscriptOverride,
       transcriptLogprobsOverride,
-      bridgeUtteranceId
+      bridgeUtteranceId,
+      serverVadConfirmed
     });
     if (!queuedTurn) return;
 

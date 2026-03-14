@@ -39,6 +39,11 @@ import {
   parseResponseDoneUsage,
   resolveRealtimeProvider
 } from "./voiceSessionHelpers.ts";
+import {
+  createVoiceOutputLease,
+  hasActiveVoiceOutputLease,
+  normalizeVoiceOutputLeaseMode
+} from "./voiceOutputLease.ts";
 import type {
   MusicPlaybackPhase,
   VoiceSession
@@ -141,6 +146,75 @@ export class ReplyManager {
   private readonly passiveMusicWakeRefreshTimers = new WeakMap<VoiceSession, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly host: ReplyManagerHost) {}
+
+  private grantOutputLease(
+    session: VoiceSession,
+    {
+      mode = null,
+      requestId = null,
+      source = "voice_reply"
+    }: {
+      mode?: unknown;
+      requestId?: number | null;
+      source?: string | null;
+    } = {}
+  ) {
+    const lease = createVoiceOutputLease({ mode, requestId, source });
+    session.outputLease = lease;
+    if (!lease) return null;
+    this.host.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.botUserId,
+      content: "voice_output_lease_granted",
+      metadata: {
+        sessionId: session.id,
+        requestId: lease.requestId,
+        leaseMode: lease.mode,
+        source: lease.source,
+        expiresAt: lease.expiresAt
+      }
+    });
+    return lease;
+  }
+
+  private clearOutputLease(
+    session: VoiceSession,
+    reason = "released",
+    {
+      requestId = null
+    }: {
+      requestId?: number | null;
+    } = {}
+  ) {
+    const lease = session?.outputLease;
+    if (!lease) return false;
+    const normalizedRequestId = Number(requestId || 0) || null;
+    if (
+      normalizedRequestId &&
+      Number(lease.requestId || 0) > 0 &&
+      normalizedRequestId !== Number(lease.requestId || 0)
+    ) {
+      return false;
+    }
+    session.outputLease = null;
+    this.host.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.botUserId,
+      content: "voice_output_lease_released",
+      metadata: {
+        sessionId: session.id,
+        requestId: Number(lease.requestId || 0) || null,
+        leaseMode: lease.mode,
+        source: lease.source,
+        reason: String(reason || "released")
+      }
+    });
+    return true;
+  }
 
   private clearWakeWordMusicResumeTimer(session: VoiceSession) {
     const existingTimer = this.wakeWordMusicResumeTimers.get(session);
@@ -689,6 +763,19 @@ export class ReplyManager {
         audioStartedAtMs: now
       });
     }
+    if (
+      pendingResponse &&
+      hasActiveVoiceOutputLease({
+        session,
+        pendingResponse,
+        requestId: Number(pendingResponse.requestId || 0) || null,
+        now
+      })
+    ) {
+      this.clearOutputLease(session, "audio_started", {
+        requestId: Number(pendingResponse.requestId || 0) || null
+      });
+    }
 
     if (pendingResponse?.musicWakeRefreshAfterSpeech) {
       this.schedulePassiveMusicWakeLatchRefresh(
@@ -794,6 +881,9 @@ export class ReplyManager {
       session.realtimePendingToolAbortControllers.clear();
     }
 
+    this.clearOutputLease(session, trigger, {
+      requestId: Number(session.pendingResponse?.requestId || 0) || null
+    });
     session.pendingResponse = null;
     if (
       session.music?.replyHandoffMode === "duck" &&
@@ -953,6 +1043,7 @@ export class ReplyManager {
     resetRetryState = false,
     emitCreateEvent = true,
     interruptionPolicy = undefined,
+    outputLeaseMode = undefined,
     utteranceText = undefined,
     latencyContext = undefined,
     musicWakeRefreshAfterSpeech = false
@@ -963,6 +1054,7 @@ export class ReplyManager {
     resetRetryState?: boolean;
     emitCreateEvent?: boolean;
     interruptionPolicy?: ReplyInterruptionPolicy | Record<string, unknown> | null;
+    outputLeaseMode?: string | null;
     utteranceText?: string | null;
     latencyContext?: Record<string, unknown> | null;
     musicWakeRefreshAfterSpeech?: boolean;
@@ -1009,6 +1101,11 @@ export class ReplyManager {
           policy: interruptionPolicySeed,
         })
       : this.host.normalizeReplyInterruptionPolicy(interruptionPolicySeed);
+    const outputLeaseModeSeed =
+      outputLeaseMode === undefined
+        ? previous?.outputLeaseMode || null
+        : outputLeaseMode;
+    const normalizedOutputLeaseMode = normalizeVoiceOutputLeaseMode(outputLeaseModeSeed);
     const utteranceTextSeed = utteranceText === undefined ? previous?.utteranceText || "" : utteranceText || "";
     const normalizedUtteranceText =
       normalizeVoiceText(utteranceTextSeed, STT_REPLY_MAX_CHARS) || null;
@@ -1049,10 +1146,16 @@ export class ReplyManager {
       handlingSilence: false,
       audioReceivedAt: 0,
       interruptionPolicy: normalizedInterruptionPolicy,
+      outputLeaseMode: normalizedOutputLeaseMode,
       utteranceText: normalizedUtteranceText,
       latencyContext: normalizedLatencyContext,
       musicWakeRefreshAfterSpeech: Boolean(musicWakeRefreshAfterSpeech)
     };
+    this.grantOutputLease(session, {
+      mode: normalizedOutputLeaseMode,
+      requestId,
+      source: String(source || "turn_flush")
+    });
     session.lastResponseRequestAt = now;
     this.host.setActiveReplyInterruptionPolicy(session, normalizedInterruptionPolicy);
     this.clearResponseSilenceTimers(session);

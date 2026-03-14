@@ -44,13 +44,14 @@ export class BonjourAdvertiser {
   }
 
   stop(): void {
-    if (!this.child) return;
+    const child = this.child;
+    if (!child) return;
+    this.child = null;
     try {
-      this.child.kill("SIGTERM");
+      child.kill("SIGTERM");
     } catch {
       // already dead
     }
-    this.child = null;
   }
 
   private spawn(): void {
@@ -60,19 +61,24 @@ export class BonjourAdvertiser {
       txtRecords.push(`tunnelUrl=${this.tunnelUrl}`);
     }
 
-    this.child = this.spawnFn(
+    const child = this.spawnFn(
       "dns-sd",
       ["-R", SERVICE_NAME, SERVICE_TYPE, ".", String(this.port), ...txtRecords],
       { stdio: "ignore", windowsHide: true }
     );
+    this.child = child;
 
-    this.child.on("error", () => {
+    child.on("error", () => {
       // dns-sd not available — silently degrade
-      this.child = null;
+      if (this.child === child) {
+        this.child = null;
+      }
     });
 
-    this.child.on("close", () => {
-      this.child = null;
+    child.on("close", () => {
+      if (this.child === child) {
+        this.child = null;
+      }
     });
   }
 }

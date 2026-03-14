@@ -7,6 +7,7 @@ const CLOUDFLARED_READY_RE = /\b(registered tunnel connection|connection establi
 const CLOUDFLARED_RETRY_DELAY_MS = 5_000;
 const CLOUDFLARED_DEFAULT_BIN = "cloudflared";
 const CLOUDFLARED_PROVIDER = "cloudflared";
+const CLOUDFLARED_BENIGN_REMOTE_CANCEL_RE = /\bcanceled by remote with error code 0\b/i;
 
 export function extractCloudflaredPublicUrl(line) {
   const text = String(line || "");
@@ -30,6 +31,12 @@ export function resolvePublicHttpsTargetUrl(rawTargetUrl, dashboardPort) {
   } catch {
     return fallbackUrl;
   }
+}
+
+export function isBenignCloudflaredLine(line) {
+  const text = String(line || "").trim();
+  if (!text) return false;
+  return CLOUDFLARED_BENIGN_REMOTE_CANCEL_RE.test(text);
 }
 
 export class PublicHttpsEntrypoint {
@@ -250,6 +257,10 @@ export class PublicHttpsEntrypoint {
 
     if (CLOUDFLARED_READY_RE.test(line) && !this.state.publicUrl) {
       this.state.status = "starting";
+      return;
+    }
+
+    if (isBenignCloudflaredLine(line)) {
       return;
     }
 

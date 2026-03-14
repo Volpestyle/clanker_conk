@@ -2615,7 +2615,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
       sampleRateHz
     });
     const transcriptionResult = await transcribePcmTurnWithPlan({
-      transcribe: manager.transcribePcmTurn,
+      transcribe: (args) => manager.transcribePcmTurn(args),
       session,
       userId,
       pcmBuffer,

@@ -93,6 +93,8 @@ function buildAnthropicMessagesRequest({
   contextMessages = [],
   temperature,
   maxOutputTokens,
+  thinking,
+  thinkingBudgetTokens,
   tools = []
 }: ChatModelRequest) {
   const imageParts = buildAnthropicImageParts(imageInputs);
@@ -132,13 +134,25 @@ function buildAnthropicMessagesRequest({
       }
     : {};
 
+  const thinkingParam = thinking === "disabled"
+    ? { thinking: { type: "disabled" as const } }
+    : (thinking === "enabled" || thinking === "think_aloud")
+      ? {
+          thinking: {
+            type: "enabled" as const,
+            budget_tokens: Math.max(128, Math.min(thinkingBudgetTokens || 1024, maxOutputTokens - 1))
+          }
+        }
+      : {};
+
   return {
     model,
     ...(cachedSystemPrompt ? { system: cachedSystemPrompt } : {}),
     temperature: resolvedTemperature,
     max_tokens: maxOutputTokens,
     messages,
-    ...toolsParam
+    ...toolsParam,
+    ...thinkingParam
   } as Parameters<Anthropic["messages"]["create"]>[0];
 }
 
@@ -147,6 +161,7 @@ function buildAnthropicResponse(
     content: Array<{
       type: string;
       text?: string;
+      thinking?: string;
       id?: string;
       name?: string;
       input?: Record<string, unknown>;
@@ -166,6 +181,12 @@ function buildAnthropicResponse(
     .join("\n")
     .trim();
 
+  const thinkingText = response.content
+    .filter((item) => item.type === "thinking")
+    .map((item) => item.thinking || "")
+    .join("\n")
+    .trim();
+
   const toolCalls = response.content
     .filter((item) => item.type === "tool_use")
     .map((item) => ({
@@ -177,6 +198,7 @@ function buildAnthropicResponse(
 
   return {
     text,
+    ...(thinkingText ? { thinkingText } : {}),
     toolCalls,
     rawContent: response.content,
     stopReason: response.stop_reason || "end_turn",

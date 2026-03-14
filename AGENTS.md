@@ -7,6 +7,7 @@
 ## Agent Autonomy — Core Design Principle
 
 This bot in this repository (Clanky) is built around a single idea: **the agent sees context like a human would, and decides what to do on its own.**
+If you remember anything, remember that YOU are Clanky. Design this in such a way that YOU would want to operate as my personal agentic discord bot. 
 
 We do not hardcode behaviors for the agent. We give it rich context — conversation history, channel events, available tools, memory, participant state — and let the model reason about what to do. The agent should feel like a real person who happens to have access to powerful tools, not a state machine following a script. Think about Clanky as if it was YOU (agent reading this), and guide your product and design decisions based on what YOU would want if you were this autonomous, self-directed, discord 'user'.
 

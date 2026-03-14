@@ -3,9 +3,15 @@ import Foundation
 /// Lightweight Server-Sent Events parser with auto-reconnect.
 /// Uses URLSession bytes streaming — no third-party dependencies.
 actor SSEClient {
-    struct Event {
+    struct Event: Sendable {
         let name: String
         let data: String
+    }
+
+    enum Message: Sendable {
+        case opened
+        case event(Event)
+        case retrying(reason: String, attempt: Int, delaySeconds: TimeInterval)
     }
 
     private let url: URL
@@ -13,7 +19,6 @@ actor SSEClient {
     private let reconnectDelay: TimeInterval
     private let maxReconnectDelay: TimeInterval
 
-    private var task: Task<Void, Never>?
     private var currentAttempt: Int = 0
 
     init(
@@ -28,8 +33,9 @@ actor SSEClient {
         self.maxReconnectDelay = maxReconnectDelay
     }
 
-    /// Yields SSE events as they arrive. Auto-reconnects on failure.
-    func events() -> AsyncStream<Event> {
+    /// Yields transport lifecycle updates plus parsed SSE events.
+    /// Reconnects automatically and surfaces retry state to the caller.
+    func messages() -> AsyncStream<Message> {
         AsyncStream { continuation in
             let streamTask = Task {
                 while !Task.isCancelled {
@@ -38,11 +44,19 @@ actor SSEClient {
                     } catch is CancellationError {
                         break
                     } catch {
+                        let attempt = currentAttempt + 1
                         let delay = min(
                             reconnectDelay * pow(2, Double(currentAttempt)),
                             maxReconnectDelay
                         )
-                        currentAttempt += 1
+                        currentAttempt = attempt
+                        continuation.yield(
+                            .retrying(
+                                reason: Self.describe(error),
+                                attempt: attempt,
+                                delaySeconds: delay
+                            )
+                        )
                         try? await Task.sleep(for: .seconds(delay))
                     }
                 }
@@ -55,7 +69,7 @@ actor SSEClient {
         }
     }
 
-    private func streamEvents(into continuation: AsyncStream<Event>.Continuation) async throws {
+    private func streamEvents(into continuation: AsyncStream<Message>.Continuation) async throws {
         var request = URLRequest(url: url)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
@@ -66,12 +80,17 @@ actor SSEClient {
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
 
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw SSEError.badStatus
+        guard let http = response as? HTTPURLResponse else {
+            throw SSEError.invalidResponse
+        }
+
+        guard (200...299).contains(http.statusCode) else {
+            throw SSEError.badStatus(http.statusCode)
         }
 
         // Reset reconnect backoff on successful connection
         currentAttempt = 0
+        continuation.yield(.opened)
 
         var eventName = ""
         var dataBuffer = ""
@@ -86,7 +105,7 @@ actor SSEClient {
                     let data = dataBuffer.hasSuffix("\n")
                         ? String(dataBuffer.dropLast())
                         : dataBuffer
-                    continuation.yield(Event(name: name, data: data))
+                    continuation.yield(.event(Event(name: name, data: data)))
                 }
                 eventName = ""
                 dataBuffer = ""
@@ -106,9 +125,35 @@ actor SSEClient {
                 dataBuffer += trimmed + "\n"
             }
         }
+
+        if !Task.isCancelled {
+            throw SSEError.streamEnded
+        }
     }
 
-    enum SSEError: Error {
-        case badStatus
+    private static func describe(_ error: Error) -> String {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription,
+           !description.isEmpty {
+            return description
+        }
+        return String(describing: error)
+    }
+
+    enum SSEError: LocalizedError {
+        case invalidResponse
+        case badStatus(Int)
+        case streamEnded
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidResponse:
+                return "Invalid SSE response"
+            case .badStatus(let statusCode):
+                return "HTTP \(statusCode)"
+            case .streamEnded:
+                return "SSE stream ended"
+            }
+        }
     }
 }

@@ -10,7 +10,7 @@ final class BonjourDiscoveryLogicTests: XCTestCase {
         XCTAssertEqual(decision, .keepSearching(service))
     }
 
-    func testStopsSearchingWhenTunnelURLArrives() {
+    func testReturnsFoundWhenTunnelURLArrives() {
         let service = BonjourDiscoveredService(
             name: "Clanky Dashboard",
             tunnelUrl: "https://fancy-cat.trycloudflare.com"
@@ -44,5 +44,40 @@ final class BonjourDiscoveryLogicTests: XCTestCase {
     func testRejectsInvalidTunnelURL() {
         XCTAssertNil(BonjourDiscoveryLogic.normalizedTunnelURL("not a url"))
         XCTAssertNil(BonjourDiscoveryLogic.normalizedTunnelURL("ftp://fancy-cat.trycloudflare.com"))
+    }
+
+    func testDetectsEphemeralCloudflareTunnelHosts() {
+        XCTAssertTrue(BonjourDiscoveryLogic.isEphemeralCloudflareTunnel("https://demo.trycloudflare.com"))
+        XCTAssertFalse(BonjourDiscoveryLogic.isEphemeralCloudflareTunnel("https://dashboard.example.com"))
+    }
+
+    func testReplacesPreviouslyAutofilledTunnelURLWhenDiscoveryChanges() {
+        let replacement = BonjourDiscoveryLogic.replacementTunnelURL(
+            currentInput: "https://old.trycloudflare.com",
+            previousAutoFilledTunnelURL: "https://old.trycloudflare.com",
+            discoveredTunnelURL: "https://new.trycloudflare.com"
+        )
+
+        XCTAssertEqual(replacement, "https://new.trycloudflare.com")
+    }
+
+    func testPreservesManualTunnelURLWhenDiscoveryChanges() {
+        let replacement = BonjourDiscoveryLogic.replacementTunnelURL(
+            currentInput: "https://dashboard.example.com",
+            previousAutoFilledTunnelURL: "https://old.trycloudflare.com",
+            discoveredTunnelURL: "https://new.trycloudflare.com"
+        )
+
+        XCTAssertNil(replacement)
+    }
+
+    func testPreservesPartiallyEditedTunnelURLWhenDiscoveryChanges() {
+        let replacement = BonjourDiscoveryLogic.replacementTunnelURL(
+            currentInput: "https://dash",
+            previousAutoFilledTunnelURL: "https://old.trycloudflare.com",
+            discoveredTunnelURL: "https://new.trycloudflare.com"
+        )
+
+        XCTAssertNil(replacement)
     }
 }

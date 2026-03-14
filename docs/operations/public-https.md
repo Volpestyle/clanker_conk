@@ -32,7 +32,10 @@ Local discovery:
 - The dashboard advertises `_clanky._tcp` over Bonjour for the iOS app.
 - The dashboard does not advertise the Bonjour service until a usable tunnel URL exists.
 - The Bonjour TXT record includes `tunnelUrl` once the public HTTPS entrypoint is ready.
-- The iOS setup flow keeps listening after it discovers the local service and only auto-fills once a usable tunnel URL is present.
+- The iOS setup flow keeps Bonjour browsing and TXT monitoring alive while the setup screen is visible, even after it finds a usable tunnel URL.
+- The setup form auto-fills the tunnel URL when discovery first resolves, and replaces that value on later Bonjour updates only if the field still matches the last auto-filled value.
+- After setup succeeds, the iOS Pulse tab opens `/api/activity/events` and treats the SSE transport opening as connected immediately; it does not wait for the first activity payload before leaving the loading state.
+- If the activity SSE transport drops and starts retrying, the iOS Pulse tab surfaces that as a disconnected/reconnecting state instead of staying on an indefinite initial spinner.
 
 State shape:
 ```json

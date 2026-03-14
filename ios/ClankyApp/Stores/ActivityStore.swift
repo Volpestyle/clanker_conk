@@ -1,8 +1,11 @@
 import Foundation
 import Observation
+import os
 
 /// Manages the real-time activity stream from the Clanky SSE endpoint.
 /// Holds actions, stats, and filter state for the Pulse tab.
+private let log = Logger(subsystem: "com.clanky.app", category: "Activity")
+
 @Observable @MainActor
 final class ActivityStore {
     private(set) var actions: [ClankyAction] = []
@@ -26,40 +29,36 @@ final class ActivityStore {
 
     func connect(using connectionStore: ConnectionStore) async {
         sseTask?.cancel()
+        isConnected = false
+        connectionStore.updateActivityStreamStatus(.connecting)
 
-        guard let client = connectionStore.client else { return }
+        guard let client = connectionStore.client else {
+            log.error("Pulse connect requested without a configured client")
+            connectionStore.updateActivityStreamStatus(.disconnected)
+            return
+        }
+
+        log.info("Starting Pulse connection to \(client.baseURL.absoluteString, privacy: .public)")
 
         // Health check first
         await connectionStore.performHealthCheck()
-        guard connectionStore.status.isConnected else { return }
+        guard connectionStore.status.isConnected else {
+            log.error("Pulse health check failed: \(connectionStore.status.label, privacy: .public)")
+            connectionStore.updateActivityStreamStatus(.disconnected)
+            return
+        }
 
         let sse = client.activitySSE()
 
         sseTask = Task { [weak self] in
             guard let self else { return }
 
-            connectionStore.updateActivityStreamStatus(.connecting)
-
-            for await event in await sse.events() {
+            for await message in await sse.messages() {
                 guard !Task.isCancelled else { break }
-
-                switch event.name {
-                case "activity_snapshot":
-                    handleSnapshot(event.data)
-                    connectionStore.updateActivityStreamStatus(.connected)
-                    isConnected = true
-
-                case "action_event":
-                    handleActionEvent(event.data)
-
-                case "stats_update":
-                    handleStatsUpdate(event.data)
-
-                default:
-                    break
-                }
+                handleStreamMessage(message, connectionStore: connectionStore)
             }
 
+            log.info("Pulse SSE disconnected")
             isConnected = false
             connectionStore.updateActivityStreamStatus(.disconnected)
         }
@@ -69,9 +68,43 @@ final class ActivityStore {
         sseTask?.cancel()
         sseTask = nil
         isConnected = false
+        log.info("Pulse SSE disconnected by user")
     }
 
     // MARK: - SSE Event Handlers
+
+    func handleStreamMessage(_ message: SSEClient.Message, connectionStore: ConnectionStore) {
+        switch message {
+        case .opened:
+            if !isConnected {
+                log.info("Pulse SSE connected")
+            }
+            isConnected = true
+            connectionStore.updateActivityStreamStatus(.connected)
+
+        case .event(let event):
+            switch event.name {
+            case "activity_snapshot":
+                handleSnapshot(event.data)
+
+            case "action_event":
+                handleActionEvent(event.data)
+
+            case "stats_update":
+                handleStatsUpdate(event.data)
+
+            default:
+                break
+            }
+
+        case .retrying(let reason, let attempt, let delaySeconds):
+            log.error(
+                "Pulse SSE retrying after error \(reason, privacy: .public) attempt=\(attempt, privacy: .public) delaySeconds=\(delaySeconds, privacy: .public)"
+            )
+            isConnected = false
+            connectionStore.updateActivityStreamStatus(.error)
+        }
+    }
 
     private func handleSnapshot(_ data: String) {
         guard let jsonData = data.data(using: .utf8) else { return }
@@ -84,7 +117,7 @@ final class ActivityStore {
                 stats = snapshotStats
             }
         } catch {
-            // Snapshot parse failure — non-fatal
+            log.error("Failed to decode activity snapshot: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -105,7 +138,7 @@ final class ActivityStore {
             // Haptic feedback
             HapticEngine.onAction(action.kind)
         } catch {
-            // Single action parse failure — non-fatal
+            log.error("Failed to decode action event: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -114,7 +147,7 @@ final class ActivityStore {
         do {
             stats = try JSONDecoder().decode(StatsPayload.self, from: jsonData)
         } catch {
-            // Stats parse failure — non-fatal
+            log.error("Failed to decode stats update: \(String(describing: error), privacy: .public)")
         }
     }
 }

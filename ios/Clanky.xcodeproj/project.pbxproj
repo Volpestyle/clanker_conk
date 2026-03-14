@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		02DA752124881997C6A61E28 /* StatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 930D3294E39DDBC9D7353687 /* StatusDot.swift */; };
+		0ABB2A76F3730C288C2CC16A /* PulseConnectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 869448171F682226E4C2CE8F /* PulseConnectionState.swift */; };
 		199F78903ABA4C09EC7C2F7C /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 188DE079A3C48E839E2181A2 /* ConnectionStore.swift */; };
 		1DAD44C57C6F1C7C9C4B8AF0 /* RelativeTimestamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 740EE30FED1F2F0F03465F6B /* RelativeTimestamp.swift */; };
 		3929013A73D6C104F9DBB61E /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEADEAFF0CAE9533551AEA9 /* SetupView.swift */; };
@@ -20,6 +21,7 @@
 		774AC383BC47EC41330A54FF /* BonjourDiscoveryLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63333F7EC156C580625A3B1D /* BonjourDiscoveryLogic.swift */; };
 		889F8B3D0B3409E8D9623520 /* ActivityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47291789600C774B0601783 /* ActivityStore.swift */; };
 		891B80364285F4D67B8CAE61 /* ClankyClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B40826527D25E949CC79EA4 /* ClankyClient.swift */; };
+		94726E78F64C8EC7E5C35D8A /* PulseConnectionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E90866977373AD614593F10C /* PulseConnectionStateTests.swift */; };
 		96C779E5D756CEFE7CE92BBA /* HapticEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A86088B15532564572E0A56C /* HapticEngine.swift */; };
 		9F8CEE63468EFB989ABD6363 /* ClankyAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DB6B02E0963658583B07883 /* ClankyAction.swift */; };
 		A85E489A33C0714548B53737 /* StatsBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DD5553116B7B3FC4526C675 /* StatsBar.swift */; };
@@ -62,6 +64,7 @@
 		6DD5553116B7B3FC4526C675 /* StatsBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsBar.swift; sourceTree = "<group>"; };
 		740EE30FED1F2F0F03465F6B /* RelativeTimestamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTimestamp.swift; sourceTree = "<group>"; };
 		8229C47A563B9CFAFE03698A /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		869448171F682226E4C2CE8F /* PulseConnectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulseConnectionState.swift; sourceTree = "<group>"; };
 		930D3294E39DDBC9D7353687 /* StatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusDot.swift; sourceTree = "<group>"; };
 		A86088B15532564572E0A56C /* HapticEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticEngine.swift; sourceTree = "<group>"; };
 		B0FEFECEE3620B4FE3B77659 /* SSEClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSEClient.swift; sourceTree = "<group>"; };
@@ -70,6 +73,7 @@
 		D0A5750DC48CF53C59F3764D /* Connection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Connection.swift; sourceTree = "<group>"; };
 		D2BCDA09EF1796B414E48660 /* Stats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stats.swift; sourceTree = "<group>"; };
 		DDA97B9F862A8E4638ED57A1 /* ClankyTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClankyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E90866977373AD614593F10C /* PulseConnectionStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulseConnectionStateTests.swift; sourceTree = "<group>"; };
 		EEEADEAFF0CAE9533551AEA9 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
 		EFF620C4BFD866DAB0E8E725 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
 		F9A82C80603DFEAB78A5F68C /* ClankyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClankyApp.swift; sourceTree = "<group>"; };
@@ -157,6 +161,7 @@
 				5B40826527D25E949CC79EA4 /* ClankyClient.swift */,
 				A86088B15532564572E0A56C /* HapticEngine.swift */,
 				8229C47A563B9CFAFE03698A /* KeychainStore.swift */,
+				869448171F682226E4C2CE8F /* PulseConnectionState.swift */,
 				B0FEFECEE3620B4FE3B77659 /* SSEClient.swift */,
 			);
 			path = Core;
@@ -167,6 +172,7 @@
 			children = (
 				CCF9988AE148C0C7D39E351A /* BonjourDiscoveryLogicTests.swift */,
 				41742759F1A548CEDAC4114B /* ClankyClientTests.swift */,
+				E90866977373AD614593F10C /* PulseConnectionStateTests.swift */,
 			);
 			path = ClankyTests;
 			sourceTree = "<group>";
@@ -280,6 +286,7 @@
 			files = (
 				ECB9FE337084AB625EDE0566 /* BonjourDiscoveryLogicTests.swift in Sources */,
 				F6BD2C22A592E964BF98BEEF /* ClankyClientTests.swift in Sources */,
+				94726E78F64C8EC7E5C35D8A /* PulseConnectionStateTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -303,6 +310,7 @@
 				4A5723A18BACAA91F324E19E /* KeychainStore.swift in Sources */,
 				3A99058F6BFD4F2A5F7C473A /* MetricText.swift in Sources */,
 				D9CD4B5B8E0C7A9FA57ABAF4 /* PanelView.swift in Sources */,
+				0ABB2A76F3730C288C2CC16A /* PulseConnectionState.swift in Sources */,
 				BE69BC760230C99ECD743811 /* PulseTab.swift in Sources */,
 				1DAD44C57C6F1C7C9C4B8AF0 /* RelativeTimestamp.swift in Sources */,
 				3CC1AA3B16489A8D585F6FC2 /* SSEClient.swift in Sources */,
@@ -328,6 +336,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -418,6 +427,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

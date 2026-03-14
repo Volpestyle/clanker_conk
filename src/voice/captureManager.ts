@@ -128,6 +128,7 @@ interface CaptureManagerHost {
     bridgeUtteranceId?: number | null;
     asrResult?: AsrCommitResult | null;
     source?: string;
+    serverVadConfirmed?: boolean;
   }) => boolean;
   handoffInterruptedTurnToVoiceBrain: (args: {
     session: VoiceSession;
@@ -560,7 +561,8 @@ export class CaptureManager {
         pcmBuffer,
         captureReason: reason,
         finalizedAt,
-        musicWakeFollowupEligibleAtCapture: captureState.musicWakeFollowupEligibleAtPromotion
+        musicWakeFollowupEligibleAtCapture: captureState.musicWakeFollowupEligibleAtPromotion,
+        serverVadConfirmed: this.host.hasCaptureServerVadSpeech({ session, capture: captureState })
       });
     };
 
@@ -825,7 +827,8 @@ export class CaptureManager {
           pcmBuffer,
           captureReason,
           finalizedAt,
-          musicWakeFollowupEligibleAtCapture: captureState.musicWakeFollowupEligibleAtPromotion
+          musicWakeFollowupEligibleAtCapture: captureState.musicWakeFollowupEligibleAtPromotion,
+          serverVadConfirmed: this.host.hasCaptureServerVadSpeech({ session, capture: captureState })
         });
         return;
       }
@@ -860,7 +863,8 @@ export class CaptureManager {
         musicWakeFollowupEligibleAtCapture: captureState.musicWakeFollowupEligibleAtPromotion,
         bridgeUtteranceId: Math.max(0, Number(captureState.asrUtteranceId || 0)) || null,
         asrResult,
-        source
+        source,
+        serverVadConfirmed: this.host.hasCaptureServerVadSpeech({ session, capture: captureState })
       });
       if (queued) {
         bridgeForwarded = true;

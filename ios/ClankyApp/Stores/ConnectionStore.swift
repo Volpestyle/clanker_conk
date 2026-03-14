@@ -7,7 +7,7 @@ final class ConnectionStore {
     private(set) var activityStreamStatus: SSEStreamStatus = .disconnected
     private(set) var voiceStreamStatus: SSEStreamStatus = .disconnected
     private(set) var lastHealthCheckAt: Date?
-    private(set) var requiresSetup = false
+    private(set) var requiresSetup: Bool
 
     var tunnelURL: String {
         get { KeychainStore.load(key: "tunnelURL") ?? "" }
@@ -17,6 +17,15 @@ final class ConnectionStore {
     var dashboardToken: String {
         get { KeychainStore.load(key: "dashboardToken") ?? "" }
         set { KeychainStore.save(key: "dashboardToken", value: newValue) }
+    }
+
+    init() {
+        let savedTunnelURL = KeychainStore.load(key: "tunnelURL") ?? ""
+        let savedDashboardToken = KeychainStore.load(key: "dashboardToken") ?? ""
+        requiresSetup =
+            savedDashboardToken.isEmpty ||
+            savedTunnelURL.isEmpty ||
+            BonjourDiscoveryLogic.isEphemeralCloudflareTunnel(savedTunnelURL)
     }
 
     var isConfigured: Bool {
@@ -50,10 +59,16 @@ final class ConnectionStore {
                 lastHealthCheckAt = Date()
             } else {
                 status = .error("Health check failed")
+                if BonjourDiscoveryLogic.isEphemeralCloudflareTunnel(tunnelURL) {
+                    KeychainStore.delete(key: "tunnelURL")
+                }
                 requiresSetup = true
             }
         } catch {
             status = .error(error.localizedDescription)
+            if BonjourDiscoveryLogic.isEphemeralCloudflareTunnel(tunnelURL) {
+                KeychainStore.delete(key: "tunnelURL")
+            }
             requiresSetup = true
         }
     }

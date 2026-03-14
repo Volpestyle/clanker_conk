@@ -52,3 +52,27 @@ test("BonjourAdvertiser clears the advertisement when the tunnel URL disappears"
   expect(spawnFn).toHaveBeenCalledTimes(1);
   expect(child.kill).toHaveBeenCalledTimes(1);
 });
+
+test("BonjourAdvertiser ignores stale close events from an older child", () => {
+  const children: Array<ReturnType<typeof createFakeChild>> = [];
+  const spawnFn = mock(() => {
+    const child = createFakeChild();
+    children.push(child);
+    return child;
+  });
+
+  const advertiser = new BonjourAdvertiser(8787, { spawnFn });
+
+  advertiser.start("https://first.trycloudflare.com");
+  advertiser.updateTunnelUrl("https://second.trycloudflare.com");
+
+  expect(spawnFn).toHaveBeenCalledTimes(2);
+  expect(children[0].kill).toHaveBeenCalledTimes(1);
+
+  const oldCloseHandler = children[0].on.mock.calls.find(([event]) => event === "close")?.[1] as (() => void) | undefined;
+  oldCloseHandler?.();
+
+  advertiser.stop();
+
+  expect(children[1].kill).toHaveBeenCalledTimes(1);
+});

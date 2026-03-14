@@ -5,6 +5,7 @@ import SwiftUI
 struct SetupView: View {
     @Environment(ConnectionStore.self) private var connection
     @State private var tunnelURL = ""
+    @State private var autoFilledTunnelURL: String?
     @State private var token = ""
     @State private var isChecking = false
     @State private var errorMessage: String?
@@ -104,16 +105,24 @@ struct SetupView: View {
             if token.isEmpty {
                 token = connection.dashboardToken
             }
+            if tunnelURL.isEmpty, !BonjourDiscoveryLogic.isEphemeralCloudflareTunnel(connection.tunnelURL) {
+                tunnelURL = connection.tunnelURL
+            }
             bonjour.startSearching()
         }
         .onDisappear {
             bonjour.stopSearching()
         }
         .onChange(of: bonjour.discovered?.tunnelUrl) { _, newUrl in
-            if let newUrl, !newUrl.isEmpty, tunnelURL.isEmpty {
+            if let replacement = BonjourDiscoveryLogic.replacementTunnelURL(
+                currentInput: tunnelURL,
+                previousAutoFilledTunnelURL: autoFilledTunnelURL,
+                discoveredTunnelURL: newUrl
+            ) {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    tunnelURL = newUrl
+                    tunnelURL = replacement
                 }
+                autoFilledTunnelURL = replacement
             }
         }
     }

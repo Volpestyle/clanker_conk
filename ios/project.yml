@@ -51,3 +51,4 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clanky.app.tests
+        GENERATE_INFOPLIST_FILE: YES

@@ -8,9 +8,10 @@ import {
   VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX,
   VOICE_SILENCE_GATE_PEAK_MAX
 } from "./voiceSessionManager.constants.ts";
+import { getBargeInLeaseImmunityMs } from "./voiceOutputLease.ts";
 import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
 import type { ReplyManager } from "./replyManager.ts";
-import type { OutputChannelState, VoiceSession } from "./voiceSessionTypes.ts";
+import type { OutputChannelState, VoiceSession, VoiceOutputLeaseMode } from "./voiceSessionTypes.ts";
 
 type BargeInStoreLike = {
   logAction: (entry: {
@@ -40,6 +41,7 @@ type PendingResponseLike = {
   utteranceText?: string | null;
   interruptionPolicy?: ReplyInterruptionPolicy | null;
   audioReceivedAt?: number;
+  outputLeaseMode?: VoiceOutputLeaseMode | null;
 };
 
 export interface ReplyInterruptionPolicy {
@@ -65,6 +67,7 @@ export type BargeInDecisionReason =
   | "interruption_policy_denied"
   | "capture_too_young_for_buffered_playback"
   | "insufficient_capture_bytes"
+  | "output_lease_speech_immunity"
   | "capture_signal_not_assertive"
   | "capture_signal_not_assertive_during_bot_speech";
 
@@ -313,6 +316,19 @@ export class BargeInController {
         liveAudioStreaming,
         outputState
       });
+    }
+
+    if (botTurnOpenAt > 0) {
+      const leaseImmunityMs = getBargeInLeaseImmunityMs(pendingResponse?.outputLeaseMode);
+      if (leaseImmunityMs > 0 && Date.now() - botTurnOpenAt < leaseImmunityMs) {
+        return buildEvaluation({
+          allowed: false,
+          reason: "output_lease_speech_immunity",
+          pendingRequestId,
+          liveAudioStreaming,
+          outputState
+        });
+      }
     }
 
     if (!liveAudioStreaming && !session.botTurnOpen && !bufferedBotSpeech) {

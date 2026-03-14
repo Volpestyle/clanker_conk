@@ -91,6 +91,12 @@ export const LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS = 400;
 export const LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS = 2200;
 export const LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS = 5000;
 export const ORDERED_REALTIME_PLAYBACK_BARRIER_MAX_WAIT_MS = 30_000;
+export const VOICE_OUTPUT_LEASE_ASSERTIVE_MS = 1_200;
+export const VOICE_OUTPUT_LEASE_ATOMIC_MS = 2_400;
+// Post-audio speech immunity for leased replies. Once the bot starts speaking,
+// barge-in is blocked for this window so the reply's point can land.
+export const BARGE_IN_LEASE_IMMUNITY_ASSERTIVE_MS = 2_000;
+export const BARGE_IN_LEASE_IMMUNITY_ATOMIC_MS = 4_000;
 // Disabled to reduce end-of-turn latency. Realtime turns still coalesce while
 // the drain is active and when deferred bot-turn-open turns flush together.
 // export const REALTIME_TURN_COALESCE_WINDOW_MS = 1100;
@@ -129,7 +135,7 @@ export const VOICE_THOUGHT_MAX_CHARS = 220;
 export const VOICE_THOUGHT_MEMORY_SEARCH_LIMIT = 8;
 export const VOICE_THOUGHT_DECISION_MAX_OUTPUT_TOKENS = 220;
 export const BOT_DISCONNECT_GRACE_MS = 2500;
-export const STT_CONTEXT_MAX_MESSAGES = 100;
+export const STT_CONTEXT_MAX_MESSAGES = 50;
 export const STT_TRANSCRIPT_MAX_CHARS = 700;
 export const STT_REPLY_MAX_CHARS = 1200;
 export const FILE_ASR_TURN_QUEUE_MAX = 1;

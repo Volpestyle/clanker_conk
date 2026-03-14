@@ -377,6 +377,46 @@ test("startVoiceScreenWatch prefers native watch before link fallback", async ()
   assert.equal(createSessionCalls.length, 0);
 });
 
+test("startVoiceScreenWatch reuses an active native watch and reports when frame context is still pending", async () => {
+  const { runtime, nativeStartCalls, createSessionCalls, sentMessages } = createScreenShareRuntime({
+    existingNativeWatch: {
+      targetUserId: "user-1",
+      transportStatus: "ready",
+      lastDecodeSuccessAt: 0
+    },
+    activeSharerUserIds: ["user-1"],
+    nativeStartResult: {
+      ok: true,
+      reason: "watching_started",
+      targetUserId: "user-1"
+    }
+  });
+
+  const result = await startVoiceScreenWatch(runtime, {
+    settings: {
+      voice: {
+        streamWatch: {
+          enabled: true
+        }
+      }
+    },
+    guildId: "guild-1",
+    channelId: "chan-1",
+    requesterUserId: "user-1",
+    transcript: "watch this live",
+    source: "voice_turn_directive"
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.reused, true);
+  assert.equal(result.transport, "native");
+  assert.equal(result.reason, "waiting_for_frame_context");
+  assert.equal(result.frameReady, false);
+  assert.equal(nativeStartCalls.length, 0);
+  assert.equal(createSessionCalls.length, 0);
+  assert.equal(sentMessages.length, 0);
+});
+
 test("getVoiceScreenWatchCapability treats the master toggle as disabling both native and fallback paths", () => {
   const { runtime } = createScreenShareRuntime({
     capability: {

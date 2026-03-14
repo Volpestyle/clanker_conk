@@ -10,7 +10,8 @@ import type { TurnProcessor } from "./turnProcessor.ts";
 import type {
   MusicPlaybackPhase,
   VoicePendingAmbientThought,
-  VoiceSession
+  VoiceSession,
+  VoiceTranscriptTimelineEntry
 } from "./voiceSessionTypes.ts";
 import { musicPhaseIsActive } from "./voiceSessionTypes.ts";
 
@@ -112,6 +113,10 @@ interface ThoughtEngineHost {
     minSilenceSeconds?: number;
     minSecondsBetweenThoughts?: number;
   }) => ThoughtTopicalityBias;
+  appendTranscriptTimelineEntry: (
+    session: VoiceSession,
+    entry: VoiceTranscriptTimelineEntry | null
+  ) => void;
 }
 
 export class ThoughtEngine {
@@ -297,6 +302,23 @@ export class ThoughtEngine {
       return Math.max(200, Number(pendingThought.notBeforeAt || now) - now);
     }
     return Math.max(200, Math.round(Number(config.minSecondsBetweenThoughts || 0) * 1_000));
+  }
+
+  private recordThoughtInTranscript(
+    session: VoiceSession,
+    thoughtText: string,
+    now = Date.now()
+  ) {
+    const normalized = normalizeVoiceText(thoughtText, VOICE_THOUGHT_MAX_CHARS);
+    if (!normalized || !session || session.ending) return;
+    this.host.appendTranscriptTimelineEntry(session, {
+      kind: "thought",
+      role: "assistant",
+      userId: this.botUserId,
+      speakerName: "YOU",
+      text: normalized,
+      at: now
+    });
   }
 
   markPendingAmbientThoughtStale(
@@ -726,6 +748,9 @@ export class ThoughtEngine {
         VOICE_THOUGHT_MAX_CHARS
       );
       if (decision.action === "drop") {
+        if (finalThought) {
+          this.recordThoughtInTranscript(session, finalThought, now);
+        }
         this.clearPendingAmbientThought(session, {
           reason: decision.reason || "llm_drop",
           now,
@@ -742,6 +767,7 @@ export class ThoughtEngine {
         return false;
       }
       if (decision.action === "hold") {
+        this.recordThoughtInTranscript(session, finalThought, now);
         this.upsertPendingAmbientThought({
           session,
           config: thoughtConfig,

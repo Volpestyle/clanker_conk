@@ -27,6 +27,7 @@ import {
   trackSharedAsrCommittedItem,
   tryHandoffSharedAsr
 } from "./voiceAsrBridge.ts";
+import { ensureNativeDiscordScreenShareState } from "./nativeDiscordScreenShare.ts";
 import type { AsrBridgeState } from "./voiceAsrBridge.ts";
 import type { CaptureState, VoiceSession } from "./voiceSessionTypes.ts";
 
@@ -1465,6 +1466,46 @@ test("interruptBotSpeechForOutputLockTurn skips barge-in suppression while prese
   assert.equal(interruptLog?.metadata?.suppressionMs, 0);
 });
 
+test("interruptBotSpeechForOutputLockTurn leaves pre-audio leased replies alone", () => {
+  const { manager, logs } = createManager();
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    pendingResponse: {
+      requestId: 17,
+      utteranceText: "still talking",
+      audioReceivedAt: 0,
+      outputLeaseMode: "assertive"
+    },
+    outputLease: {
+      mode: "assertive",
+      requestId: 17,
+      grantedAt: now - 40,
+      expiresAt: now + 600,
+      source: "voice_reply:test"
+    },
+    realtimeClient: {
+      cancelActiveResponse() {
+        throw new Error("lease should block cancellation before first audio");
+      },
+      truncateConversationItem() {
+        throw new Error("lease should block truncation before first audio");
+      }
+    }
+  });
+
+  const interrupted = manager.interruptBotSpeechForOutputLockTurn({
+    session,
+    userId: "user-1",
+    source: "leased_output_lock_test"
+  });
+
+  assert.equal(interrupted, false);
+  assert.equal(session.interruptedAssistantReply ?? null, null);
+  assert.equal(Boolean(logs.find((entry) => entry?.content === "voice_output_lock_interrupt")), false);
+});
+
 test("handleAsrBridgeSpeechStarted arms a sustained interrupt and flushes the staged turn normally if speech stops early", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
@@ -2651,6 +2692,48 @@ test("bindSessionHandlers does not request share-link recovery when STREAM_LINK_
     (entry) => String(entry?.content || "") === "native_discord_stream_transport_link_fallback_skipped"
   );
   assert.equal(fallbackSkipped?.metadata?.skipReason, "stream_link_fallback_disabled");
+});
+
+test("bindSessionHandlers ignores delta-only H264 frames until a keyframe starts native first-frame decode", async () => {
+  const { manager, logs } = createManager();
+  const voxClient = new EventEmitter();
+  const session = createSession({
+    cleanupHandlers: [],
+    voxClient,
+    streamWatch: {
+      active: true,
+      targetUserId: "user-2",
+      requestedByUserId: "user-1",
+      lastFrameAt: 0,
+      lastCommentaryAt: 0,
+      ingestedFrameCount: 0
+    }
+  });
+
+  manager.sessionLifecycle.bindSessionHandlers(session, session.settingsSnapshot);
+  voxClient.emit("userVideoFrame", {
+    userId: "user-2",
+    codec: "H264",
+    keyframe: false,
+    rtpTimestamp: 101,
+    frameBase64: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x41, 0xaa, 0xbb]).toString("base64")
+  });
+  voxClient.emit("userVideoFrame", {
+    userId: "user-2",
+    codec: "H264",
+    keyframe: false,
+    rtpTimestamp: 202,
+    frameBase64: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x41, 0xcc, 0xdd]).toString("base64")
+  });
+  await flushMicrotasks();
+
+  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+  assert.equal(nativeScreenShare.pendingH264Decode, null);
+  assert.equal(nativeScreenShare.lastDecodeAttemptAt, 0);
+  assert.equal(
+    logs.some((entry) => String(entry?.content || "").startsWith("native_discord_video_decode_failed")),
+    false
+  );
 });
 
 test("startInboundCapture drops provisional noise before activity promotion while streaming provisional ASR audio", async () => {

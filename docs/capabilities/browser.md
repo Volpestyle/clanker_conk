@@ -53,6 +53,12 @@ When the resolved runtime is `local_browser_agent` and browser sessions are enab
 than generic browser tools. They are only useful when there is an active voice
 session plus a persistent local browser session to share.
 
+In the full-brain voice path, `share_browser_session` only works when the voice
+reply runtime forwards the active `voiceSession`, `voiceSessionManager`, and
+`subAgentSessions` into the shared reply-tool runtime. That gives the tool both
+the live Discord publish transport and the persistent browser session lookup it
+needs to attach an existing browser session to Go Live.
+
 It is intentionally not enabled for automation runs right now, even though automations use the same general reply-tool loop.
 
 ## Runtime Flow

@@ -212,6 +212,30 @@ Untargeted join greetings, optional system speech, and other replies with no
 resolved speaker therefore stay protected from humming, coughing, laughing,
 backchannel, and other channel noise before audio actually begins.
 
+There is one explicit exception: full-brain replies can request a bounded
+output lease. The hidden `[[LEASE:ASSERTIVE]]` and `[[LEASE:ATOMIC]]`
+prefixes protect a reply in two phases:
+
+1. **Pre-audio:** the lease blocks pre-audio supersede and transcript-level
+   output-lock interruption for a short runtime-bounded window until first
+   assistant audio begins (assertive: 1.2 s, atomic: 2.4 s).
+2. **Post-audio speech immunity:** once audio starts, acoustic barge-in is
+   blocked for a bounded grace window so the reply's point can land
+   (assertive: 2 s, atomic: 4 s from first audio). After the immunity window,
+   normal barge-in rules resume.
+
+This is separate from interruption policy:
+
+- interruption policy answers who may cut in once the immunity window expires
+- output lease answers whether newer turns may push a pending reply back before first audio, and how long the reply is shielded from barge-in after audio starts
+- the model requests the lease; the runtime caps its duration and releases it
+- no lease means the older reply can still be abandoned for a newer admitted turn
+
+The pre-audio supersession gate is also speech-aware: if the ASR bridge was
+active for a queued capture but server VAD never confirmed speech, that capture
+is not counted as interrupting input. This prevents non-speech audio (humming,
+coughing, laughing) from superseding a pending reply even without a lease.
+
 ### Wake-Word Override During Output Lock
 
 Wake-word interruption is a transcript-level override, separate from the fast acoustic barge-in gate:
@@ -245,9 +269,10 @@ target becomes the ordinary talk-over target:
 - target missing or unresolved → ordinary talk-over stays closed
 
 When full-brain reply streaming is enabled, the stream parser resolves that
-leading `[[TO:...]]` directive before the first spoken chunk is dispatched, so
-the very first realtime utterance already carries the correct interruption
-policy.
+leading `[[TO:...]]` directive and optional `[[LEASE:...]]` directive before
+the first spoken chunk is dispatched, so the very first realtime utterance
+already carries the correct interruption policy and any requested pre-audio
+lease.
 
 OpenAI provider-native replies still start with the provisional reply-owner
 policy so speech is not delayed; once the side-channel target resolves, the

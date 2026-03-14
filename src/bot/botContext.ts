@@ -12,6 +12,7 @@ import type { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
 import type { VideoContextService } from "../video/videoContextService.ts";
 import type { ImageCaptionCache } from "../vision/imageCaptionCache.ts";
 import type { SubAgentSessionManager } from "../agents/subAgentSession.ts";
+import type { BrowserStreamPublishManager } from "../voice/voiceBrowserStreamPublish.ts";
 import type {
   InFlightAcceptedBrainTurn,
   VoiceSessionDurableContextEntry
@@ -243,7 +244,7 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
 
 export interface VoiceReplyRuntime extends BotContext {
   readonly search: WebSearchService;
-  readonly voiceSessionManager?: {
+  readonly voiceSessionManager?: (BrowserStreamPublishManager & {
     getSessionById?: (sessionId: string | null | undefined) => {
       mode?: string | null;
       realtimeToolOwnership?: "transport_only" | "provider_native" | null;
@@ -343,7 +344,7 @@ export interface VoiceReplyRuntime extends BotContext {
       } | null,
       userId: string
     ) => void;
-  } | null;
+  }) | null;
   loadRelevantMemoryFacts: StripFirstArg<LoadRelevantMemoryFactsFn>;
   buildMediaMemoryFacts: BuildMediaMemoryFactsFn;
   loadFactProfile: StripFirstArg<LoadFactProfileFn>;

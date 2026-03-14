@@ -175,14 +175,15 @@ async function cmdRun(): Promise<void> {
 
 async function cmdLog(): Promise<void> {
   const device = await getConnectedDevice();
-  console.log(`Streaming logs from ${device.name} (Ctrl+C to stop)...\n`);
+  console.log(`Launching Clanky with console attached on ${device.name} (Ctrl+C to stop)...\n`);
 
   const proc = Bun.spawn(
     [
-      "xcrun", "devicectl", "device", "process", "logstream",
+      "xcrun", "devicectl", "device", "process", "launch",
       "--device", device.udid,
-      "--process-name", "Clanky",
-      "--style", "compact",
+      "--console",
+      "--terminate-existing",
+      BUNDLE_ID,
     ],
     { stdout: "inherit", stderr: "inherit" }
   );

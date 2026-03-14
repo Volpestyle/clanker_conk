@@ -1,5 +1,6 @@
 import type {
   VoiceSession,
+  VoiceSessionNativeScreenSharePendingH264DecodeState,
   VoiceSessionNativeScreenShareState,
   VoiceSessionNativeScreenShareSharerState,
   VoiceSessionNativeScreenShareStreamState
@@ -38,6 +39,7 @@ type NativeDiscordScreenShareSessionLike = {
     transportReason?: string | null;
     transportUpdatedAt?: number;
     transportConnectedAt?: number;
+    pendingH264Decode?: Partial<VoiceSessionNativeScreenSharePendingH264DecodeState> | null;
   } | null;
 };
 
@@ -134,6 +136,47 @@ function normalizeSharersMap(
   );
 }
 
+function normalizePendingH264DecodeState(
+  pending: Partial<VoiceSessionNativeScreenSharePendingH264DecodeState> | null | undefined
+): VoiceSessionNativeScreenSharePendingH264DecodeState | null {
+  const userId = String(pending?.userId || "").trim();
+  if (!userId) {
+    return null;
+  }
+
+  const frameBase64s = Array.isArray(pending?.frameBase64s)
+    ? pending.frameBase64s
+        .map((entry) => String(entry || "").trim())
+        .filter((entry) => entry.length > 0)
+    : [];
+  if (frameBase64s.length <= 0) {
+    return null;
+  }
+
+  const approximateBytes = Math.max(
+    0,
+    Math.floor(
+      Number(
+        pending?.approximateBytes ||
+          frameBase64s.reduce(
+            (sum, entry) => sum + Buffer.from(entry, "base64").length,
+            0
+          )
+      ) || 0
+    )
+  );
+
+  return {
+    userId,
+    startedAt: Math.max(0, Math.floor(Number(pending?.startedAt || 0))),
+    updatedAt: Math.max(0, Math.floor(Number(pending?.updatedAt || 0))),
+    firstRtpTimestamp: Math.max(0, Math.floor(Number(pending?.firstRtpTimestamp || 0))),
+    lastRtpTimestamp: Math.max(0, Math.floor(Number(pending?.lastRtpTimestamp || 0))),
+    frameBase64s,
+    approximateBytes
+  };
+}
+
 function streamLooksActive(
   stream: VoiceSessionNativeScreenShareStreamState | null | undefined
 ): boolean {
@@ -176,7 +219,8 @@ export function createNativeDiscordScreenShareState(): VoiceSessionNativeScreenS
     transportStatus: null,
     transportReason: null,
     transportUpdatedAt: 0,
-    transportConnectedAt: 0
+    transportConnectedAt: 0,
+    pendingH264Decode: null
   };
 }
 
@@ -208,6 +252,7 @@ export function ensureNativeDiscordScreenShareState(
   state.transportReason = String(current?.transportReason || "").trim() || null;
   state.transportUpdatedAt = Number(current?.transportUpdatedAt || 0);
   state.transportConnectedAt = Number(current?.transportConnectedAt || 0);
+  state.pendingH264Decode = normalizePendingH264DecodeState(current?.pendingH264Decode);
   session.nativeScreenShare = state;
   return state;
 }
@@ -245,6 +290,9 @@ export function removeNativeDiscordVideoSharer(
   if (state.subscribedTargetUserId === normalizedUserId) {
     state.subscribedTargetUserId = null;
   }
+  if (state.pendingH264Decode?.userId === normalizedUserId) {
+    state.pendingH264Decode = null;
+  }
   return removed;
 }
 
@@ -268,6 +316,7 @@ export function clearNativeDiscordScreenShareState(session: NativeDiscordScreenS
   state.transportReason = null;
   state.transportUpdatedAt = 0;
   state.transportConnectedAt = 0;
+  state.pendingH264Decode = null;
 }
 
 export function recordNativeDiscordVideoFrame(
@@ -288,6 +337,64 @@ export function recordNativeDiscordVideoFrame(
   };
   state.sharers.set(normalizedUserId, nextValue);
   return nextValue;
+}
+
+export function clearPendingNativeDiscordH264DecodeSequence(
+  session: NativeDiscordScreenShareSessionLike | null | undefined,
+  userId?: string | null
+): void {
+  if (!session) return;
+  const state = ensureNativeDiscordScreenShareState(session);
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId || state.pendingH264Decode?.userId === normalizedUserId) {
+    state.pendingH264Decode = null;
+  }
+}
+
+export function selectNativeDiscordH264BootstrapSequence(
+  session: NativeDiscordScreenShareSessionLike | null | undefined,
+  payload: Pick<ClankvoxUserVideoFrame, "userId" | "frameBase64" | "keyframe" | "rtpTimestamp">
+): VoiceSessionNativeScreenSharePendingH264DecodeState | null {
+  if (!session) return null;
+  const normalizedUserId = String(payload.userId || "").trim();
+  const frameBase64 = String(payload.frameBase64 || "").trim();
+  if (!normalizedUserId || !frameBase64) {
+    return null;
+  }
+
+  const frameBytes = Buffer.from(frameBase64, "base64").length;
+  if (frameBytes <= 0) {
+    return null;
+  }
+
+  const state = ensureNativeDiscordScreenShareState(session);
+  const now = Date.now();
+  const rtpTimestamp = Math.max(0, Math.floor(Number(payload.rtpTimestamp) || 0));
+  const current = state.pendingH264Decode;
+
+  if (payload.keyframe) {
+    const started = {
+      userId: normalizedUserId,
+      startedAt: now,
+      updatedAt: now,
+      firstRtpTimestamp: rtpTimestamp,
+      lastRtpTimestamp: rtpTimestamp,
+      frameBase64s: [frameBase64],
+      approximateBytes: frameBytes
+    };
+    state.pendingH264Decode = started;
+    return started;
+  }
+
+  if (!current || current.userId !== normalizedUserId) {
+    return null;
+  }
+
+  return {
+    ...current,
+    updatedAt: now,
+    lastRtpTimestamp: rtpTimestamp
+  };
 }
 
 export function listActiveNativeDiscordScreenSharers(

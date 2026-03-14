@@ -93,19 +93,23 @@ struct ClankyClient: Sendable {
     private func execute(_ request: URLRequest) async throws -> (Data, URLResponse) {
         let urlString = request.url?.absoluteString ?? "nil"
         log.info("HTTP \(request.httpMethod ?? "GET", privacy: .public) \(urlString, privacy: .public) tokenLength=\(self.token.count)")
+        print("[ClankyClient] \(request.httpMethod ?? "GET") \(urlString) tokenLength=\(self.token.count)")
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             log.error("Invalid non-HTTP response for \(urlString, privacy: .public)")
+            print("[ClankyClient] invalid non-HTTP response for \(urlString)")
             throw ClankyClientError.invalidResponse
         }
 
         guard (200...299).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
             log.error("HTTP \(http.statusCode) for \(urlString, privacy: .public): \(body, privacy: .public)")
+            print("[ClankyClient] HTTP \(http.statusCode) for \(urlString): \(body)")
             throw ClankyClientError.http(statusCode: http.statusCode, body: body)
         }
 
+        print("[ClankyClient] HTTP \(http.statusCode) for \(urlString)")
         return (data, response)
     }
 }

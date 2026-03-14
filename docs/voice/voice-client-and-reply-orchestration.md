@@ -563,7 +563,9 @@ Same-utterance late ASR revisions are treated as replacements, not as brand-new 
 `maybeSupersedeRealtimeReplyBeforePlayback` runs before each speech playback step:
 
 - Checks if newer finalized realtime turns are queued
-- If they do: abandon the stale reply (`completed: false`), let the newer content process
+- Queued turns are only counted as interrupting if they pass both the PCM silence gate AND a server-VAD speech confirmation check (when the ASR bridge was active). Non-speech audio like humming, coughing, or laughing does not supersede a pending reply.
+- If interrupting turns exist and no active/proposed output lease exists: abandon the stale reply (`completed: false`), let the newer content process
+- If the pending reply carries `[[LEASE:ASSERTIVE]]` or `[[LEASE:ATOMIC]]`: keep the older reply for a short bounded pre-audio lease window until first audio starts
 
 This is the final safety net for anything that slips through stages 1 and 2.
 
@@ -572,6 +574,13 @@ by themselves. Before assistant audio starts, filler noise, backchannel, and
 same-speaker half-starts are treated as non-turns unless they become a real
 admitted newer turn. Once assistant audio is actually playing, the ordinary
 interruption flow takes over.
+
+The lease mechanism is intentionally narrow:
+
+- it is model-requested metadata, not a hardcoded speech trigger
+- pre-audio: it blocks supersede and output-lock interruption until first audio
+- post-audio: it extends barge-in immunity so the reply's point can land (assertive: 2 s, atomic: 4 s from first audio), after which ordinary interruption policy takes over
+- the runtime still owns the duration cap and release semantics
 
 ### Behavior summary
 
