@@ -3426,7 +3426,12 @@ export class VoiceSessionManager {
 
   summarizeRealtimeInterruptingQueue({
     session = null,
-    finalizedAfterMs = 0
+    finalizedAfterMs = 0,
+    replyUserId = null
+  }: {
+    session?: VoiceSession | null;
+    finalizedAfterMs?: number;
+    replyUserId?: string | null;
   } = {}) {
     const pendingQueue = Array.isArray(session?.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
     if (!pendingQueue.length) {
@@ -3434,6 +3439,7 @@ export class VoiceSessionManager {
         pendingInterruptingQueueDepth: 0,
         pendingNearSilentQueueDepth: 0,
         pendingUnconfirmedSpeechQueueDepth: 0,
+        pendingOtherSpeakerQueueDepth: 0,
         totalPendingRealtimeQueueDepth: 0,
         consideredPendingRealtimeQueueDepth: 0,
         oldestConsideredFinalizedAt: null,
@@ -3442,10 +3448,12 @@ export class VoiceSessionManager {
     }
 
     const finalizedAfter = Math.max(0, Number(finalizedAfterMs || 0));
+    const normalizedReplyUserId = String(replyUserId || "").trim() || null;
     const sampleRateHz = Number(session?.realtimeInputSampleRateHz) || 24000;
     let pendingInterruptingQueueDepth = 0;
     let pendingNearSilentQueueDepth = 0;
     let pendingUnconfirmedSpeechQueueDepth = 0;
+    let pendingOtherSpeakerQueueDepth = 0;
     let consideredPendingRealtimeQueueDepth = 0;
     let oldestConsideredFinalizedAt = Number.POSITIVE_INFINITY;
     let newestConsideredFinalizedAt = 0;
@@ -3485,6 +3493,19 @@ export class VoiceSessionManager {
         pendingUnconfirmedSpeechQueueDepth += 1;
         continue;
       }
+      // Only the person the bot is replying to can supersede the reply.
+      // Ambient chatter from other participants should not invalidate a
+      // response the bot generated for a specific person. This mirrors
+      // the "speaker" barge-in policy: only the reply target can take the
+      // floor. Turns from other speakers are tracked for observability
+      // but do not count as interrupting.
+      if (normalizedReplyUserId) {
+        const turnUserId = String(queuedTurn.userId || "").trim();
+        if (turnUserId && turnUserId !== normalizedReplyUserId) {
+          pendingOtherSpeakerQueueDepth += 1;
+          continue;
+        }
+      }
       pendingInterruptingQueueDepth += 1;
     }
 
@@ -3492,6 +3513,7 @@ export class VoiceSessionManager {
       pendingInterruptingQueueDepth,
       pendingNearSilentQueueDepth,
       pendingUnconfirmedSpeechQueueDepth,
+      pendingOtherSpeakerQueueDepth,
       totalPendingRealtimeQueueDepth: pendingQueue.length,
       consideredPendingRealtimeQueueDepth,
       oldestConsideredFinalizedAt: Number.isFinite(oldestConsideredFinalizedAt)
@@ -3508,7 +3530,8 @@ export class VoiceSessionManager {
     source = "voice_reply",
     speechStep = 0,
     generationStartedAtMs = 0,
-    outputLeaseMode = null
+    outputLeaseMode = null,
+    replyUserId = null
   } = {}) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -3525,9 +3548,13 @@ export class VoiceSessionManager {
       return false;
     }
     const generationStartedAt = Math.max(0, Number(generationStartedAtMs || 0));
+    // Only the person the bot is replying to can supersede the reply,
+    // mirroring the "speaker" barge-in policy. Ambient chatter from
+    // other participants does not invalidate a targeted response.
     const pendingSummary = this.summarizeRealtimeInterruptingQueue({
       session,
-      finalizedAfterMs: generationStartedAt
+      finalizedAfterMs: generationStartedAt,
+      replyUserId
     });
     const hasInterruptingNewerInput = pendingSummary.pendingInterruptingQueueDepth > 0;
     if (!hasInterruptingNewerInput) return false;
@@ -3545,8 +3572,10 @@ export class VoiceSessionManager {
         sessionId: session.id,
         source: String(source || "voice_reply"),
         supersedeReason,
+        replyUserId: String(replyUserId || "").trim() || null,
         generationStartedAt: generationStartedAt > 0 ? generationStartedAt : null,
         pendingRealtimeQueueDepth: pendingSummary.pendingInterruptingQueueDepth,
+        pendingOtherSpeakerQueueDepth: pendingSummary.pendingOtherSpeakerQueueDepth,
         totalPendingRealtimeQueueDepth: pendingSummary.totalPendingRealtimeQueueDepth,
         consideredPendingRealtimeQueueDepth: pendingSummary.consideredPendingRealtimeQueueDepth,
         pendingNearSilentQueueDepth: pendingSummary.pendingNearSilentQueueDepth,
@@ -3601,6 +3630,10 @@ export class VoiceSessionManager {
     let completed = true;
     let localSpeechPolicyActivated = false;
 
+    // Derive reply target from the interruption policy so supersede checks
+    // only consider turns from the same speaker, mirroring barge-in semantics.
+    const supersedeReplyUserId = normalizedInterruptionPolicy?.allowedUserId || null;
+
     if (preferRealtimeUtterance && requiresOrderedPlayback) {
       const barrierReady = await this.waitForOrderedRealtimePlaybackBarrier({
         session,
@@ -3634,7 +3667,8 @@ export class VoiceSessionManager {
               source: speechSource,
               speechStep,
               generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0),
-              outputLeaseMode
+              outputLeaseMode,
+              replyUserId: supersedeReplyUserId
             })
           ) {
             completed = false;
@@ -3670,7 +3704,8 @@ export class VoiceSessionManager {
               source: speechSource,
               speechStep,
               generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0),
-              outputLeaseMode
+              outputLeaseMode,
+              replyUserId: supersedeReplyUserId
             })
           ) {
             completed = false;

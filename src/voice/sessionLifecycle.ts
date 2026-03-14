@@ -1026,9 +1026,32 @@ export class SessionLifecycle {
       }
     };
 
+    // Track whether the ElevenLabs WS closed due to an idle timeout so the
+    // socket_closed handler can attempt a reconnect instead of ending the session.
+    let elevenLabsIdleTimeoutPending = false;
+
     const onErrorEvent = (errorPayload) => {
       if (session.ending) return;
       const details = parseRealtimeErrorPayload(errorPayload);
+      const normalizedMessage = String(details.message || "").trim().toLowerCase();
+
+      // ElevenLabs input_timeout_exceeded: the TTS WebSocket idled because
+      // there was nothing to say.  This is normal during screen watch or
+      // any period of active listening.  Mark it so the socket_closed
+      // handler can reconnect instead of killing the session.
+      if (normalizedMessage.includes("input_timeout_exceeded")) {
+        elevenLabsIdleTimeoutPending = true;
+        this.host.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.host.client.user?.id || null,
+          content: `${runtimeLabel}_idle_timeout: will reconnect on next utterance`,
+          metadata: { sessionId: session.id }
+        });
+        return;
+      }
+
       this.host.store.logAction({
         kind: "voice_error",
         guildId: session.guildId,
@@ -1091,6 +1114,56 @@ export class SessionLifecycle {
       if (session.ending) return;
       const code = Number(closeInfo?.code || 0) || null;
       const reason = String(closeInfo?.reason || "").trim() || null;
+
+      // If the close was triggered by an ElevenLabs idle timeout, don't
+      // kill the session.  The TTS client will reconnect lazily when the
+      // bot next needs to speak.
+      if (elevenLabsIdleTimeoutPending) {
+        elevenLabsIdleTimeoutPending = false;
+        this.host.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.host.client.user?.id || null,
+          content: `${runtimeLabel}_socket_closed_idle_timeout_reconnectable`,
+          metadata: { sessionId: session.id, code, reason }
+        });
+        // Attempt to reconnect the ElevenLabs TTS client in the background.
+        // The session stays alive — audio capture, screen watch, etc. continue.
+        if (session.realtimeClient && typeof session.realtimeClient.connect === "function") {
+          void (async () => {
+            try {
+              await session.realtimeClient.connect(session.realtimeClient.sessionConfig || {});
+              this.host.store.logAction({
+                kind: "voice_runtime",
+                guildId: session.guildId,
+                channelId: session.textChannelId,
+                userId: this.host.client.user?.id || null,
+                content: `${runtimeLabel}_idle_timeout_reconnected`,
+                metadata: { sessionId: session.id }
+              });
+            } catch (reconnectError) {
+              this.host.store.logAction({
+                kind: "voice_error",
+                guildId: session.guildId,
+                channelId: session.textChannelId,
+                userId: this.host.client.user?.id || null,
+                content: `${runtimeLabel}_idle_timeout_reconnect_failed: ${String((reconnectError as Error)?.message || reconnectError)}`,
+                metadata: { sessionId: session.id }
+              });
+              // Reconnect failed — end session as fallback
+              this.fireAndForgetEndSession(session, {
+                guildId: session.guildId,
+                reason: "realtime_reconnect_failed",
+                announcement: "lost voice connection, leaving vc.",
+                settings
+              }, "realtime_reconnect_failed");
+            }
+          })();
+        }
+        return;
+      }
+
       this.host.store.logAction({
         kind: "voice_error",
         guildId: session.guildId,
