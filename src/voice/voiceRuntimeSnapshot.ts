@@ -692,10 +692,6 @@ export function buildVoiceRuntimeSnapshot(
           ? session.streamWatch.brainContextEntries.length
           : 0,
         ingestedFrameCount: Number(session.streamWatch?.ingestedFrameCount || 0),
-        durableScreenNotes: (Array.isArray(session.streamWatch?.durableScreenNotes) ? session.streamWatch.durableScreenNotes : [])
-          .map((note) => String(note || "").trim())
-          .filter(Boolean)
-          .slice(-24),
         visualFeed: streamWatchVisualFeed,
         brainContextPayload: streamWatchBrainContext
           ? {

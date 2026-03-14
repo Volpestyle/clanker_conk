@@ -30,13 +30,15 @@ import {
   resolveSoundboardCandidates as resolveSoundboardCandidatesModule
 } from "./voiceSoundboard.ts";
 import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
-import { appendStreamWatchBrainContextEntry } from "./voiceStreamWatch.ts";
+
+import { normalizeVoiceOutputLeaseMode } from "./voiceOutputLease.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type {
   InFlightAcceptedBrainTurn,
   VoiceConversationContext,
   VoiceGenerationContextSnapshot,
   LoggedVoicePromptBundle,
+  VoiceOutputLeaseMode,
   VoicePendingResponseLatencyContext,
   VoiceRuntimeEventContext,
   VoiceRealtimeToolSettings,
@@ -53,9 +55,8 @@ type GeneratedPayload = {
   usedScreenShareOffer?: boolean;
   leaveVoiceChannelRequested?: boolean;
   voiceAddressing?: unknown;
+  voiceOutputLeaseMode?: unknown;
   streamedSentenceCount?: number;
-  screenNote?: string | null;
-  screenMoment?: string | null;
   generationContextSnapshot?: VoiceGenerationContextSnapshot | null;
   replyPrompts?: LoggedVoicePromptBundle | null;
 };
@@ -230,6 +231,15 @@ function resolveAssistantReplyTargeting(
   };
 }
 
+function normalizeAssistantReplyOutputLeaseMode(rawOutputLeaseMode: unknown) {
+  const normalizedRaw =
+    rawOutputLeaseMode && typeof rawOutputLeaseMode === "object" && !Array.isArray(rawOutputLeaseMode)
+      ? (rawOutputLeaseMode as Record<string, unknown>).mode
+      : rawOutputLeaseMode;
+  const normalizedMode = normalizeVoiceOutputLeaseMode(normalizedRaw);
+  return normalizedMode === "ambient" ? null : normalizedMode;
+}
+
 function buildContextMessages(session: VoiceSession, normalizedTranscript: string) {
   const contextTranscript = normalizeVoiceText(normalizedTranscript, STT_REPLY_MAX_CHARS);
   const contextTurnRows = Array.isArray(session.transcriptTurns)
@@ -253,6 +263,7 @@ function buildContextMessages(session: VoiceSession, normalizedTranscript: strin
   }
   const contextTurns = contextTurnRows.map((row) => ({
     role: row.role === "assistant" ? "assistant" : "user" as const,
+    kind: ("kind" in row ? row.kind : "speech") as string | undefined,
     content: normalizeVoiceText(row.text, STT_REPLY_MAX_CHARS),
     at: Number(row?.at || 0)
   }));
@@ -261,7 +272,7 @@ function buildContextMessages(session: VoiceSession, normalizedTranscript: strin
     .slice(-STT_CONTEXT_MAX_MESSAGES)
     .map((row) => ({
       role: row.role === "assistant" ? "assistant" : "user",
-      content: row.content
+      content: row.kind === "thought" ? `[thought: ${row.content}]` : row.content
     }))
     .filter((row): row is ContextMessage => Boolean(row.content));
   const contextMessageChars = contextMessages.reduce((total, row) => total + row.content.length, 0);
@@ -548,10 +559,6 @@ export async function runVoiceReplyPipeline(
             dataBase64: String(session.streamWatch.latestFrameDataBase64)
           }
         : null;
-  const streamWatchDurableScreenNotes =
-    session.streamWatch?.active && Array.isArray(session.streamWatch?.durableScreenNotes)
-      ? session.streamWatch.durableScreenNotes
-      : [];
   const generationConversationContext = {
     ...(resolvedConversationContext || {}),
     sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
@@ -623,18 +630,19 @@ export async function runVoiceReplyPipeline(
       recentVoiceEffectEvents,
       soundboardCandidates: soundboardCandidateLines,
       streamWatchLatestFrame,
-      streamWatchDurableScreenNotes,
       webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
       voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
       onSpokenSentence: streamingVoiceReplyEnabled
         ? async ({
           text,
           index,
-          voiceAddressing
+          voiceAddressing,
+          voiceOutputLeaseMode
         }: {
           text: string;
           index: number;
           voiceAddressing?: { talkingTo: string | null } | null;
+          voiceOutputLeaseMode?: VoiceOutputLeaseMode | null;
         }) => {
           if (generationInterrupted()) return false;
           const playbackPlan = host.buildVoiceReplyPlaybackPlan({
@@ -647,6 +655,7 @@ export async function runVoiceReplyPipeline(
             userId: params.userId,
             rawAddressing: voiceAddressing || null
           });
+          const streamedReplyOutputLeaseMode = normalizeAssistantReplyOutputLeaseMode(voiceOutputLeaseMode);
           const requestedAt = Date.now();
           const latencyContext =
             index === 0
@@ -674,6 +683,7 @@ export async function runVoiceReplyPipeline(
               userId: host.client.user?.id || null,
               source: playbackSource,
               interruptionPolicy: streamedReplyInterruptionPolicy,
+              outputLeaseMode: streamedReplyOutputLeaseMode,
               latencyContext,
               musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
             });
@@ -696,6 +706,7 @@ export async function runVoiceReplyPipeline(
             source: playbackSource,
             preferRealtimeUtterance: useRealtimeTts,
             interruptionPolicy: streamedReplyInterruptionPolicy,
+            outputLeaseMode: streamedReplyOutputLeaseMode,
             latencyContext,
             musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
           });
@@ -836,29 +847,6 @@ export async function runVoiceReplyPipeline(
     replyPrompts,
     source
   });
-  const screenNote = typeof generatedPayload?.screenNote === "string"
-    ? String(generatedPayload.screenNote || "").trim().slice(0, 220)
-    : null;
-  if (screenNote && session.streamWatch?.active) {
-    appendStreamWatchBrainContextEntry({
-      session,
-      text: screenNote,
-      at: Date.now(),
-      provider: null,
-      model: null,
-      speakerName: null
-    });
-    session.streamWatch.lastBrainContextAt = Date.now();
-  }
-  const screenMoment = typeof generatedPayload?.screenMoment === "string"
-    ? String(generatedPayload.screenMoment || "").trim().slice(0, 220)
-    : null;
-  if (screenMoment && session.streamWatch?.active) {
-    if (!Array.isArray(session.streamWatch.durableScreenNotes)) {
-      session.streamWatch.durableScreenNotes = [];
-    }
-    session.streamWatch.durableScreenNotes.push(screenMoment);
-  }
   const {
     generatedVoiceAddressing,
     replyInterruptionPolicy
@@ -867,6 +855,12 @@ export async function runVoiceReplyPipeline(
     userId: params.userId,
     rawAddressing: generatedPayload?.voiceAddressing
   });
+  const replyOutputLeaseMode = normalizeAssistantReplyOutputLeaseMode(
+    generatedPayload?.voiceOutputLeaseMode
+  );
+  if (session.inFlightAcceptedBrainTurn === inFlightAcceptedBrainTurn) {
+    session.inFlightAcceptedBrainTurn.outputLeaseMode = replyOutputLeaseMode;
+  }
 
   const playbackPlan = host.buildVoiceReplyPlaybackPlan({
     replyText,
@@ -954,6 +948,7 @@ export async function runVoiceReplyPipeline(
           source: playbackSource,
           preferRealtimeUtterance: useRealtimeTts,
           interruptionPolicy: replyInterruptionPolicy,
+          outputLeaseMode: replyOutputLeaseMode,
           latencyContext: replyLatencyContext,
           musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
         });

@@ -264,6 +264,11 @@ import { BargeInController } from "./bargeInController.ts";
 import { CaptureManager } from "./captureManager.ts";
 import { DeferredActionQueue } from "./deferredActionQueue.ts";
 import { InstructionManager } from "./instructionManager.ts";
+import {
+  hasActiveVoiceOutputLease,
+  normalizeVoiceOutputLeaseMode,
+  voiceOutputLeaseModesMatch
+} from "./voiceOutputLease.ts";
 import { ReplyManager } from "./replyManager.ts";
 import { SessionLifecycle } from "./sessionLifecycle.ts";
 import { ThoughtEngine } from "./thoughtEngine.ts";
@@ -2228,6 +2233,28 @@ export class VoiceSessionManager {
     logContent = "voice_output_lock_interrupt",
     stateTrigger = "output_lock_interrupt"
   }) {
+    if (hasActiveVoiceOutputLease({ session })) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session?.guildId,
+        channelId: session?.textChannelId,
+        userId: userId || this.client.user?.id || null,
+        content: "voice_output_lock_interrupt_blocked_output_lease",
+        metadata: {
+          sessionId: session?.id || null,
+          source: String(source || "output_lock_interrupt"),
+          stateTrigger: String(stateTrigger || "output_lock_interrupt"),
+          requestId: Number(session?.outputLease?.requestId || session?.pendingResponse?.requestId || 0) || null,
+          leaseMode:
+            String(
+              session?.outputLease?.mode ||
+              session?.pendingResponse?.outputLeaseMode ||
+              ""
+            ).trim() || null
+        }
+      });
+      return false;
+    }
     const command = this.bargeInController.buildInterruptBotSpeechForBargeInCommand({
       session,
       userId,
@@ -2939,6 +2966,7 @@ export class VoiceSessionManager {
       userId: next.userId,
       source: next.source,
       interruptionPolicy: next.interruptionPolicy,
+      outputLeaseMode: next.outputLeaseMode || null,
       latencyContext: next.latencyContext,
       utteranceText: next.utteranceText,
       musicWakeRefreshAfterSpeech: Boolean(next.musicWakeRefreshAfterSpeech)
@@ -3032,6 +3060,7 @@ export class VoiceSessionManager {
     userId = null,
     source = "voice_prompt_utterance",
     interruptionPolicy = null,
+    outputLeaseMode = null,
     latencyContext = null,
     utteranceText = null,
     musicWakeRefreshAfterSpeech = false
@@ -3052,6 +3081,9 @@ export class VoiceSessionManager {
       userId,
       policy: interruptionPolicy,
     });
+    const normalizedOutputLeaseMode = normalizeVoiceOutputLeaseMode(outputLeaseMode);
+    const effectiveOutputLeaseMode =
+      session.botTurnOpen ? "ambient" : normalizedOutputLeaseMode;
     const normalizedUtteranceText =
       utteranceText === null
         ? null
@@ -3066,6 +3098,7 @@ export class VoiceSessionManager {
         resetRetryState: true,
         emitCreateEvent: false,
         interruptionPolicy: normalizedInterruptionPolicy,
+        outputLeaseMode: effectiveOutputLeaseMode,
         utteranceText: normalizedUtteranceText,
         latencyContext,
         musicWakeRefreshAfterSpeech
@@ -3074,7 +3107,8 @@ export class VoiceSessionManager {
         utteranceText: normalizedUtteranceText,
         requestedAt: Date.now(),
         source: String(source || "voice_prompt_utterance"),
-        interruptionPolicy: normalizedInterruptionPolicy
+        interruptionPolicy: normalizedInterruptionPolicy,
+        outputLeaseMode: effectiveOutputLeaseMode
       };
       return true;
     } catch (error) {
@@ -3099,6 +3133,7 @@ export class VoiceSessionManager {
     userId = null,
     source = "voice_prompt_utterance",
     interruptionPolicy = null,
+    outputLeaseMode = null,
     latencyContext = null,
     utteranceText = null,
     musicWakeRefreshAfterSpeech = false
@@ -3126,6 +3161,9 @@ export class VoiceSessionManager {
       userId,
       policy: interruptionPolicy,
     });
+    const normalizedOutputLeaseMode = normalizeVoiceOutputLeaseMode(outputLeaseMode);
+    const effectiveOutputLeaseMode =
+      session.botTurnOpen ? "ambient" : normalizedOutputLeaseMode;
     const normalizedUtteranceText =
       utteranceText === null
         ? null
@@ -3138,6 +3176,7 @@ export class VoiceSessionManager {
       source: String(source || "voice_prompt_utterance"),
       queuedAt: Date.now(),
       interruptionPolicy: normalizedInterruptionPolicy,
+      outputLeaseMode: effectiveOutputLeaseMode,
       musicWakeRefreshAfterSpeech: Boolean(musicWakeRefreshAfterSpeech),
       latencyContext:
         latencyContext && typeof latencyContext === "object"
@@ -3216,6 +3255,7 @@ export class VoiceSessionManager {
       userId,
       source,
       interruptionPolicy,
+      outputLeaseMode: normalizedOutputLeaseMode,
       latencyContext,
       utteranceText: normalizedUtteranceText,
       musicWakeRefreshAfterSpeech
@@ -3228,6 +3268,7 @@ export class VoiceSessionManager {
     userId = null,
     source = "voice_text_utterance",
     interruptionPolicy = null,
+    outputLeaseMode = null,
     latencyContext = null,
     musicWakeRefreshAfterSpeech = false
   }) {
@@ -3241,6 +3282,7 @@ export class VoiceSessionManager {
       userId,
       source,
       interruptionPolicy,
+      outputLeaseMode,
       latencyContext,
       utteranceText: normalizedLine,
       musicWakeRefreshAfterSpeech
@@ -3269,7 +3311,8 @@ export class VoiceSessionManager {
     return (
       String(earlierEntry?.userId || "") === String(laterEntry?.userId || "") &&
       Boolean(earlierEntry?.musicWakeRefreshAfterSpeech) === Boolean(laterEntry?.musicWakeRefreshAfterSpeech) &&
-      this.replyInterruptionPoliciesMatch(earlierEntry?.interruptionPolicy || null, laterEntry?.interruptionPolicy || null)
+      this.replyInterruptionPoliciesMatch(earlierEntry?.interruptionPolicy || null, laterEntry?.interruptionPolicy || null) &&
+      voiceOutputLeaseModesMatch(earlierEntry?.outputLeaseMode || null, laterEntry?.outputLeaseMode || null)
     );
   }
 
@@ -3384,6 +3427,7 @@ export class VoiceSessionManager {
       return {
         pendingInterruptingQueueDepth: 0,
         pendingNearSilentQueueDepth: 0,
+        pendingUnconfirmedSpeechQueueDepth: 0,
         totalPendingRealtimeQueueDepth: 0,
         consideredPendingRealtimeQueueDepth: 0,
         oldestConsideredFinalizedAt: null,
@@ -3395,6 +3439,7 @@ export class VoiceSessionManager {
     const sampleRateHz = Number(session?.realtimeInputSampleRateHz) || 24000;
     let pendingInterruptingQueueDepth = 0;
     let pendingNearSilentQueueDepth = 0;
+    let pendingUnconfirmedSpeechQueueDepth = 0;
     let consideredPendingRealtimeQueueDepth = 0;
     let oldestConsideredFinalizedAt = Number.POSITIVE_INFINITY;
     let newestConsideredFinalizedAt = 0;
@@ -3425,12 +3470,22 @@ export class VoiceSessionManager {
         pendingNearSilentQueueDepth += 1;
         continue;
       }
+      // If ASR bridge was active (bridgeUtteranceId present) but server VAD
+      // never confirmed speech, this is likely non-speech audio (humming,
+      // coughing, laughing). Don't let it supersede a pending reply.
+      // We trust VAD over ASR transcript here because Whisper hallucinates
+      // text on non-speech audio (humming produced 37 chars of junk).
+      if (queuedTurn.bridgeUtteranceId && !queuedTurn.serverVadConfirmed) {
+        pendingUnconfirmedSpeechQueueDepth += 1;
+        continue;
+      }
       pendingInterruptingQueueDepth += 1;
     }
 
     return {
       pendingInterruptingQueueDepth,
       pendingNearSilentQueueDepth,
+      pendingUnconfirmedSpeechQueueDepth,
       totalPendingRealtimeQueueDepth: pendingQueue.length,
       consideredPendingRealtimeQueueDepth,
       oldestConsideredFinalizedAt: Number.isFinite(oldestConsideredFinalizedAt)
@@ -3446,10 +3501,23 @@ export class VoiceSessionManager {
     session = null,
     source = "voice_reply",
     speechStep = 0,
-    generationStartedAtMs = 0
+    generationStartedAtMs = 0,
+    outputLeaseMode = null
   } = {}) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
+    const normalizedOutputLeaseMode = normalizeVoiceOutputLeaseMode(outputLeaseMode);
+    const effectiveOutputLeaseMode =
+      session.botTurnOpen ? "ambient" : normalizedOutputLeaseMode;
+    if (
+      effectiveOutputLeaseMode !== "ambient" ||
+      hasActiveVoiceOutputLease({
+        session,
+        requestId: Number(session.pendingResponse?.requestId || 0) || null
+      })
+    ) {
+      return false;
+    }
     const generationStartedAt = Math.max(0, Number(generationStartedAtMs || 0));
     const pendingSummary = this.summarizeRealtimeInterruptingQueue({
       session,
@@ -3476,6 +3544,7 @@ export class VoiceSessionManager {
         totalPendingRealtimeQueueDepth: pendingSummary.totalPendingRealtimeQueueDepth,
         consideredPendingRealtimeQueueDepth: pendingSummary.consideredPendingRealtimeQueueDepth,
         pendingNearSilentQueueDepth: pendingSummary.pendingNearSilentQueueDepth,
+        pendingUnconfirmedSpeechQueueDepth: pendingSummary.pendingUnconfirmedSpeechQueueDepth,
         oldestConsideredFinalizedAt: pendingSummary.oldestConsideredFinalizedAt,
         newestConsideredFinalizedAt: pendingSummary.newestConsideredFinalizedAt,
         speechStep: Math.max(0, Number(speechStep || 0)),
@@ -3494,6 +3563,7 @@ export class VoiceSessionManager {
     source = "voice_reply",
     preferRealtimeUtterance = false,
     interruptionPolicy = null,
+    outputLeaseMode = null,
     latencyContext = null,
     musicWakeRefreshAfterSpeech = false
   }) {
@@ -3557,7 +3627,8 @@ export class VoiceSessionManager {
               session,
               source: speechSource,
               speechStep,
-              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0),
+              outputLeaseMode
             })
           ) {
             completed = false;
@@ -3569,6 +3640,7 @@ export class VoiceSessionManager {
             userId: this.client.user?.id || null,
             source: speechSource,
             interruptionPolicy,
+            outputLeaseMode,
             latencyContext,
             musicWakeRefreshAfterSpeech
           });
@@ -3591,7 +3663,8 @@ export class VoiceSessionManager {
               session,
               source: speechSource,
               speechStep,
-              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0),
+              outputLeaseMode
             })
           ) {
             completed = false;
@@ -4856,7 +4929,8 @@ export class VoiceSessionManager {
     musicWakeFollowupEligibleAtCapture,
     bridgeUtteranceId,
     asrResult,
-    source
+    source,
+    serverVadConfirmed
   }: VoicePendingInterruptBridgeTurn & {
     session: VoiceSession;
   }) {
@@ -4871,7 +4945,8 @@ export class VoiceSessionManager {
       musicWakeFollowupEligibleAtCapture,
       bridgeUtteranceId: normalizedBridgeUtteranceId,
       asrResult,
-      source
+      source,
+      serverVadConfirmed: Boolean(serverVadConfirmed)
     });
   }
 
@@ -5321,7 +5396,8 @@ export class VoiceSessionManager {
     musicWakeFollowupEligibleAtCapture = false,
     bridgeUtteranceId = null,
     asrResult = null,
-    source = "unknown"
+    source = "unknown",
+    serverVadConfirmed = false
   }: {
     session: VoiceSession;
     userId: string;
@@ -5341,6 +5417,7 @@ export class VoiceSessionManager {
       transcriptLogprobs?: unknown[] | null;
     } | null;
     source?: string;
+    serverVadConfirmed?: boolean;
   }) {
     const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
     const transcriptGuard = inspectAsrTranscript(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
@@ -5367,7 +5444,8 @@ export class VoiceSessionManager {
       usedFallbackModelForTranscriptOverride: Boolean(asrResult?.usedFallbackModel),
       transcriptLogprobsOverride: Array.isArray(asrResult?.transcriptLogprobs)
         ? asrResult.transcriptLogprobs
-        : null
+        : null,
+      serverVadConfirmed: Boolean(serverVadConfirmed)
     });
     return true;
   }
@@ -5396,7 +5474,8 @@ export class VoiceSessionManager {
     musicWakeFollowupEligibleAtCapture = false,
     bridgeUtteranceId = null,
     asrResult = null,
-    source = "unknown"
+    source = "unknown",
+    serverVadConfirmed = false
   }) {
     if (!session || session.ending) return false;
     const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
@@ -5550,7 +5629,8 @@ export class VoiceSessionManager {
           musicWakeFollowupEligibleAtCapture,
           bridgeUtteranceId: normalizedBridgeUtteranceId,
           asrResult,
-          source
+          source,
+          serverVadConfirmed: Boolean(serverVadConfirmed)
         });
         this.store.logAction({
           kind: "voice_runtime",
@@ -5595,7 +5675,8 @@ export class VoiceSessionManager {
       musicWakeFollowupEligibleAtCapture,
       bridgeUtteranceId: normalizedBridgeUtteranceId,
       asrResult,
-      source
+      source,
+      serverVadConfirmed: Boolean(serverVadConfirmed)
     });
   }
 
@@ -7845,14 +7926,6 @@ export class VoiceSessionManager {
           played: normalizedRefs
         };
       },
-      setScreenNote: async (note: string) => ({
-        ok: true,
-        note: String(note || "").replace(/\s+/g, " ").trim().slice(0, 220)
-      }),
-      setScreenMoment: async (moment: string) => ({
-        ok: true,
-        moment: String(moment || "").replace(/\s+/g, " ").trim().slice(0, 220)
-      }),
       leaveVoiceChannel: () =>
         executeLocalVoiceToolCall(this, { session, settings, toolName: "leave_voice_channel", args: {} })
     };

@@ -245,16 +245,6 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     isVoiceRealtimeAvailable: ({ capabilities }) => capabilities.soundboardAvailable
   },
   {
-    name: "screen_note",
-    surfaces: ["reply"],
-    isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable)
-  },
-  {
-    name: "screen_moment",
-    surfaces: ["reply"],
-    isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable)
-  },
-  {
     name: "note_context",
     surfaces: ["reply"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable)

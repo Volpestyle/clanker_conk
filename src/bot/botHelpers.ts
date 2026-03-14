@@ -146,8 +146,6 @@ export const REPLY_OUTPUT_SCHEMA = {
       },
       required: ["action", "confidence", "reason"]
     },
-    screenNote: { type: ["string", "null"] },
-    screenMoment: { type: ["string", "null"] }
   },
   required: [
     "text",
@@ -155,9 +153,7 @@ export const REPLY_OUTPUT_SCHEMA = {
     "reactionEmoji",
     "media",
     "automationAction",
-    "screenWatchIntent",
-    "screenNote",
-    "screenMoment"
+    "screenWatchIntent"
   ]
 };
 

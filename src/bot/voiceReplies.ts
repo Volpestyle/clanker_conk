@@ -49,6 +49,7 @@ import {
   loadSessionBehavioralMemoryFacts,
   loadSessionConversationHistory
 } from "../voice/voiceSessionMemoryCache.ts";
+import { isStreamWatchFrameReady } from "../voice/voiceStreamWatch.ts";
 import { mergeImageInputs } from "./imageAnalysis.ts";
 import { MAX_MODEL_IMAGE_INPUTS } from "./replyPipelineShared.ts";
 import {
@@ -60,17 +61,21 @@ import {
   VOICE_GENERATION_BEHAVIORAL_TIMEOUT_MS,
   VOICE_GENERATION_CONTINUITY_TIMEOUT_MS
 } from "../voice/voiceSessionManager.constants.ts";
+import type { VoiceOutputLeaseMode } from "../voice/voiceSessionTypes.ts";
 
 const SESSION_DURABLE_CONTEXT_MAX_ENTRIES = 50;
 const SELF_SUBJECT = "__self__";
 const LORE_SUBJECT = "__lore__";
-const LEADING_REPLY_ADDRESSING_DIRECTIVE_RE =
-  /^\s*\[\[\s*TO\s*:\s*([^\]]+?)\s*\]\]\s*/i;
+const LEADING_REPLY_METADATA_DIRECTIVE_RE =
+  /^\[\[\s*(TO|LEASE)\s*:\s*([^\]]+?)\s*\]\]\s*/i;
 const MAX_LEADING_REPLY_ADDRESSING_BUFFER_CHARS = 160;
 
 type SessionDurableContextCategory = "fact" | "plan" | "preference" | "relationship";
 type GeneratedVoiceAddressing = {
   talkingTo: string | null;
+};
+type GeneratedVoiceOutputLease = {
+  mode: Exclude<VoiceOutputLeaseMode, "ambient">;
 };
 
 type VoiceGenerationPrepStageOptions<T> = {
@@ -235,6 +240,79 @@ function hasGeneratedVoiceAddressing(addressing: GeneratedVoiceAddressing | null
   return Boolean(addressing.talkingTo);
 }
 
+function hasGeneratedVoiceOutputLease(outputLease: GeneratedVoiceOutputLease | null) {
+  if (!outputLease || typeof outputLease !== "object") return false;
+  return outputLease.mode === "assertive" || outputLease.mode === "atomic";
+}
+
+function parseLeadingReplyMetadataDirectivesImpl(
+  text: unknown,
+  {
+    currentSpeakerName = "",
+    allowDirectiveOnlyTail = true
+  }: {
+    currentSpeakerName?: string;
+    allowDirectiveOnlyTail?: boolean;
+  } = {}
+) {
+  const source = String(text || "");
+  let remaining = source;
+  let voiceAddressing = null as GeneratedVoiceAddressing | null;
+  let voiceOutputLease = null as GeneratedVoiceOutputLease | null;
+  let matched = false;
+
+  while (true) {
+    const leadingWhitespace = remaining.match(/^\s*/)?.[0] || "";
+    const trimmedLeading = remaining.slice(leadingWhitespace.length);
+    if (!trimmedLeading) {
+      return {
+        text: allowDirectiveOnlyTail ? "" : source,
+        voiceAddressing,
+        voiceOutputLeaseMode: voiceOutputLease?.mode || null,
+        matched,
+        complete: allowDirectiveOnlyTail || !matched
+      };
+    }
+
+    if (!trimmedLeading.startsWith("[[")) {
+      return {
+        text: matched ? remaining : source,
+        voiceAddressing,
+        voiceOutputLeaseMode: voiceOutputLease?.mode || null,
+        matched,
+        complete: true
+      };
+    }
+
+    const directiveMatch = trimmedLeading.match(LEADING_REPLY_METADATA_DIRECTIVE_RE);
+    if (!directiveMatch) {
+      const hasClosingFence = trimmedLeading.includes("]]");
+      return {
+        text: source,
+        voiceAddressing: null,
+        voiceOutputLeaseMode: null,
+        matched: false,
+        complete: hasClosingFence
+      };
+    }
+
+    matched = true;
+    const directiveName = String(directiveMatch[1] || "").trim().toUpperCase();
+    const directiveValue = String(directiveMatch[2] || "").trim();
+    if (directiveName === "TO" && !hasGeneratedVoiceAddressing(voiceAddressing)) {
+      voiceAddressing = normalizeGeneratedVoiceAddressing(
+        { talkingTo: directiveValue },
+        { currentSpeakerName }
+      );
+    }
+    if (directiveName === "LEASE" && !hasGeneratedVoiceOutputLease(voiceOutputLease)) {
+      voiceOutputLease = normalizeGeneratedVoiceOutputLease({ mode: directiveValue });
+    }
+
+    remaining = remaining.slice(leadingWhitespace.length + directiveMatch[0].length);
+  }
+}
+
 function parseLeadingReplyAddressingDirective(
   text: unknown,
   {
@@ -243,26 +321,10 @@ function parseLeadingReplyAddressingDirective(
     currentSpeakerName?: string;
   } = {}
 ) {
-  const source = String(text || "");
-  const match = source.match(LEADING_REPLY_ADDRESSING_DIRECTIVE_RE);
-  if (!match) {
-    return {
-      text: source,
-      voiceAddressing: null,
-      matched: false
-    };
-  }
-
-  return {
-    text: source.slice(match[0].length),
-    voiceAddressing: normalizeGeneratedVoiceAddressing(
-      {
-        talkingTo: match[1] || ""
-      },
-      { currentSpeakerName }
-    ),
-    matched: true
-  };
+  return parseLeadingReplyMetadataDirectivesImpl(text, {
+    currentSpeakerName,
+    allowDirectiveOnlyTail: true
+  });
 }
 
 function consumeLeadingReplyAddressingDirectiveChunk(
@@ -281,7 +343,8 @@ function consumeLeadingReplyAddressingDirectiveChunk(
     return {
       nextState: state,
       textDelta: String(delta || ""),
-      voiceAddressing: null
+      voiceAddressing: null,
+      voiceOutputLeaseMode: null
     };
   }
 
@@ -294,7 +357,8 @@ function consumeLeadingReplyAddressingDirectiveChunk(
         buffer: nextBuffer
       },
       textDelta: "",
-      voiceAddressing: null
+      voiceAddressing: null,
+      voiceOutputLeaseMode: null
     };
   }
 
@@ -305,32 +369,34 @@ function consumeLeadingReplyAddressingDirectiveChunk(
         buffer: ""
       },
       textDelta: nextBuffer,
-      voiceAddressing: null
+      voiceAddressing: null,
+      voiceOutputLeaseMode: null
     };
   }
 
-  const hasClosingFence = trimmedLeading.includes("]]");
-  if (!hasClosingFence && nextBuffer.length < MAX_LEADING_REPLY_ADDRESSING_BUFFER_CHARS) {
+  const parsed = parseLeadingReplyMetadataDirectivesImpl(nextBuffer, {
+    currentSpeakerName,
+    allowDirectiveOnlyTail: false
+  });
+  if (!parsed.complete && nextBuffer.length < MAX_LEADING_REPLY_ADDRESSING_BUFFER_CHARS) {
     return {
       nextState: {
         resolved: false,
         buffer: nextBuffer
       },
       textDelta: "",
-      voiceAddressing: null
+      voiceAddressing: null,
+      voiceOutputLeaseMode: null
     };
   }
-
-  const parsed = parseLeadingReplyAddressingDirective(nextBuffer, {
-    currentSpeakerName
-  });
   return {
     nextState: {
       resolved: true,
       buffer: ""
     },
     textDelta: parsed.matched ? parsed.text : nextBuffer,
-    voiceAddressing: parsed.voiceAddressing
+    voiceAddressing: parsed.voiceAddressing,
+    voiceOutputLeaseMode: parsed.voiceOutputLeaseMode
   };
 }
 
@@ -635,7 +701,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   recentVoiceEffectEvents = [],
   soundboardCandidates = [],
   streamWatchLatestFrame = null,
-  streamWatchDurableScreenNotes = [],
   webSearchTimeoutMs: _webSearchTimeoutMs = null,
   voiceToolCallbacks = null,
   onSpokenSentence = null,
@@ -1009,6 +1074,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     browserBrowse?.budget?.canBrowse !== false
   );
   const voiceConversationPolicy = getVoiceConversationPolicy(settings);
+  const voiceThinkingMode = String(voiceConversationPolicy.thinking || "disabled").trim().toLowerCase();
+  const voiceThinking: "disabled" | "enabled" | "think_aloud" =
+    voiceThinkingMode === "think_aloud" ? "think_aloud"
+      : voiceThinkingMode === "enabled" ? "enabled"
+        : "disabled";
   const streamingEnabled = Boolean(
     voiceConversationPolicy.streaming?.enabled &&
     typeof onSpokenSentence === "function" &&
@@ -1055,13 +1125,14 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       allowBrowserBrowseToolCall,
       screenShare,
       allowScreenShareToolCall,
+      screenWatchActive: Boolean(activeVoiceSession?.streamWatch?.active),
+      screenWatchFrameReady: isStreamWatchFrameReady(activeVoiceSession),
       allowMemoryToolCalls,
       allowSoundboardToolCall,
       allowInlineSoundboardDirectives: allowSoundboardToolCall,
       allowVoiceToolCalls: allowVoiceTools,
       musicContext,
       hasDirectVisionFrame: Boolean(streamWatchLatestFrame?.dataBase64),
-      durableScreenNotes: streamWatchDurableScreenNotes,
       durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : []
     });
 
@@ -1236,6 +1307,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       memory: runtime.memory,
       store: runtime.store,
       subAgentSessions,
+      voiceSessionManager: runtime.voiceSessionManager || undefined,
       voiceSession: voiceToolCallbacks || undefined
     };
     const voiceToolContext: ReplyToolContext = {
@@ -1273,11 +1345,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     const playedSoundboardRefs: string[] = [];
     let streamedSentenceCount = 0;
     let streamedSentenceIndex = 0;
-    let screenNote: string | null = null;
-    let screenMoment: string | null = null;
     let voiceAddressing = normalizeGeneratedVoiceAddressing(null, {
       currentSpeakerName: speakerName
     });
+    let voiceOutputLeaseMode: Exclude<VoiceOutputLeaseMode, "ambient"> | null = null;
     const preserveInlineSoundboardDirectives = allowSoundboardToolCall;
     let streamedRequestedRealtimeUtterance = false;
 
@@ -1309,6 +1380,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           imageInputs: voiceImageInputs,
           contextMessages,
           tools: voiceReplyTools,
+          thinking: voiceThinking,
+          thinkingBudgetTokens: voiceThinking !== "disabled" ? 1024 : undefined,
           trace,
           signal
         });
@@ -1318,14 +1391,23 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         if (hasGeneratedVoiceAddressing(parsedReplyAddressing.voiceAddressing)) {
           voiceAddressing = parsedReplyAddressing.voiceAddressing;
         }
+        if (parsedReplyAddressing.voiceOutputLeaseMode) {
+          voiceOutputLeaseMode = parsedReplyAddressing.voiceOutputLeaseMode;
+        }
         const resolvedSpokenText = normalizeVoiceReplyText(parsedReplyAddressing.text, {
           maxLen: 520,
           preserveInlineSoundboardDirectives
         });
+        const thinkAloudPrefixNonStream = voiceThinking === "think_aloud" && generation.thinkingText
+          ? normalizeVoiceReplyText(generation.thinkingText, { maxLen: 300 })
+          : "";
+        const resolvedSpokenTextWithThinking = thinkAloudPrefixNonStream
+          ? `${thinkAloudPrefixNonStream} ... ${resolvedSpokenText}`
+          : resolvedSpokenText;
         return {
           ...generation,
           streamedTextAccepted,
-          resolvedSpokenText
+          resolvedSpokenText: resolvedSpokenTextWithThinking
         };
       }
 
@@ -1346,7 +1428,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
               await onSpokenSentence({
                 text: normalized,
                 index: streamedSentenceIndex,
-                voiceAddressing: voiceAddressing ? { ...voiceAddressing } : null
+                voiceAddressing: voiceAddressing ? { ...voiceAddressing } : null,
+                voiceOutputLeaseMode
               })
             );
             if (!dispatchResult.accepted) return;
@@ -1373,6 +1456,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         imageInputs: voiceImageInputs,
         contextMessages,
         tools: voiceReplyTools,
+        thinking: voiceThinking,
+        thinkingBudgetTokens: voiceThinking !== "disabled" ? 1024 : undefined,
         trace,
         signal,
         onTextDelta(delta) {
@@ -1386,6 +1471,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           leadingReplyAddressingState = consumed.nextState;
           if (hasGeneratedVoiceAddressing(consumed.voiceAddressing)) {
             voiceAddressing = consumed.voiceAddressing;
+          }
+          if (consumed.voiceOutputLeaseMode) {
+            voiceOutputLeaseMode = consumed.voiceOutputLeaseMode;
           }
           if (consumed.textDelta) {
             accumulator.push(consumed.textDelta);
@@ -1404,6 +1492,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         if (hasGeneratedVoiceAddressing(consumed.voiceAddressing)) {
           voiceAddressing = consumed.voiceAddressing;
         }
+        if (consumed.voiceOutputLeaseMode) {
+          voiceOutputLeaseMode = consumed.voiceOutputLeaseMode;
+        }
         if (consumed.textDelta) {
           accumulator.push(consumed.textDelta);
         }
@@ -1416,6 +1507,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       if (hasGeneratedVoiceAddressing(parsedReplyAddressing.voiceAddressing)) {
         voiceAddressing = parsedReplyAddressing.voiceAddressing;
       }
+      if (parsedReplyAddressing.voiceOutputLeaseMode) {
+        voiceOutputLeaseMode = parsedReplyAddressing.voiceOutputLeaseMode;
+      }
       const resolvedSpokenText = normalizeVoiceReplyText(parsedReplyAddressing.text, {
         maxLen: 520,
         preserveInlineSoundboardDirectives
@@ -1423,10 +1517,16 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         maxLen: 520,
         preserveInlineSoundboardDirectives
       });
+      const thinkAloudPrefix = voiceThinking === "think_aloud" && generation.thinkingText
+        ? normalizeVoiceReplyText(generation.thinkingText, { maxLen: 300 })
+        : "";
+      const resolvedSpokenTextWithThinking = thinkAloudPrefix
+        ? `${thinkAloudPrefix} ... ${resolvedSpokenText}`
+        : resolvedSpokenText;
       return {
         ...generation,
         streamedTextAccepted,
-        resolvedSpokenText
+        resolvedSpokenText: resolvedSpokenTextWithThinking
       };
     };
 
@@ -1436,6 +1536,40 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       trace: voiceTrace
     });
     captureGenerationText(generation.resolvedSpokenText);
+
+    // Pre-tool speech flush: if the generation produced spoken text AND
+    // wants to call tools, dispatch the speech to TTS immediately so the
+    // user hears it while tools execute (instead of waiting for the full
+    // tool loop to finish, which can take 10-30s for browser/search tools).
+    if (
+      generation.toolCalls?.length > 0 &&
+      !generation.streamedTextAccepted &&
+      spokenTextParts.length > 0 &&
+      typeof onSpokenSentence === "function" &&
+      !signal?.aborted
+    ) {
+      const preToolText = normalizeVoiceReplyText(mergeSpokenReplyText(spokenTextParts), {
+        maxLen: 520,
+        preserveInlineSoundboardDirectives
+      });
+      if (preToolText && preToolText !== "[SKIP]") {
+        const dispatchResult = normalizeSpokenSentenceDispatchResult(
+          await onSpokenSentence({
+            text: preToolText,
+            index: streamedSentenceIndex,
+            voiceAddressing,
+            voiceOutputLeaseMode
+          })
+        );
+        if (dispatchResult.accepted) {
+          streamedSentenceIndex += 1;
+          streamedSentenceCount += 1;
+          streamedRequestedRealtimeUtterance =
+            streamedRequestedRealtimeUtterance || dispatchResult.requestedRealtimeUtterance;
+          appendUniqueStrings(playedSoundboardRefs, dispatchResult.playedSoundboardRefs);
+        }
+      }
+    }
 
     const VOICE_TOOL_LOOP_MAX_STEPS = 2;
     const VOICE_TOOL_LOOP_MAX_CALLS = 6;
@@ -1569,16 +1703,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
               : [];
           appendUniqueStrings(playedSoundboardRefs, playedRefs);
         }
-        if (toolCall.name === "screen_note" && !result.isError) {
-          const toolPayload = parseReplyToolResultPayload(result.content);
-          const note = String(toolPayload?.note || "").replace(/\s+/g, " ").trim().slice(0, 220);
-          screenNote = note || screenNote;
-        }
-        if (toolCall.name === "screen_moment" && !result.isError) {
-          const toolPayload = parseReplyToolResultPayload(result.content);
-          const moment = String(toolPayload?.moment || "").replace(/\s+/g, " ").trim().slice(0, 220);
-          screenMoment = moment || screenMoment;
-        }
         if (toolCall.name === "start_screen_watch" && !result.isError) {
           const toolPayload = parseReplyToolResultPayload(result.content);
           usedScreenShareOffer = usedScreenShareOffer || Boolean(toolPayload?.started);
@@ -1684,8 +1808,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         usedWebSearchFollowup,
         usedScreenShareOffer,
         voiceAddressing,
-        screenNote,
-        screenMoment,
+        voiceOutputLeaseMode,
         streamedSentenceCount,
         streamedRequestedRealtimeUtterance,
         generationContextSnapshot,
@@ -1699,8 +1822,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         usedWebSearchFollowup,
         usedScreenShareOffer,
         voiceAddressing,
-        screenNote,
-        screenMoment,
+        voiceOutputLeaseMode,
         streamedSentenceCount,
         streamedRequestedRealtimeUtterance,
         generationContextSnapshot,
@@ -1721,8 +1843,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       usedWebSearchFollowup,
       usedScreenShareOffer,
       voiceAddressing,
-      screenNote,
-      screenMoment,
+      voiceOutputLeaseMode,
       streamedSentenceCount,
       streamedRequestedRealtimeUtterance,
       generationContextSnapshot,
@@ -1779,6 +1900,23 @@ function normalizeGeneratedVoiceAddressing(
   if (!talkingTo) return null;
 
   return { talkingTo } satisfies GeneratedVoiceAddressing;
+}
+
+function normalizeGeneratedVoiceOutputLease(rawOutputLease: unknown) {
+  const normalizedRaw =
+    rawOutputLease && typeof rawOutputLease === "object" && !Array.isArray(rawOutputLease)
+      ? rawOutputLease as Record<string, unknown>
+      : null;
+  const normalizedMode = String(normalizedRaw?.mode || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedMode === "atomic") {
+    return { mode: "atomic" } satisfies GeneratedVoiceOutputLease;
+  }
+  if (normalizedMode === "assertive") {
+    return { mode: "assertive" } satisfies GeneratedVoiceOutputLease;
+  }
+  return null;
 }
 
 function parseReplyToolResultPayload(content: unknown) {

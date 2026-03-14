@@ -256,8 +256,6 @@ export type ReplyToolRuntime = {
     musicNowPlaying: () => Promise<Record<string, unknown>>;
     stopVideoShare?: () => Promise<Record<string, unknown>>;
     playSoundboard: (refs: string[], transcript: string) => Promise<Record<string, unknown>>;
-    setScreenNote: (note: string) => Promise<Record<string, unknown>>;
-    setScreenMoment: (moment: string) => Promise<Record<string, unknown>>;
     leaveVoiceChannel: () => Promise<Record<string, unknown>>;
   };
   voiceJoin?: () => Promise<{
@@ -304,8 +302,8 @@ const REPLY_TOOL_HANDLERS: Record<
   start_screen_watch: async (input, runtime, context) => await executeStartScreenWatch(input, runtime, context),
   share_browser_session: async (input, runtime, context) => await executeShareBrowserSession(input, runtime, context),
   play_soundboard: executePlaySoundboard,
-  screen_note: executeScreenNote,
-  screen_moment: executeScreenMoment,
+
+
   join_voice_channel: async (_input, runtime, context) => await executeJoinVoiceChannel(runtime, context),
   leave_voice_channel: async (_input, runtime, context) => await executeLeaveVoiceChannel(runtime, context.signal),
   code_task: executeCodeTask,
@@ -799,6 +797,7 @@ async function executeStartScreenWatch(
             : null,
         reason: result?.reason ? String(result.reason) : null,
         targetUserId: result?.targetUserId ? String(result.targetUserId) : null,
+        frameReady: Boolean(result?.frameReady),
         linkUrl: result?.linkUrl ? String(result.linkUrl) : null,
         expiresInMinutes: Number.isFinite(Number(result?.expiresInMinutes))
           ? Math.max(0, Math.round(Number(result.expiresInMinutes)))
@@ -893,70 +892,6 @@ async function executePlaySoundboard(
   } catch (error) {
     return {
       content: `Soundboard playback failed: ${String((error as Error)?.message || error)}`,
-      isError: true
-    };
-  }
-}
-
-async function executeScreenNote(
-  input: ReplyToolCallInput,
-  runtime: ReplyToolRuntime,
-  context: ReplyToolContext
-): Promise<ReplyToolResult> {
-  throwIfAborted(context.signal, "Reply tool cancelled");
-  if (!runtime.voiceSession?.setScreenNote) {
-    return { content: "Screen notes are not available.", isError: true };
-  }
-
-  const note = String(input?.note || "").replace(/\s+/g, " ").trim().slice(0, 220);
-  if (!note) {
-    return { content: "Missing screen note.", isError: true };
-  }
-
-  try {
-    const result = await runtime.voiceSession.setScreenNote(note);
-    return {
-      content: JSON.stringify({
-        ok: Boolean(result?.ok),
-        note: String(result?.note || note)
-      }),
-      isError: result?.ok === false
-    };
-  } catch (error) {
-    return {
-      content: `Screen note failed: ${String((error as Error)?.message || error)}`,
-      isError: true
-    };
-  }
-}
-
-async function executeScreenMoment(
-  input: ReplyToolCallInput,
-  runtime: ReplyToolRuntime,
-  context: ReplyToolContext
-): Promise<ReplyToolResult> {
-  throwIfAborted(context.signal, "Reply tool cancelled");
-  if (!runtime.voiceSession?.setScreenMoment) {
-    return { content: "Screen moments are not available.", isError: true };
-  }
-
-  const moment = String(input?.moment || "").replace(/\s+/g, " ").trim().slice(0, 220);
-  if (!moment) {
-    return { content: "Missing screen moment.", isError: true };
-  }
-
-  try {
-    const result = await runtime.voiceSession.setScreenMoment(moment);
-    return {
-      content: JSON.stringify({
-        ok: Boolean(result?.ok),
-        moment: String(result?.moment || moment)
-      }),
-      isError: result?.ok === false
-    };
-  } catch (error) {
-    return {
-      content: `Screen moment failed: ${String((error as Error)?.message || error)}`,
       isError: true
     };
   }

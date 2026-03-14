@@ -770,6 +770,28 @@ test("generateVoiceTurnReply strips a leading reply-addressing directive from no
   assert.equal(reply.voiceAddressing?.talkingTo, "ALL");
 });
 
+test("generateVoiceTurnReply strips leading reply metadata directives from non-streaming speech", async () => {
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "[[TO:ALL]][[LEASE:ASSERTIVE]] alright everybody, lock in"
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "say it to the whole room"
+  });
+
+  assert.equal(reply.text, "alright everybody, lock in");
+  assert.equal(reply.voiceAddressing?.talkingTo, "ALL");
+  assert.equal(reply.voiceOutputLeaseMode, "assertive");
+});
+
 test("generateVoiceTurnReply parses a leading reply-addressing directive before streaming speech dispatch", async () => {
   const streamed: string[] = [];
   const streamedTargets: Array<string | null> = [];
@@ -804,6 +826,46 @@ test("generateVoiceTurnReply parses a leading reply-addressing directive before 
   assert.deepEqual(streamedTargets, ["alice"]);
   assert.equal(reply.text, "nah, the other one");
   assert.equal(reply.voiceAddressing?.talkingTo, "alice");
+});
+
+test("generateVoiceTurnReply parses a leading output lease directive before streaming speech dispatch", async () => {
+  const streamed: string[] = [];
+  const streamedTargets: Array<string | null> = [];
+  const streamedLeaseModes: Array<string | null> = [];
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "[[TO:SPEAKER]][[LEASE:ATOMIC]] nah, the other one",
+        textDeltas: ["[[TO:SPEAKER]][[LEASE:AT", "OMIC]] nah, ", "the other one"]
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        streamingEnabled: true,
+        streamingEagerFirstChunkChars: 12,
+        streamingMaxBufferChars: 120
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "correct that",
+    onSpokenSentence: ({ text, voiceAddressing, voiceOutputLeaseMode }) => {
+      streamed.push(text);
+      streamedTargets.push(voiceAddressing?.talkingTo || null);
+      streamedLeaseModes.push(voiceOutputLeaseMode || null);
+    }
+  });
+
+  assert.deepEqual(streamed, ["nah, the other one"]);
+  assert.deepEqual(streamedTargets, ["alice"]);
+  assert.deepEqual(streamedLeaseModes, ["atomic"]);
+  assert.equal(reply.text, "nah, the other one");
+  assert.equal(reply.voiceAddressing?.talkingTo, "alice");
+  assert.equal(reply.voiceOutputLeaseMode, "atomic");
 });
 
 test("generateVoiceTurnReply preserves spoken text across tool-loop turns", async () => {
@@ -1076,8 +1138,6 @@ test("generateVoiceTurnReply handles representative soundboard permutations", as
       soundboardCandidates: row.soundboardCandidates,
       voiceToolCallbacks: {
         playSoundboard: async (refs) => ({ ok: true, played: refs }),
-        setScreenNote: async (note) => ({ ok: true, note }),
-        setScreenMoment: async (moment) => ({ ok: true, moment }),
         leaveVoiceChannel: async () => ({ ok: true })
       }
     });
@@ -1109,232 +1169,6 @@ test("generateVoiceTurnReply leaves assistant reply targeting unset when the hid
   assert.equal(reply.text, "yo");
   assert.equal(reply.voiceAddressing, null);
   assert.equal(getGenerationCalls(), 1);
-});
-
-test("generateVoiceTurnReply screen_note continuation depends on whether the first pass already yielded spoken output", async () => {
-  const cases = [
-    {
-      name: "accepted_streamed_speech_stops_continuation",
-      generationSequence: [
-        {
-          text: "",
-          textDeltas: ["yo vuhlp, what's good "],
-          toolCalls: [
-            {
-              id: "tc_1",
-              name: "screen_note",
-              input: {
-                note: "health bar flashing red"
-              }
-            }
-          ],
-          rawContent: [
-            {
-              type: "tool_use",
-              id: "tc_1",
-              name: "screen_note",
-              input: { note: "health bar flashing red" }
-            }
-          ]
-        }
-      ],
-      settings: baseSettings({
-        voice: {
-          streamingEnabled: true,
-          streamingEagerFirstChunkChars: 16,
-          streamingMaxBufferChars: 120
-        }
-      }),
-      onSpokenSentence: ({ text }) => text,
-      expectedText: "yo vuhlp, what's good",
-      expectedGenerationCalls: 1
-    },
-    {
-      name: "rejected_streamed_speech_continues",
-      generationSequence: [
-        {
-          text: "",
-          textDeltas: ["yo vuhlp, what's good "],
-          toolCalls: [
-            {
-              id: "tc_1",
-              name: "screen_note",
-              input: {
-                note: "health bar flashing red"
-              }
-            }
-          ],
-          rawContent: [
-            {
-              type: "tool_use",
-              id: "tc_1",
-              name: "screen_note",
-              input: { note: "health bar flashing red" }
-            }
-          ]
-        },
-        {
-          text: "yo"
-        }
-      ],
-      settings: baseSettings({
-        voice: {
-          streamingEnabled: true,
-          streamingEagerFirstChunkChars: 16,
-          streamingMaxBufferChars: 120
-        }
-      }),
-      onSpokenSentence: () => false,
-      expectedText: "yo",
-      expectedGenerationCalls: 2
-    },
-    {
-      name: "no_first_pass_speech_continues",
-      generationSequence: [
-        {
-          text: "",
-          toolCalls: [
-            {
-              id: "tc_1",
-              name: "screen_note",
-              input: {
-                note: "health bar flashing red"
-              }
-            }
-          ],
-          rawContent: [
-            {
-              type: "tool_use",
-              id: "tc_1",
-              name: "screen_note",
-              input: { note: "health bar flashing red" }
-            }
-          ]
-        },
-        {
-          text: "yo"
-        }
-      ],
-      settings: baseSettings(),
-      onSpokenSentence: null,
-      expectedText: "yo",
-      expectedGenerationCalls: 2
-    }
-  ];
-
-  for (const row of cases) {
-    const streamed: string[] = [];
-    const { bot, getGenerationCalls } = createVoiceBot({
-      generationSequence: row.generationSequence
-    });
-
-    const reply = await generateVoiceTurnReply(bot, {
-      settings: row.settings,
-      guildId: "guild-1",
-      channelId: "text-1",
-      userId: "user-1",
-      transcript: "quick check",
-      onSpokenSentence: row.onSpokenSentence
-        ? ({ text }) => {
-            const result = row.onSpokenSentence({ text });
-            if (result) {
-              streamed.push(String(text));
-              return true;
-            }
-            return false;
-          }
-        : undefined,
-      voiceToolCallbacks: {
-        playSoundboard: async (refs) => ({ ok: true, played: refs }),
-        setScreenNote: async (note) => ({ ok: true, note }),
-        setScreenMoment: async (moment) => ({ ok: true, moment }),
-        leaveVoiceChannel: async () => ({ ok: true })
-      }
-    });
-
-    assert.equal(reply.text, row.expectedText, row.name);
-    assert.equal(reply.screenNote, "health bar flashing red", row.name);
-    assert.equal(getGenerationCalls(), row.expectedGenerationCalls, row.name);
-    if (row.name === "accepted_streamed_speech_stops_continuation") {
-      assert.deepEqual(streamed, ["yo vuhlp, what's good"]);
-    }
-  }
-});
-
-test("generateVoiceTurnReply includes all tool results when a continuation-required tool is mixed with a side-effect tool", async () => {
-  const { bot, generationPayloads, getGenerationCalls } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "checking now",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "screen_note",
-            input: {
-              note: "health bar flashing red"
-            }
-          },
-          {
-            id: "tc_2",
-            name: "web_search",
-            input: {
-              query: "latest rust stable version"
-            }
-          }
-        ],
-        rawContent: [
-          { type: "text", text: "checking now" },
-          {
-            type: "tool_use",
-            id: "tc_1",
-            name: "screen_note",
-            input: { note: "health bar flashing red" }
-          },
-          {
-            type: "tool_use",
-            id: "tc_2",
-            name: "web_search",
-            input: { query: "latest rust stable version" }
-          }
-        ]
-      },
-      {
-        text: "latest stable rust is 1.90"
-      }
-    ]
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      webSearch: {
-        enabled: true
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "check rust",
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
-    }
-  });
-
-  const secondCallMessages = Array.isArray(generationPayloads[1]?.contextMessages)
-    ? generationPayloads[1].contextMessages
-    : [];
-  const toolResultMessage = secondCallMessages[secondCallMessages.length - 1];
-  const toolResults = Array.isArray(toolResultMessage?.content) ? toolResultMessage.content : [];
-
-  assert.equal(reply.text, "checking now\nlatest stable rust is 1.90");
-  assert.equal(reply.screenNote, "health bar flashing red");
-  assert.equal(getGenerationCalls(), 2);
-  assert.deepEqual(
-    toolResults.map((entry) => entry?.tool_use_id),
-    ["tc_1", "tc_2"]
-  );
 });
 
 test("generateVoiceTurnReply marks music disambiguation tool followups as replay-safe on the in-flight turn", async () => {
@@ -1830,6 +1664,106 @@ test("generateVoiceTurnReply logs failed brain tool errors with the returned too
   assert.equal(toolLog?.metadata?.error, "Browser session sharing is not available.");
 });
 
+test("generateVoiceTurnReply forwards voiceSessionManager into share_browser_session tool calls", async () => {
+  const activeVoiceSession = {
+    id: "voice-session-1",
+    guildId: "guild-1",
+    textChannelId: "text-1",
+    voiceChannelId: "voice-1",
+    ending: false,
+    cleanupHandlers: [],
+    voxClient: {
+      streamPublishConnect() {}
+    }
+  };
+  const { bot, logs } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "trying to share it",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "share_browser_session",
+            input: {
+              session_id: "browser-session-1"
+            }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "trying to share it" },
+          {
+            type: "tool_use",
+            id: "tc_1",
+            name: "share_browser_session",
+            input: { session_id: "browser-session-1" }
+          }
+        ]
+      },
+      {
+        text: "share still failed"
+      }
+    ],
+    activeVoiceSession
+  });
+
+  bot.buildSubAgentSessionsRuntime = () => ({
+    manager: {
+      get(sessionId: string) {
+        if (sessionId !== "browser-session-1") return null;
+        return {
+          ownerUserId: "user-1",
+          getBrowserSessionKey() {
+            return "browser-session-key-1";
+          }
+        };
+      },
+      register() {},
+      remove() {}
+    },
+    createCodeSession() {
+      return null;
+    },
+    createBrowserSession() {
+      return null;
+    }
+  });
+  assert.ok(bot.voiceSessionManager);
+  bot.voiceSessionManager.sessions = new Map([["guild-1", activeVoiceSession]]);
+  bot.voiceSessionManager.client = {
+    user: {
+      id: "bot-1"
+    }
+  };
+  bot.voiceSessionManager.store = {
+    getSettings() {
+      return baseSettings();
+    },
+    logAction() {}
+  };
+  bot.voiceSessionManager.browserManager = null;
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "share the browser with me",
+    voiceToolCallbacks: {}
+  });
+
+  assert.equal(reply.text, "trying to share it");
+
+  const toolLog = logs.find((entry) =>
+    entry?.content === "voice_brain_tool_call" &&
+    isRecord(entry?.metadata) &&
+    entry.metadata.toolName === "share_browser_session"
+  );
+
+  assert.ok(toolLog);
+  assert.equal(toolLog?.metadata?.isError, true);
+  assert.equal(toolLog?.metadata?.error, "browser_unavailable");
+});
+
 test("generateVoiceTurnReply carries resolved streamed speech into the continuation context when generation.text is empty", async () => {
   const { bot, generationPayloads, getGenerationCalls } = createVoiceBot({
     generationSequence: [
@@ -1878,8 +1812,6 @@ test("generateVoiceTurnReply carries resolved streamed speech into the continuat
     onSpokenSentence: () => true,
     voiceToolCallbacks: {
       playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
       leaveVoiceChannel: async () => ({ ok: true })
     }
   });

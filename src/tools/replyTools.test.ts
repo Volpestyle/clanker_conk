@@ -435,8 +435,6 @@ test("executeReplyTool fails music_play with empty query", async () => {
         async musicSkip() { throw new Error("not used"); },
         async musicNowPlaying() { throw new Error("not used"); },
         async playSoundboard() { throw new Error("not used"); },
-        async setScreenNote() { throw new Error("not used"); },
-        async setScreenMoment() { throw new Error("not used"); },
         async leaveVoiceChannel() { throw new Error("not used"); }
       }
     },
@@ -474,8 +472,6 @@ test("executeReplyTool fails video_play with empty query", async () => {
         async musicSkip() { throw new Error("not used"); },
         async musicNowPlaying() { throw new Error("not used"); },
         async playSoundboard() { throw new Error("not used"); },
-        async setScreenNote() { throw new Error("not used"); },
-        async setScreenMoment() { throw new Error("not used"); },
         async leaveVoiceChannel() { throw new Error("not used"); }
       }
     },
@@ -513,8 +509,6 @@ test("executeReplyTool fails music_search with empty query", async () => {
         async musicSkip() { throw new Error("not used"); },
         async musicNowPlaying() { throw new Error("not used"); },
         async playSoundboard() { throw new Error("not used"); },
-        async setScreenNote() { throw new Error("not used"); },
-        async setScreenMoment() { throw new Error("not used"); },
         async leaveVoiceChannel() { throw new Error("not used"); }
       }
     },
@@ -557,8 +551,6 @@ test("executeReplyTool delegates media_reply_handoff to the voice runtime", asyn
         async musicSkip() { throw new Error("not used"); },
         async musicNowPlaying() { throw new Error("not used"); },
         async playSoundboard() { throw new Error("not used"); },
-        async setScreenNote() { throw new Error("not used"); },
-        async setScreenMoment() { throw new Error("not used"); },
         async leaveVoiceChannel() { throw new Error("not used"); }
       }
     },

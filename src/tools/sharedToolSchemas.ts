@@ -585,42 +585,6 @@ export const PLAY_SOUNDBOARD_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const SCREEN_NOTE_SCHEMA: SharedToolSchema = {
-  name: "screen_note",
-  description: "Save a brief private factual note about the current visible screen state.",
-  voiceContinuationPolicy: "if_no_spoken_text",
-  parameters: {
-    type: "object",
-    properties: {
-      note: {
-        type: "string",
-        minLength: 1,
-        maxLength: 220
-      }
-    },
-    required: ["note"],
-    additionalProperties: false
-  }
-};
-
-export const SCREEN_MOMENT_SCHEMA: SharedToolSchema = {
-  name: "screen_moment",
-  description: "Save a brief noteworthy screen moment that should persist in session memory.",
-  voiceContinuationPolicy: "if_no_spoken_text",
-  parameters: {
-    type: "object",
-    properties: {
-      moment: {
-        type: "string",
-        minLength: 1,
-        maxLength: 220
-      }
-    },
-    required: ["moment"],
-    additionalProperties: false
-  }
-};
-
 const NOTE_CONTEXT_SCHEMA: SharedToolSchema = {
   name: "note_context",
   description: "Pin important session-scoped context for later in the conversation. Avoid duplicates.",
@@ -660,8 +624,6 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   STREAM_VISUALIZER_SCHEMA,
   STOP_VIDEO_SHARE_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,
-  SCREEN_NOTE_SCHEMA,
-  SCREEN_MOMENT_SCHEMA,
   NOTE_CONTEXT_SCHEMA,
   JOIN_VOICE_CHANNEL_SCHEMA,
   LEAVE_VOICE_CHANNEL_SCHEMA

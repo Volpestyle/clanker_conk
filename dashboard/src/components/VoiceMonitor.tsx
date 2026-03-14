@@ -1008,7 +1008,6 @@ function McpPanel({ session }: { session: VoiceSession }) {
 function StreamWatchDetail({ session }: { session: VoiceSession }) {
   const sw = session.streamWatch;
   const visualFeed = Array.isArray(sw.visualFeed) ? sw.visualFeed : [];
-  const durableScreenNotes = Array.isArray(sw.durableScreenNotes) ? sw.durableScreenNotes : [];
   const brainContextPayload = sw.brainContextPayload;
   const hasBrainPayloadNotes = Boolean(
     brainContextPayload &&
@@ -1020,7 +1019,6 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
     Number(sw.ingestedFrameCount || 0) > 0 ||
     Boolean(sw.lastCommentaryNote) ||
     Boolean(sw.lastMemoryRecapText) ||
-    durableScreenNotes.length > 0 ||
     visualFeed.length > 0 ||
     hasBrainPayloadNotes;
   if (!hasAnyStreamWatchData) return null;
@@ -1043,7 +1041,6 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
         {sw.lastMemoryRecapAt && <Stat label="Last Recap" value={relativeTime(sw.lastMemoryRecapAt)} />}
         {sw.lastBrainContextAt && <Stat label="Last Brain Note" value={relativeTime(sw.lastBrainContextAt)} />}
         <Stat label="Brain Notes" value={Number(sw.brainContextCount || visualFeed.length)} />
-        {durableScreenNotes.length > 0 && <Stat label="Saved Moments" value={durableScreenNotes.length} />}
         {(sw.lastMemoryRecapText || sw.lastMemoryRecapAt) && (
           <Stat label="Recap Saved" value={sw.lastMemoryRecapDurableSaved ? "durable" : "journal only"} />
         )}
@@ -1146,21 +1143,6 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
         </>
       )}
 
-      {durableScreenNotes.length > 0 && (
-        <>
-          <span className="vm-mini-label">Saved Screen Moments</span>
-          <div className="vm-convo-feed">
-            {durableScreenNotes.slice(-10).reverse().map((note, index) => (
-              <div key={`${index}-${note.slice(0, 18)}`} className="vm-convo-msg vm-convo-assistant">
-                <div className="vm-convo-meta">
-                  <span className="vm-convo-role vm-convo-role-assistant">moment</span>
-                </div>
-                <div className="vm-convo-text">{note}</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
     </Section>
   );
 }

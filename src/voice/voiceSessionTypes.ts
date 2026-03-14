@@ -136,7 +136,7 @@ export interface VoiceLivePromptState {
 }
 
 export type VoiceTimelineTurn = {
-    kind?: "speech";
+    kind?: "speech" | "thought";
     role: "assistant" | "user";
     userId: string | null;
     speakerName: string;
@@ -357,6 +357,16 @@ export interface VoicePendingResponseLatencyContext {
     pendingQueueDepth: number | null;
 }
 
+export type VoiceOutputLeaseMode = "ambient" | "assertive" | "atomic";
+
+export interface VoiceOutputLease {
+    mode: Exclude<VoiceOutputLeaseMode, "ambient">;
+    requestId: number | null;
+    grantedAt: number;
+    expiresAt: number;
+    source: string;
+}
+
 export interface VoicePendingResponse {
     requestId: number;
     userId: string | null;
@@ -367,6 +377,7 @@ export interface VoicePendingResponse {
     handlingSilence: boolean;
     audioReceivedAt: number;
     interruptionPolicy: ReplyInterruptionPolicy | null;
+    outputLeaseMode?: VoiceOutputLeaseMode | null;
     utteranceText: string | null;
     latencyContext: VoicePendingResponseLatencyContext | null;
     musicWakeRefreshAfterSpeech?: boolean;
@@ -377,6 +388,7 @@ export interface VoiceLastRequestedRealtimeUtterance {
     requestedAt: number;
     source: string;
     interruptionPolicy: ReplyInterruptionPolicy | null;
+    outputLeaseMode?: VoiceOutputLeaseMode | null;
 }
 
 export interface VoiceInterruptedAssistantReply {
@@ -394,6 +406,7 @@ export interface VoiceQueuedRealtimeAssistantUtterance {
     source: string;
     queuedAt: number;
     interruptionPolicy: ReplyInterruptionPolicy | null;
+    outputLeaseMode?: VoiceOutputLeaseMode | null;
     latencyContext: VoicePendingResponseLatencyContext | null;
     musicWakeRefreshAfterSpeech?: boolean;
 }
@@ -639,6 +652,7 @@ export interface InFlightAcceptedBrainTurn {
     captureReason: string;
     directAddressed: boolean;
     interruptionPolicy?: ReplyInterruptionPolicy | null;
+    outputLeaseMode?: VoiceOutputLeaseMode | null;
     toolPhaseRecoveryEligible?: boolean;
     toolPhaseRecoveryReason?: string | null;
     toolPhaseLastToolName?: string | null;
@@ -713,7 +727,6 @@ export interface VoiceSessionStreamWatchState {
     lastBrainContextProvider: string | null;
     lastBrainContextModel: string | null;
     brainContextEntries: StreamWatchBrainContextEntry[];
-    durableScreenNotes: string[];
     ingestedFrameCount: number;
     acceptedFrameCountInWindow: number;
     frameWindowStartedAt: number;
@@ -749,6 +762,16 @@ export interface VoiceSessionNativeScreenShareSharerState {
     lastFrameKeyframeAt: number;
 }
 
+export interface VoiceSessionNativeScreenSharePendingH264DecodeState {
+    userId: string;
+    startedAt: number;
+    updatedAt: number;
+    firstRtpTimestamp: number;
+    lastRtpTimestamp: number;
+    frameBase64s: string[];
+    approximateBytes: number;
+}
+
 export interface VoiceSessionNativeScreenShareState {
     sharers: Map<string, VoiceSessionNativeScreenShareSharerState>;
     subscribedTargetUserId: string | null;
@@ -767,6 +790,7 @@ export interface VoiceSessionNativeScreenShareState {
     transportReason: string | null;
     transportUpdatedAt: number;
     transportConnectedAt: number;
+    pendingH264Decode: VoiceSessionNativeScreenSharePendingH264DecodeState | null;
 }
 
 export interface VoiceSessionGoLiveStreamState {
@@ -914,6 +938,7 @@ export interface VoicePendingInterruptBridgeTurn {
     bridgeUtteranceId: number | null;
     asrResult: AsrCommitResult | null;
     source: string;
+    serverVadConfirmed: boolean;
 }
 
 export interface RealtimeQueuedTurn {
@@ -935,6 +960,7 @@ export interface RealtimeQueuedTurn {
     transcriptLogprobsOverride: VoiceTranscriptLogprob[] | null;
     bridgeUtteranceId: number | null;
     bridgeRevision: number;
+    serverVadConfirmed: boolean;
     musicWakeFollowupEligibleAtCapture: boolean;
     mergedTurnCount: number;
     droppedHeadBytes: number;
@@ -1100,6 +1126,7 @@ export interface VoiceSession {
     pendingRealtimeInputBytes: TurnProcessorState["pendingRealtimeInputBytes"];
     nextResponseRequestId: number;
     pendingResponse: VoicePendingResponse | null;
+    outputLease?: VoiceOutputLease | null;
     activeReplyInterruptionPolicy: ReplyInterruptionPolicy | null;
     lastRequestedRealtimeUtterance: VoiceLastRequestedRealtimeUtterance | null;
     interruptedAssistantReply?: VoiceInterruptedAssistantReply | null;

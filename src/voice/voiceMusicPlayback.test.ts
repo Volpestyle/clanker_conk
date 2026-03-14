@@ -188,12 +188,11 @@ function createPlaybackHost({
         return { ok: true };
       },
       playSoundboard: async () => ({ ok: true }),
-      setScreenNote: async () => ({ ok: true }),
-      setScreenMoment: async () => ({ ok: true }),
       leaveVoiceChannel: async () => ({ ok: true }),
       ...voiceToolCallbacks
     })
   };
+
 
   return { manager, pauseCalls, stopCalls, resumeCalls, toolCalls, loggedEvents, musicBrainPrompts };
 }
@@ -1132,8 +1131,6 @@ function createSlashPlaybackHost(searchResults: MusicSelectionResult[], sessionO
       musicSkip: async () => ({ ok: true }),
       musicNowPlaying: async () => ({ ok: true }),
       playSoundboard: async () => ({ ok: true }),
-      setScreenNote: async () => ({ ok: true }),
-      setScreenMoment: async () => ({ ok: true }),
       leaveVoiceChannel: async () => ({ ok: true })
     })
   };

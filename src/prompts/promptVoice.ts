@@ -181,13 +181,14 @@ export function buildVoiceTurnPrompt({
   allowBrowserBrowseToolCall = false,
   screenShare: _screenShare = null,
   allowScreenShareToolCall = false,
+  screenWatchActive = false,
+  screenWatchFrameReady = false,
   allowMemoryToolCalls = false,
   allowSoundboardToolCall = false,
   allowInlineSoundboardDirectives = false,
   allowVoiceToolCalls = false,
   musicContext = null,
   hasDirectVisionFrame = false,
-  durableScreenNotes = [],
   durableContext = []
 }) {
   const parts = [];
@@ -547,17 +548,19 @@ export function buildVoiceTurnPrompt({
     );
   }
 
-  const normalizedDurableScreenNotes = (Array.isArray(durableScreenNotes) ? durableScreenNotes : [])
-    .map((note) => String(note || "").replace(/\s+/g, " ").trim().slice(0, 240))
-    .filter(Boolean)
-    .slice(-20);
   const normalizedDurableContext = selectPromptDurableContextEntries(durableContext);
+  if (screenWatchActive && !hasDirectVisionFrame && !normalizedStreamWatchBrainContext?.notes?.length) {
+    parts.push(
+      screenWatchFrameReady
+        ? "Screen watch: active and receiving frames. You are already watching their screen — do not call start_screen_watch again."
+        : "Screen watch: active, waiting for the first frame. Do not call start_screen_watch again — it is already running."
+    );
+  }
   if (hasDirectVisionFrame) {
     const screenContextParts = [
       "Live screen watch: You can see the user's screen directly in the attached image.",
-      "Comment on what you see whenever it feels natural. React to interesting moments, changes, or anything worth noting.",
-      "If there is a brief factual screen observation worth saving privately, call screen_note with it (max 20 words). Do not speak the note aloud unless it also belongs in your spoken reply.",
-      "If something genuinely noteworthy happens that is not already in the key moments list below, call screen_moment with a brief description. Otherwise do not call it.",
+      "Comment on what you see when it feels natural — react to interesting moments, changes, or anything worth noting aloud.",
+      "If nothing warrants a spoken comment right now, say nothing.",
       normalizedStreamWatchBrainContext?.prompt
         ? `- Guidance: ${normalizedStreamWatchBrainContext.prompt}`
         : null
@@ -565,10 +568,6 @@ export function buildVoiceTurnPrompt({
     if (normalizedStreamWatchBrainContext?.notes?.length) {
       screenContextParts.push("Recent screen observations:");
       screenContextParts.push(...normalizedStreamWatchBrainContext.notes.map((note) => `- ${note}`));
-    }
-    if (normalizedDurableScreenNotes.length) {
-      screenContextParts.push("Key moments this session:");
-      screenContextParts.push(...normalizedDurableScreenNotes.map((note) => `- ${note}`));
     }
     parts.push(screenContextParts.filter(Boolean).join("\n"));
   } else if (normalizedStreamWatchBrainContext?.notes?.length) {
@@ -612,7 +611,7 @@ export function buildVoiceTurnPrompt({
   }
 
   parts.push(`Tools: ${availableToolNames.join(", ")}.`);
-  parts.push("Speak first on casual turns. Use tools to improve accuracy or execute requested actions. You may briefly acknowledge requests before or while calling tools, but ground factual or success claims in tool results — never claim success before a tool returns.");
+  parts.push("Speak first on casual turns. Use tools to improve accuracy or execute requested actions. Always include a brief spoken acknowledgment before calling tools (e.g., 'Sure, one sec' or 'Let me pull that up') — tool calls can take several seconds and the user hears silence until you speak. Ground factual or success claims in tool results — never claim success before a tool returns.");
 
   if (allowMemoryToolCalls) {
     const memLines = [];
@@ -766,9 +765,20 @@ export function buildVoiceTurnPrompt({
   );
 
   parts.push(
+    [
+      "You may optionally add a lease prefix immediately after [[TO:...]]: [[LEASE:ASSERTIVE]] or [[LEASE:ATOMIC]].",
+      "A lease gives your reply a brief protected runway: it resists being pushed aside by newer chatter before you start speaking, and briefly resists interruption after you start so your point can land.",
+      "ASSERTIVE: use when your reply directly answers a question, confirms an action, or delivers a tool result. The listener asked for this and should hear it.",
+      "ATOMIC: use when the reply is safety-relevant, completes a multi-step action, or corrects a dangerous misunderstanding. Rare.",
+      "No lease: ambient commentary, greetings, reactions, jokes, voluntary observations. Most replies need no lease.",
+      "Do not lease a reply just because you find it interesting. Lease it because the listener needs it."
+    ].join("\n")
+  );
+
+  parts.push(
     allowInlineSoundboardDirectives
-      ? "Reply with [SKIP] or the hidden [[TO:...]] prefix followed by spoken text. No JSON/markdown/tags. Only other markup allowed after the prefix: [[SOUNDBOARD:<ref>]]."
-      : "Reply with [SKIP] or the hidden [[TO:...]] prefix followed by spoken text. No JSON/markdown/tags/[[...]] directives beyond that leading audience prefix."
+      ? "Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags. Only other markup allowed after those leading prefixes: [[SOUNDBOARD:<ref>]]."
+      : "Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags/[[...]] directives beyond those leading metadata prefixes."
   );
 
   return parts.join("\n\n");

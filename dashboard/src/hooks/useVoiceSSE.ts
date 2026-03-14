@@ -288,7 +288,6 @@ export type VoiceSession = {
     lastBrainContextProvider: string | null;
     lastBrainContextModel: string | null;
     brainContextCount: number;
-    durableScreenNotes: string[];
     visualFeed: VoiceVisualFeedEntry[];
     brainContextPayload: VoiceBrainContextPayload;
   };

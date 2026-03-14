@@ -173,7 +173,6 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
             speakerName: "Alice"
           }
         ],
-        durableScreenNotes: ["Huge teamfight started near dragon"],
         ingestedFrameCount: 5
       },
       openAiAsrSessions: new Map([
@@ -561,7 +560,6 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       provider: "openai",
       model: "gpt-4o"
     });
-    assert.deepEqual(realtime?.streamWatch.durableScreenNotes, ["Huge teamfight started near dragon"]);
     assert.equal(
       realtime?.promptState?.instructions?.replyPrompts?.systemPrompt,
       "Use the latest voice context and stay concise."

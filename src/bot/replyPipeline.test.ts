@@ -484,8 +484,6 @@ test("maybeReplyToMessagePipeline lets the model attach tool-returned images in 
                 confidence: 0,
                 reason: null
               },
-              screenNote: null,
-              screenMoment: null
             }),
             toolCalls: [],
             rawContent: null,

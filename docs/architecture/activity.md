@@ -365,7 +365,6 @@ Voice-only or voice-centric tools include:
 
 - `music_*`
 - `play_soundboard`
-- `screen_note` / `screen_moment`
 - join / leave voice-channel actions
 - provider-native realtime function calls
 

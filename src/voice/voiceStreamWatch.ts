@@ -18,6 +18,7 @@ import {
 } from "../selfbot/streamDiscovery.ts";
 import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
 import {
+  clearNativeDiscordScreenShareState,
   ensureNativeDiscordScreenShareState,
   removeNativeDiscordVideoSharer
 } from "./nativeDiscordScreenShare.ts";
@@ -870,7 +871,7 @@ export async function requestWatchStream(manager: StreamWatchManager, { message,
 export function initializeStreamWatchState(manager: StreamWatchManager, { session, requesterUserId, targetUserId = null }) {
   if (!session) return;
   session.streamWatch = session.streamWatch || {};
-  clearNativeDiscordStreamTransportState(session);
+  clearNativeDiscordScreenShareState(session);
   session.streamWatch.active = true;
   session.streamWatch.targetUserId = String(targetUserId || requesterUserId || "").trim() || null;
   session.streamWatch.requestedByUserId = String(requesterUserId || "").trim() || null;
@@ -885,7 +886,6 @@ export function initializeStreamWatchState(manager: StreamWatchManager, { sessio
   session.streamWatch.lastBrainContextProvider = null;
   session.streamWatch.lastBrainContextModel = null;
   session.streamWatch.brainContextEntries = [];
-  session.streamWatch.durableScreenNotes = [];
   session.streamWatch.ingestedFrameCount = 0;
   session.streamWatch.acceptedFrameCountInWindow = 0;
   session.streamWatch.frameWindowStartedAt = 0;
@@ -1120,15 +1120,11 @@ async function generateStreamWatchMemoryRecap(manager: StreamWatchManager, {
   reason = "watching_stopped"
 }) {
   const notesText = buildStreamWatchNotesText(session, 6);
-  const durableNotes = (Array.isArray(session.streamWatch?.durableScreenNotes) ? session.streamWatch.durableScreenNotes : [])
-    .map((note) => String(note || "").trim())
-    .filter(Boolean)
-    .slice(-20);
-  if (!notesText && !durableNotes.length) return null;
+  if (!notesText) return null;
   const speakerName = manager.resolveVoiceSpeakerName(session, session.streamWatch?.targetUserId) || "the streamer";
   const systemPrompt = [
     `You are ${getPromptBotName(settings)} summarizing an ended screen-watch session for memory.`,
-    "You will receive recent observations and key moments captured during one screen-watch session.",
+    "You will receive recent observations captured during one screen-watch session.",
     "Return strict JSON only.",
     "recap must be one concise grounded sentence, max 22 words.",
     "shouldStore should be true if the recap is useful future continuity for this conversation or likely relevant later.",
@@ -1141,10 +1137,6 @@ async function generateStreamWatchMemoryRecap(manager: StreamWatchManager, {
   if (notesText) {
     userPromptParts.push("Recent screen observations:");
     userPromptParts.push(notesText);
-  }
-  if (durableNotes.length) {
-    userPromptParts.push("Key moments during session:");
-    userPromptParts.push(...durableNotes.map((note, i) => `${i + 1}. ${note}`));
   }
   const userPrompt = userPromptParts.join("\n");
 
@@ -1316,6 +1308,45 @@ export function isUserInSessionVoiceChannel(manager: StreamWatchManager, { sessi
   return Boolean(voiceChannel?.members?.has?.(normalizedUserId));
 }
 
+export function isStreamWatchFrameReady(session) {
+  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+  if (Number(nativeScreenShare.lastDecodeSuccessAt || 0) > 0) {
+    return true;
+  }
+  const latestFrameMimeType = String(session?.streamWatch?.latestFrameMimeType || "").trim().toLowerCase();
+  const latestFrameDataBase64 = String(session?.streamWatch?.latestFrameDataBase64 || "").trim();
+  return latestFrameMimeType.startsWith("image/") && latestFrameDataBase64.length > 0;
+}
+
+function canReuseActiveStreamWatch(session, targetUserId: string) {
+  if (!session?.streamWatch?.active) return false;
+  const activeTargetUserId = String(session.streamWatch?.targetUserId || "").trim();
+  if (!activeTargetUserId || activeTargetUserId !== targetUserId) return false;
+
+  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+  const transportStatus = String(nativeScreenShare.transportStatus || "").trim().toLowerCase();
+  if (["waiting_for_credentials", "connect_requested", "connecting", "ready"].includes(transportStatus)) {
+    return true;
+  }
+
+  if (isStreamWatchFrameReady(session)) {
+    return true;
+  }
+
+  return listActiveNativeDiscordScreenSharers(session).some((entry) => entry.userId === targetUserId);
+}
+
+function getStreamWatchReadinessResult(session, targetUserId: string) {
+  const frameReady = isStreamWatchFrameReady(session);
+  return {
+    ok: true,
+    reused: true,
+    frameReady,
+    reason: frameReady ? "frame_context_ready" : "waiting_for_frame_context",
+    targetUserId: String(session?.streamWatch?.targetUserId || targetUserId).trim() || targetUserId
+  };
+}
+
 export async function enableWatchStreamForUser(manager: StreamWatchManager, {
   guildId,
   requesterUserId,
@@ -1364,6 +1395,26 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
   }
 
   const resolvedTarget = String(targetUserId || normalizedRequesterId).trim() || normalizedRequesterId;
+  if (canReuseActiveStreamWatch(session, resolvedTarget)) {
+    subscribeNativeDiscordVideo(manager, session, resolvedSettings, resolvedTarget, source);
+    const reusedResult = getStreamWatchReadinessResult(session, resolvedTarget);
+    manager.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: normalizedRequesterId,
+      content: "stream_watch_reused_programmatic",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "screen_share_link"),
+        targetUserId: reusedResult.targetUserId,
+        frameReady: reusedResult.frameReady,
+        streamKey: ensureNativeDiscordScreenShareState(session).activeStreamKey || null,
+        transportStatus: ensureNativeDiscordScreenShareState(session).transportStatus || null
+      }
+    });
+    return reusedResult;
+  }
   if (
     session.streamWatch?.active &&
     String(session.streamWatch.targetUserId || "").trim() &&
@@ -1427,9 +1478,12 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
     }
   });
 
+  const frameReady = isStreamWatchFrameReady(session);
   return {
     ok: true,
-    reason: "watching_started",
+    reused: false,
+    frameReady,
+    reason: frameReady ? "frame_context_ready" : "waiting_for_frame_context",
     targetUserId: session.streamWatch?.targetUserId || resolvedTarget
   };
 }

@@ -90,7 +90,6 @@ Voice-centric tools:
 
 - `music_*`
 - `play_soundboard`
-- `screen_note` / `screen_moment`
 - `join_voice_channel` / `leave_voice_channel`
 
 Core routing:
