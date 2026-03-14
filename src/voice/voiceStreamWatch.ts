@@ -13,6 +13,7 @@ import {
   getStreamByUserAndGuild,
   requestStreamWatch,
   streamHasCredentials,
+  type StreamDiscoveryClientLike,
   type GoLiveStream,
   type StreamDiscoveryState
 } from "../selfbot/streamDiscovery.ts";
@@ -20,6 +21,7 @@ import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
 import {
   clearNativeDiscordScreenShareState,
   ensureNativeDiscordScreenShareState,
+  listActiveNativeDiscordScreenSharers,
   removeNativeDiscordVideoSharer
 } from "./nativeDiscordScreenShare.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
@@ -64,7 +66,7 @@ type StreamWatchSession = {
 };
 
 type StreamWatchManager = {
-  client: {
+  client: StreamDiscoveryClientLike & {
     user?: { id?: string | null; username?: string | null } | null;
     guilds: {
       cache: Map<string, {
@@ -113,10 +115,33 @@ type StreamWatchManager = {
     getDeferredQueuedUserTurns?: (session: StreamWatchSession) => unknown[] | null;
   } | null;
   getOutputChannelState?: (session: StreamWatchSession) => { locked?: boolean } | null;
-  runRealtimeBrainReply?: (payload: Record<string, unknown>) => Promise<unknown>;
+  runRealtimeBrainReply?: (payload: {
+    session: StreamWatchSession;
+    settings: Record<string, unknown> | null;
+    userId: string;
+    transcript?: string;
+    inputKind?: string;
+    directAddressed?: boolean;
+    directAddressConfidence?: number;
+    conversationContext?: unknown;
+    musicWakeFollowupEligibleAtCapture?: boolean;
+    source?: string;
+    latencyContext?: unknown;
+    frozenFrameSnapshot?: unknown;
+    runtimeEventContext?: unknown;
+  }) => Promise<unknown>;
   activeReplies?: {
     has?: (scopeKey: string) => boolean;
   } | null;
+};
+
+type EnableWatchStreamResult = {
+  ok: boolean;
+  reason?: string;
+  targetUserId?: string;
+  fallback?: string;
+  reused?: boolean;
+  frameReady?: boolean;
 };
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
@@ -1381,7 +1406,7 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
   targetUserId = null,
   settings = null,
   source = "screen_share_link"
-}) {
+}): Promise<EnableWatchStreamResult> {
   const normalizedGuildId = String(guildId || "").trim();
   const normalizedRequesterId = String(requesterUserId || "").trim();
   if (!normalizedGuildId || !normalizedRequesterId) {
@@ -1512,7 +1537,7 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
     reused: false,
     frameReady,
     reason: frameReady ? "frame_context_ready" : "waiting_for_frame_context",
-    targetUserId: session.streamWatch?.targetUserId || resolvedTarget
+    targetUserId: String(session.streamWatch?.targetUserId || resolvedTarget).trim() || resolvedTarget
   };
 }
 

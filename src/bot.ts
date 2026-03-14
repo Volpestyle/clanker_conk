@@ -362,7 +362,7 @@ export class ClankerBot {
       ],
       partials: [Partials.Channel, Partials.Message, Partials.Reaction]
     });
-    applySelfbotPatches(this.client);
+    applySelfbotPatches(this.client as Client);
     this.voiceSessionManager = new VoiceSessionManager({
       client: this.client,
       store: this.store,

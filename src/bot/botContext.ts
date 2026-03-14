@@ -15,8 +15,10 @@ import type { SubAgentSessionManager } from "../agents/subAgentSession.ts";
 import type { BrowserStreamPublishManager } from "../voice/voiceBrowserStreamPublish.ts";
 import type {
   InFlightAcceptedBrainTurn,
+  VoiceSessionStreamWatchState,
   VoiceSessionDurableContextEntry
 } from "../voice/voiceSessionTypes.ts";
+import type { WarmMemoryState } from "../voice/voiceSessionWarmMemory.ts";
 
 export type AppConfig = typeof appConfig;
 
@@ -250,6 +252,8 @@ export interface VoiceReplyRuntime extends BotContext {
       realtimeToolOwnership?: "transport_only" | "provider_native" | null;
       durableContext?: VoiceSessionDurableContextEntry[];
       inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
+      warmMemory?: WarmMemoryState | null;
+      streamWatch?: VoiceSessionStreamWatchState | null;
     } | null;
     abortHeldPrePlaybackReplyBeforeToolCall?: (payload: {
       session?: {

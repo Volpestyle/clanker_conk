@@ -56,7 +56,7 @@ export function applySelfbotPatches(client: Client): void {
  * Patched location: @discordjs/rest/dist/index.js ~line 1383
  */
 function patchRestAuth(client: Client): void {
-  const rest = client.rest as RestLike;
+  const rest = client.rest as unknown as RestLike;
   const originalResolveRequest = rest.resolveRequest.bind(rest);
   rest.resolveRequest = async function (request: Record<string, unknown>) {
     const result = await originalResolveRequest(request);
@@ -96,7 +96,7 @@ function patchRestAuth(client: Client): void {
  * - @discordjs/ws/dist/index.js line 1404 (fetchGatewayInformation)
  */
 function patchInternalWebSocketManager(client: Client): void {
-  const ws = client.ws as WebSocketManagerLike;
+  const ws = client.ws as unknown as WebSocketManagerLike;
   let wsInner: InternalWSManager | null = ws._ws;
 
   Object.defineProperty(ws, "_ws", {
@@ -224,7 +224,7 @@ export function sendGatewayPayload(
   client: Client,
   payload: { op: number; d: unknown }
 ): void {
-  const ws = client.ws as WebSocketManagerLike;
+  const ws = client.ws as unknown as WebSocketManagerLike;
   const shardId = ws.shards.first()?.id ?? 0;
   ws._ws?.send(shardId, payload);
 }

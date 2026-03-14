@@ -21,7 +21,7 @@ type GatewaySocketLike = {
   send: (shardId: number, payload: unknown) => void;
 };
 
-type StreamDiscoveryClientLike = {
+export type StreamDiscoveryClientLike = {
   on: (event: string, callback: (packet: { t?: string; d?: Record<string, unknown> }) => void) => void;
   ws: {
     _ws?: GatewaySocketLike | null;

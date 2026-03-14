@@ -1,4 +1,3 @@
-import type { Client } from "discord.js";
 import { getVoiceStreamWatchSettings } from "../settings/agentStack.ts";
 import { normalizeStreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 import {
@@ -7,6 +6,7 @@ import {
   requestStreamDelete,
   setStreamPaused,
   streamHasCredentials,
+  type StreamDiscoveryClientLike,
   type GoLiveStream,
   type StreamDiscoveryState
 } from "../selfbot/streamDiscovery.ts";
@@ -56,11 +56,28 @@ type StreamPublishSession = {
 };
 
 type StreamPublishManager = {
-  client: Client;
+  client: StreamDiscoveryClientLike & {
+    user?: {
+      id?: string | null;
+    } | null;
+    guilds: {
+      cache: {
+        get: (id: string) => {
+          members?: {
+            me?: {
+              voice?: {
+                sessionId?: string | null;
+              } | null;
+            } | null;
+          } | null;
+        } | null | undefined;
+      };
+    };
+  };
   sessions: Map<string, StreamPublishSession>;
   streamDiscovery?: StreamDiscoveryState | null;
   store: {
-    getSettings: () => Record<string, unknown> | null;
+    getSettings?: () => Record<string, unknown> | null;
     logAction: (entry: Record<string, unknown>) => void;
   };
 };
@@ -144,7 +161,7 @@ function normalizeSourceUrl(url: unknown) {
 
 function getConfiguredVisualizerMode(manager: StreamPublishManager) {
   return normalizeStreamWatchVisualizerMode(
-    getVoiceStreamWatchSettings(manager.store.getSettings()).visualizerMode
+    getVoiceStreamWatchSettings(manager.store.getSettings?.() || null).visualizerMode
   );
 }
 
@@ -169,9 +186,9 @@ function resolvePublishableMusicSource(
       ? false
       : configuredVisualizerMode !== "off";
 
-  const effectiveVisualizerMode: StreamWatchVisualizerMode = forceMode === "visualizer"
+  const effectiveVisualizerMode: Exclude<StreamWatchVisualizerMode, "off"> = forceMode === "visualizer"
     ? (forcedVisualizerMode && forcedVisualizerMode !== "off" ? forcedVisualizerMode : configuredVisualizerMode !== "off" ? configuredVisualizerMode : "cqt")
-    : configuredVisualizerMode;
+    : configuredVisualizerMode !== "off" ? configuredVisualizerMode : "cqt";
 
   if (useVisualizer) {
     if (!playbackUrl) {

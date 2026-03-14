@@ -17,6 +17,9 @@ interface DashboardVoiceSessionRuntime {
   guildFactProfile: unknown;
   behavioralFactCache?: unknown;
   conversationHistoryCaches?: unknown;
+  warmMemory?: {
+    snapshot?: unknown;
+  } | null;
 }
 
 interface DashboardVoiceManagerRuntime {

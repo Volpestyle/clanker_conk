@@ -124,6 +124,7 @@ export type ReplyToolRuntime = {
       transport?: "native" | "link" | null;
       reason?: string | null;
       targetUserId?: string | null;
+      frameReady?: boolean;
       linkUrl?: string | null;
       expiresInMinutes?: number | null;
     }>;

@@ -138,8 +138,8 @@ export interface ScreenShareRuntime extends BotContext {
     }) => Promise<{
       ok: boolean;
       reason?: string;
-      targetUserId?: string | null;
-      fallback?: string | null;
+      targetUserId?: string;
+      fallback?: string;
       reused?: boolean;
       frameReady?: boolean;
     }>;
@@ -746,10 +746,12 @@ async function tryStartNativeScreenWatch(
   }
 ): Promise<{
   started: boolean;
+  reused?: boolean;
   reason?: string;
   fallback?: string | null;
   targetUserId?: string | null;
   transport?: "native";
+  frameReady?: boolean;
 }> {
   const voiceManager = runtime.voiceSessionManager;
   if (!voiceManager || typeof voiceManager.enableWatchStreamForUser !== "function") {

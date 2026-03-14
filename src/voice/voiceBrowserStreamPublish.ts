@@ -1,6 +1,7 @@
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BrowserSessionVideoSource } from "../services/browserSessionVideoSource.ts";
 import { isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import type { StreamDiscoveryClientLike } from "../selfbot/streamDiscovery.ts";
 import { ensureStreamPublishState, startBrowserStreamPublish, stopBrowserStreamPublish } from "./voiceStreamPublish.ts";
 import type { VoiceSessionStreamPublishState } from "./voiceSessionTypes.ts";
 
@@ -30,10 +31,23 @@ export type BrowserStreamPublishManager = {
     } | null | undefined;
   } | null;
   sessions: Map<string, BrowserStreamPublishSession>;
-  client: {
+  client: StreamDiscoveryClientLike & {
     user?: {
       id?: string | null;
     } | null;
+    guilds: {
+      cache: {
+        get: (id: string) => {
+          members?: {
+            me?: {
+              voice?: {
+                sessionId?: string | null;
+              } | null;
+            } | null;
+          } | null;
+        } | null | undefined;
+      };
+    };
   };
   store: {
     getSettings?: () => Record<string, unknown> | null;
