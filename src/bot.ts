@@ -354,6 +354,7 @@ export class ClankerBot {
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMessageReactions,
         GatewayIntentBits.GuildVoiceStates,
@@ -810,6 +811,19 @@ export class ClankerBot {
           messageId: message.id,
           userId: message.author?.id,
           content: String(error?.message || error)
+        });
+      }
+    });
+
+    this.client.on("guildMemberAdd", async (member) => {
+      try {
+        await this.handleMemberJoin(member);
+      } catch (error) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: member?.guild?.id,
+          userId: member?.user?.id,
+          content: `member_join_handler: ${String(error?.message || error)}`
         });
       }
     });
@@ -1407,6 +1421,159 @@ export class ClankerBot {
     this.enqueueReplyJob({
       source: "message_event",
       message,
+      addressSignal
+    });
+  }
+
+  /**
+   * Handle a new member joining the guild.
+   * Resolves a target text channel (reply channels first, then system channel),
+   * records a synthetic event message, and feeds it through the normal reply
+   * pipeline so the LLM can decide whether to greet.
+   */
+  async handleMemberJoin(member) {
+    if (!member?.guild || !member?.user) return;
+    if (member.user.bot) return;
+    if (String(member.user.id) === String(this.client.user?.id || "")) return;
+
+    const settings = this.store.getSettings();
+    if (!settings?.permissions?.replies?.allowReplies) return;
+
+    const displayName = member.displayName || member.user.username || "Someone";
+    const accountAge = member.user.createdAt
+      ? Math.floor((Date.now() - member.user.createdAt.getTime()) / (1000 * 60 * 60 * 24))
+      : null;
+    const accountAgeNote = accountAge !== null && accountAge < 7
+      ? " (brand new Discord account)"
+      : "";
+    const eventContent = `[SERVER EVENT: ${displayName} just joined the server${accountAgeNote}. This is not a chat message — it is a membership event. You may greet them naturally if it fits, or output [SKIP] if you have nothing to say.]`;
+
+    // Resolve target channel: prefer reply channels, then guild system channel,
+    // then first sendable channel in the guild.
+    const permissions = getReplyPermissions(settings);
+    const replyChannelIds = Array.isArray(permissions.replyChannelIds)
+      ? permissions.replyChannelIds.map((id) => String(id).trim()).filter(Boolean)
+      : [];
+
+    let targetChannel = null;
+    for (const channelId of replyChannelIds) {
+      const channel = this.client.channels.cache.get(channelId);
+      if (isSendableChannel(channel) && isChannelAllowedForPermissions(settings, channelId)) {
+        targetChannel = channel;
+        break;
+      }
+    }
+    if (!targetChannel && member.guild.systemChannelId) {
+      const sysChannel = this.client.channels.cache.get(member.guild.systemChannelId);
+      if (isSendableChannel(sysChannel) && isChannelAllowedForPermissions(settings, member.guild.systemChannelId)) {
+        targetChannel = sysChannel;
+      }
+    }
+    if (!targetChannel) {
+      const fallback = member.guild.channels.cache
+        .filter((ch) => isSendableChannel(ch) && isChannelAllowedForPermissions(settings, String(ch.id)))
+        .first();
+      if (fallback && isSendableChannel(fallback)) {
+        targetChannel = fallback;
+      }
+    }
+    if (!targetChannel) return;
+
+    // Build a synthetic pseudo-ID so the dedup checks in enqueueReplyJob pass.
+    const syntheticId = `member-join-${member.user.id}-${Date.now()}`;
+
+    // Record the event in message history so it appears in recent chat context.
+    this.store.recordMessage({
+      messageId: syntheticId,
+      createdAt: Date.now(),
+      guildId: member.guild.id,
+      channelId: targetChannel.id,
+      authorId: member.user.id,
+      authorName: displayName,
+      isBot: false,
+      content: eventContent,
+      referencedMessageId: null
+    });
+
+    // Build a minimal message-like object that the reply pipeline can consume.
+    const syntheticMessage = {
+      id: syntheticId,
+      channelId: targetChannel.id,
+      guildId: member.guild.id,
+      guild: member.guild,
+      channel: targetChannel,
+      content: eventContent,
+      createdTimestamp: Date.now(),
+      author: {
+        id: member.user.id,
+        username: member.user.username,
+        bot: false
+      },
+      member: {
+        displayName
+      },
+      mentions: { users: new Map(), repliedUser: null },
+      reference: null,
+      referencedMessage: null,
+      attachments: new Map()
+    };
+
+    this.store.logAction({
+      kind: "text_runtime",
+      guildId: member.guild.id,
+      channelId: targetChannel.id,
+      userId: member.user.id,
+      content: "member_join_event",
+      metadata: {
+        displayName,
+        targetChannelId: targetChannel.id,
+        syntheticId
+      }
+    });
+
+    // Feed through normal admission — the LLM decides whether to greet.
+    const recentMessages = this.store.getRecentMessages(targetChannel.id, 20);
+    const addressSignal = {
+      direct: false,
+      inferred: false,
+      triggered: false,
+      reason: "member_join_event",
+      confidence: 0,
+      threshold: 0.62,
+      confidenceSource: "fallback" as const
+    };
+    const isReplyChannel = isReplyChannelForPermissions(settings, String(targetChannel.id));
+    const replyAdmissionDecision = evaluateReplyAdmissionDecision({
+      botUserId: this.client.user?.id,
+      settings,
+      recentMessages,
+      addressSignal,
+      isReplyChannel,
+      triggerMessageId: syntheticId,
+      triggerAuthorId: member.user.id,
+      triggerReferenceMessageId: null,
+      windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
+    });
+
+    this.store.logAction({
+      kind: "text_runtime",
+      guildId: member.guild.id,
+      channelId: targetChannel.id,
+      userId: member.user.id,
+      content: "member_join_admission_decision",
+      metadata: {
+        allow: replyAdmissionDecision.allow,
+        reason: replyAdmissionDecision.reason,
+        isReplyChannel,
+        syntheticId
+      }
+    });
+
+    if (!replyAdmissionDecision.allow) return;
+
+    this.enqueueReplyJob({
+      source: "member_join_event",
+      message: syntheticMessage,
       addressSignal
     });
   }

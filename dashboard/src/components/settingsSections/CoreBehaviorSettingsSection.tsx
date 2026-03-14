@@ -10,6 +10,61 @@ interface OverlayPreset {
   fields: Record<string, string>;
 }
 
+/* ── Persona presets (couples persona flavor + voice provider + voice) ── */
+
+interface PersonaPreset {
+  value: string;
+  label: string;
+  description: string;
+  fields: Record<string, unknown>;
+}
+
+export const PERSONA_PRESETS: PersonaPreset[] = [
+  {
+    value: "crush",
+    label: "Crush (Chill)",
+    description: "Laid-back Finding Nemo turtle vibes. Gen Z slang, no filter, playful.",
+    fields: {
+      personaFlavor:
+        "Starting template: Same vibes as 'Crush', the turtle from Finding Nemo. Laid back, playful and pretty heavily uses gen z and gen alpha slang. Says wild shit sometimes, no filter. Reflective and introspective when it calls for. Also open, honest, and exploratory. Likes to mess with people for laughs. Can be open, insightful and wise, thoughtful and considerate.",
+      voiceProvider: "elevenlabs",
+      voiceElevenLabsRealtimeVoiceId: "IRHApOXLvnW57QJPQH2P"
+    }
+  },
+  {
+    value: "wizard",
+    label: "Wise Old Wizard",
+    description: "Ancient sage archetype. Deep, resonant, measured wisdom.",
+    fields: {
+      personaFlavor:
+        "Starting template: A wise old wizard archetype. Speaks with gravitas and depth, as if every word carries centuries of hard-won knowledge. Measured and deliberate, but not pretentious — more Gandalf-at-the-pub than Dumbledore-giving-a-speech. Uses rich metaphors and occasional dry humor. Offers perspective that reframes problems in unexpected ways. Patient, but will call out foolishness directly. Has a warmth underneath the sage exterior.",
+      voiceProvider: "elevenlabs",
+      voiceElevenLabsRealtimeVoiceId: "BBfN7Spa3cqLPH1xAS22"
+    }
+  },
+  {
+    value: "ara",
+    label: "Ara",
+    description: "E-girl energy. Playful, chaotic, terminally online.",
+    fields: {
+      personaFlavor:
+        "Starting template: E-girl influenced persona. Terminally online energy — uses internet slang, kaomoji, and references niche internet culture naturally. Playful and chaotic but genuinely sharp underneath the aesthetic. Flirty-adjacent humor without being weird about it. Gets excited about random things. Has strong opinions about media, games, and music. Can pivot from silly to surprisingly insightful. Types/talks in a way that feels like a real person who lives on Discord.",
+      voiceProvider: "xai",
+      voiceXaiVoice: "Ara"
+    }
+  }
+];
+
+export function matchPersonaPreset(presets: PersonaPreset[], form: Record<string, unknown>): string {
+  for (const preset of presets) {
+    const match = Object.entries(preset.fields).every(
+      ([key, val]) => String(form[key] || "").trim() === String(val).trim()
+    );
+    if (match) return preset.value;
+  }
+  return "__custom__";
+}
+
 const TEXT_TONE_PRESETS: OverlayPreset[] = [
   {
     value: "default",
@@ -252,7 +307,14 @@ function OverlaySelect({
   );
 }
 
-export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAliases, onApplyOverlay }) {
+export function CoreBehaviorSettingsSection({ id, form, savedForm, set, onSanitizeBotNameAliases, onApplyOverlay }) {
+  const currentPersonaPreset = useMemo(() => matchPersonaPreset(PERSONA_PRESETS, form), [form]);
+  const savedPersonaPreset = useMemo(
+    () => savedForm ? matchPersonaPreset(PERSONA_PRESETS, savedForm) : "__custom__",
+    [savedForm]
+  );
+  const showCustomCard = currentPersonaPreset === "__custom__" || savedPersonaPreset === "__custom__";
+
   return (
     <SettingsSection id={id} title="Behavior">
       <label htmlFor="bot-name">Bot display name</label>
@@ -266,6 +328,28 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         onChange={set("botNameAliases")}
         onBlur={onSanitizeBotNameAliases}
       />
+
+      <h4>Persona Preset</h4>
+      <p>Couples persona prompting with a matching voice. Selecting a preset updates the persona flavor and voice provider settings together.</p>
+      <div className="persona-preset-grid">
+        {PERSONA_PRESETS.map((preset) => (
+          <button
+            key={preset.value}
+            type="button"
+            className={`persona-preset-card${currentPersonaPreset === preset.value ? " active" : ""}`}
+            onClick={() => onApplyOverlay(preset.fields)}
+          >
+            <strong>{preset.label}</strong>
+            <span className="persona-preset-desc">{preset.description}</span>
+          </button>
+        ))}
+        {showCustomCard && (
+          <div className={`persona-preset-card custom${currentPersonaPreset === "__custom__" ? " active" : ""}`}>
+            <strong>Custom</strong>
+            <span className="persona-preset-desc">Persona or voice settings have been customized.</span>
+          </div>
+        )}
+      </div>
 
       <label htmlFor="persona-flavor">Persona flavor</label>
       <textarea

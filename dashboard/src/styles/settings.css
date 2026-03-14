@@ -763,6 +763,62 @@
   white-space: nowrap;
 }
 
+/* ---- PERSONA PRESET CARDS ---- */
+
+.persona-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 6px 0 14px;
+}
+
+.persona-preset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: rgba(6, 14, 13, 0.15);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: inherit;
+  color: inherit;
+}
+
+.persona-preset-card:hover {
+  border-color: var(--accent, #4fc3f7);
+  background: rgba(6, 14, 13, 0.25);
+}
+
+.persona-preset-card.active {
+  border-color: var(--accent, #4fc3f7);
+  background: rgba(79, 195, 247, 0.08);
+}
+
+.persona-preset-card.custom {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.persona-preset-card strong {
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.persona-preset-desc {
+  font-size: 0.64rem;
+  line-height: 1.35;
+  color: var(--ink-3);
+}
+
+@media (max-width: 600px) {
+  .persona-preset-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ---- BEHAVIOR OVERLAY SELECTORS ---- */
 
 .overlay-grid {

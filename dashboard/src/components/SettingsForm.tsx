@@ -142,6 +142,7 @@ export default function SettingsForm({
   toast
 }) {
   const [form, setForm] = useState(() => (settings ? settingsToForm(settings) : null));
+  const [savedForm, setSavedForm] = useState(() => (settings ? settingsToForm(settings) : null));
   const [presetLoadBusy, setPresetLoadBusy] = useState(false);
   const [presetStatus, setPresetStatus] = useState({ text: "", type: "" });
   const savedFormRef = useRef<string>("");
@@ -171,6 +172,7 @@ export default function SettingsForm({
     const next = settingsToFormPreserving(settings, formRef.current);
     formRef.current = next;
     setForm(next);
+    setSavedForm(next);
     savedFormRef.current = JSON.stringify(next);
     formRevisionRef.current += 1;
     setPresetStatus({ text: "", type: "" });
@@ -655,6 +657,7 @@ export default function SettingsForm({
           <CoreBehaviorSettingsSection
             id="sec-behavior"
             form={form}
+            savedForm={savedForm}
             set={set}
             onSanitizeBotNameAliases={sanitizeBotNameAliases}
             onApplyOverlay={applyOverlayFields}
