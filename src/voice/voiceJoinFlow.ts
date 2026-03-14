@@ -362,26 +362,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
         return true;
       }
-      if (ttsMode !== "api") {
-        await sendOperationalMessage(manager, {
-          channel: message.channel,
-          settings,
-          guildId,
-          channelId: message.channelId,
-          userId,
-          messageId: message.id,
-          event: "voice_join_request",
-          reason: "elevenlabs_api_tts_required",
-          details: {
-            mode: runtimeMode,
-            replyPath,
-            ttsMode
-          },
-          mustNotify: true
-        });
-        return true;
-      }
-      if (usesApiTts && !elevenLabsVoiceId) {
+      if (!elevenLabsVoiceId) {
         await sendOperationalMessage(manager, {
           channel: message.channel,
           settings,
@@ -719,7 +700,23 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         const elevenLabsRealtimeSettings = voiceRuntime.elevenLabsRealtime;
         realtimeInputSampleRateHz = Number(elevenLabsRealtimeSettings?.inputSampleRateHz) || 16000;
         realtimeOutputSampleRateHz = Number(elevenLabsRealtimeSettings?.outputSampleRateHz) || 24000;
-        realtimeClient = null;
+        const { ElevenLabsRealtimeClient } = await import("./elevenLabsRealtimeClient.ts");
+        const elevenLabsClient = new ElevenLabsRealtimeClient({
+          apiKey: manager.appConfig?.elevenLabsApiKey || "",
+          baseUrl: String(elevenLabsRealtimeSettings?.apiBaseUrl || "").trim() || null,
+          logger: realtimeRuntimeLogger
+        });
+        const elevenLabsVoiceId = String(elevenLabsRealtimeSettings?.voiceId || "").trim();
+        const elevenLabsModel = String(elevenLabsRealtimeSettings?.ttsModel || "eleven_multilingual_v2").trim() || "eleven_multilingual_v2";
+        const outputFormat = `pcm_${realtimeOutputSampleRateHz}`;
+        await elevenLabsClient.connect({
+          voiceId: elevenLabsVoiceId,
+          model: elevenLabsModel,
+          outputFormat,
+          outputSampleRateHz: realtimeOutputSampleRateHz,
+          chunkLengthSchedule: [50, 120, 200, 260]
+        });
+        realtimeClient = elevenLabsClient;
       }
 
       // --- ASR bridge setup (provider-agnostic) ---

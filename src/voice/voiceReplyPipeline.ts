@@ -632,114 +632,115 @@ export async function runVoiceReplyPipeline(
       streamWatchLatestFrame,
       webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
       voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
-      onSpokenSentence: streamingVoiceReplyEnabled
-        ? async ({
-          text,
-          index,
-          voiceAddressing,
-          voiceOutputLeaseMode
-        }: {
-          text: string;
-          index: number;
-          voiceAddressing?: { talkingTo: string | null } | null;
-          voiceOutputLeaseMode?: VoiceOutputLeaseMode | null;
-        }) => {
-          if (generationInterrupted()) return false;
-          const playbackPlan = host.buildVoiceReplyPlaybackPlan({
-            replyText: String(text || ""),
-            trailingSoundboardRefs: []
-          });
-          if (!playbackPlan.steps.length) return false;
-          const { replyInterruptionPolicy: streamedReplyInterruptionPolicy } = resolveAssistantReplyTargeting(host, {
-            session,
-            userId: params.userId,
-            rawAddressing: voiceAddressing || null
-          });
-          const streamedReplyOutputLeaseMode = normalizeAssistantReplyOutputLeaseMode(voiceOutputLeaseMode);
-          const requestedAt = Date.now();
-          const latencyContext =
-            index === 0
-              ? {
-                finalizedAtMs: latencyFinalizedAtMs,
-                asrStartedAtMs: latencyAsrStartedAtMs,
-                asrCompletedAtMs: latencyAsrCompletedAtMs,
-                generationStartedAtMs: generationStartedAt,
-                replyRequestedAtMs: requestedAt,
-                audioStartedAtMs: 0,
-                source,
-                captureReason: latencyCaptureReason,
-                queueWaitMs: latencyQueueWaitMs,
-                pendingQueueDepth: latencyPendingQueueDepth
-              }
-              : null;
-          const playbackSource = `${source}:stream_chunk_${Math.max(0, Number(index || 0))}`;
-          if (playbackPlan.soundboardRefs.length === 0) {
-            const normalizedText = normalizeVoiceText(playbackPlan.spokenText, STT_REPLY_MAX_CHARS);
-            if (!normalizedText) return false;
-            if (generationInterrupted()) return false;
-            const requested = host.requestRealtimeTextUtterance({
-              session,
-              text: normalizedText,
-              userId: host.client.user?.id || null,
-              source: playbackSource,
-              interruptionPolicy: streamedReplyInterruptionPolicy,
-              outputLeaseMode: streamedReplyOutputLeaseMode,
-              latencyContext,
-              musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
-            });
-            if (requested && streamedReplyRequestedAt === 0) {
-              streamedReplyRequestedAt = requestedAt;
-              session.lastAssistantReplyAt = requestedAt;
-              markInFlightAcceptedBrainTurnPhase("playback_requested");
+      onSpokenSentence: async ({
+        text,
+        index,
+        voiceAddressing,
+        voiceOutputLeaseMode
+      }: {
+        text: string;
+        index: number;
+        voiceAddressing?: { talkingTo: string | null } | null;
+        voiceOutputLeaseMode?: VoiceOutputLeaseMode | null;
+      }) => {
+        if (generationInterrupted()) return false;
+        const playbackPlan = host.buildVoiceReplyPlaybackPlan({
+          replyText: String(text || ""),
+          trailingSoundboardRefs: []
+        });
+        if (!playbackPlan.steps.length) return false;
+        const { replyInterruptionPolicy: streamedReplyInterruptionPolicy } = resolveAssistantReplyTargeting(host, {
+          session,
+          userId: params.userId,
+          rawAddressing: voiceAddressing || null
+        });
+        const streamedReplyOutputLeaseMode = normalizeAssistantReplyOutputLeaseMode(voiceOutputLeaseMode);
+        const requestedAt = Date.now();
+        const latencyContext =
+          index === 0
+            ? {
+              finalizedAtMs: latencyFinalizedAtMs,
+              asrStartedAtMs: latencyAsrStartedAtMs,
+              asrCompletedAtMs: latencyAsrCompletedAtMs,
+              generationStartedAtMs: generationStartedAt,
+              replyRequestedAtMs: requestedAt,
+              audioStartedAtMs: 0,
+              source,
+              captureReason: latencyCaptureReason,
+              queueWaitMs: latencyQueueWaitMs,
+              pendingQueueDepth: latencyPendingQueueDepth
             }
-            return {
-              accepted: requested,
-              playedSoundboardRefs: [],
-              requestedRealtimeUtterance: requested
-            };
-          }
-          const playbackResult = await host.playVoiceReplyInOrder({
+            : null;
+        const playbackSource = `${source}:stream_chunk_${Math.max(0, Number(index || 0))}`;
+        // Fast path: realtime utterance request (no soundboard, realtime TTS available)
+        if (useRealtimeTts && playbackPlan.soundboardRefs.length === 0) {
+          const normalizedText = normalizeVoiceText(playbackPlan.spokenText, STT_REPLY_MAX_CHARS);
+          if (!normalizedText) return false;
+          if (generationInterrupted()) return false;
+          const requested = host.requestRealtimeTextUtterance({
             session,
-            settings: params.settings,
-            spokenText: playbackPlan.spokenText,
-            playbackSteps: playbackPlan.steps,
+            text: normalizedText,
+            userId: host.client.user?.id || null,
             source: playbackSource,
-            preferRealtimeUtterance: useRealtimeTts,
             interruptionPolicy: streamedReplyInterruptionPolicy,
             outputLeaseMode: streamedReplyOutputLeaseMode,
             latencyContext,
             musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
           });
-          if (generationInterrupted()) return false;
-          const accepted = Boolean(playbackResult.completed) &&
-            (Boolean(playbackResult.spokeLine) || Number(playbackResult.playedSoundboardCount || 0) > 0);
-          if (accepted && streamedReplyRequestedAt === 0) {
+          if (requested && streamedReplyRequestedAt === 0) {
             streamedReplyRequestedAt = requestedAt;
             session.lastAssistantReplyAt = requestedAt;
             markInFlightAcceptedBrainTurnPhase("playback_requested");
           }
-          if (
-            accepted &&
-            shouldRefreshMusicWakeAfterSpeech &&
-            playbackResult.spokeLine &&
-            !playbackResult.requestedRealtimeUtterance
-          ) {
-            host.schedulePassiveMusicWakeLatchRefresh({
-              session,
-              settings: params.settings,
-              userId: params.userId || null
-            });
-          }
           return {
-            accepted,
-            playedSoundboardRefs: playbackPlan.soundboardRefs.slice(
-              0,
-              Math.max(0, Number(playbackResult.playedSoundboardCount || 0))
-            ),
-            requestedRealtimeUtterance: Boolean(playbackResult.requestedRealtimeUtterance)
+            accepted: requested,
+            playedSoundboardRefs: [],
+            requestedRealtimeUtterance: requested
           };
         }
-        : null,
+        // Full playback path: API TTS or mixed speech+soundboard
+        const playbackResult = await host.playVoiceReplyInOrder({
+          session,
+          settings: params.settings,
+          spokenText: playbackPlan.spokenText,
+          playbackSteps: playbackPlan.steps,
+          source: playbackSource,
+          preferRealtimeUtterance: useRealtimeTts,
+          interruptionPolicy: streamedReplyInterruptionPolicy,
+          outputLeaseMode: streamedReplyOutputLeaseMode,
+          latencyContext,
+          musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
+        });
+        if (generationInterrupted()) return false;
+        const accepted = Boolean(playbackResult.completed) &&
+          (Boolean(playbackResult.spokeLine) || Number(playbackResult.playedSoundboardCount || 0) > 0);
+        if (accepted && streamedReplyRequestedAt === 0) {
+          streamedReplyRequestedAt = requestedAt;
+          session.lastAssistantReplyAt = requestedAt;
+          markInFlightAcceptedBrainTurnPhase("playback_requested");
+        }
+        if (
+          accepted &&
+          shouldRefreshMusicWakeAfterSpeech &&
+          playbackResult.spokeLine &&
+          !playbackResult.requestedRealtimeUtterance
+        ) {
+          host.schedulePassiveMusicWakeLatchRefresh({
+            session,
+            settings: params.settings,
+            userId: params.userId || null
+          });
+        }
+        return {
+          accepted,
+          playedSoundboardRefs: playbackPlan.soundboardRefs.slice(
+            0,
+            Math.max(0, Number(playbackResult.playedSoundboardCount || 0))
+          ),
+          requestedRealtimeUtterance: Boolean(playbackResult.requestedRealtimeUtterance)
+        };
+      },
+      streamingSentencesEnabled: streamingVoiceReplyEnabled,
       signal: generationSignal
     });
     const generationOnlyWatchdogPromise = new Promise<never>((_, reject) => {
@@ -911,7 +912,7 @@ export async function runVoiceReplyPipeline(
     });
   }
 
-  const streamedSpeechPlayed = streamingVoiceReplyEnabled && streamedSentenceCount > 0;
+  const streamedSpeechPlayed = streamedSentenceCount > 0;
   const replyRequestedAt = streamedReplyRequestedAt || Date.now();
   const replyLatencyContext = {
     finalizedAtMs: latencyFinalizedAtMs,

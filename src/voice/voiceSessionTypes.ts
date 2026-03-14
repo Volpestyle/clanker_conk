@@ -2,6 +2,7 @@ import type { ClankvoxClient } from "./clankvoxClient.ts";
 import type { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import type { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import type { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
+import type { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
 import type { StreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type { AsrBridgeState, AsrCommitResult } from "./voiceAsrBridge.ts";
@@ -1095,7 +1096,7 @@ export interface VoiceSession {
         decider: VoiceModelContextSummary | null;
     };
     voxClient: ClankvoxClient | null;
-    realtimeClient: OpenAiRealtimeClient | GeminiRealtimeClient | XaiRealtimeClient | null;
+    realtimeClient: OpenAiRealtimeClient | GeminiRealtimeClient | XaiRealtimeClient | ElevenLabsRealtimeClient | null;
     startedAt: number;
     lastActivityAt: number;
     maxEndsAt: number | null;
@@ -1121,6 +1122,10 @@ export interface VoiceSession {
     lastDirectAddressUserId: string | null;
     musicWakeLatchedUntil: number;
     musicWakeLatchedByUserId: string | null;
+    /** Transient flag: set by maybeHandleMusicPlaybackTurn when a control command
+     *  candidate is deferred to the main brain (musicBrain off).  The reply
+     *  decision checks this to bypass the music wake gate, then clears it. */
+    musicControlCommandCandidateBypass?: boolean;
     lastInboundAudioAt: number;
     realtimeReplySupersededCount: number;
     pendingRealtimeInputBytes: TurnProcessorState["pendingRealtimeInputBytes"];

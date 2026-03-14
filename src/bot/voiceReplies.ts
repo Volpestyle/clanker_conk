@@ -704,6 +704,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   webSearchTimeoutMs: _webSearchTimeoutMs = null,
   voiceToolCallbacks = null,
   onSpokenSentence = null,
+  streamingSentencesEnabled: _streamingSentencesEnabled = null,
   runtimeEventContext = null,
   signal = undefined
 }) {
@@ -1080,7 +1081,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       : voiceThinkingMode === "enabled" ? "enabled"
         : "disabled";
   const streamingEnabled = Boolean(
-    voiceConversationPolicy.streaming?.enabled &&
+    (_streamingSentencesEnabled ?? voiceConversationPolicy.streaming?.enabled) &&
     typeof onSpokenSentence === "function" &&
     typeof runtime.llm?.generateStreaming === "function"
   );

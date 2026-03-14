@@ -117,12 +117,12 @@ const REALTIME_PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     sharedAsr: true,
   },
   elevenlabs_realtime: {
-    textInput: false,
+    textInput: true,
     updateInstructions: false,
     updateTools: false,
     cancelResponse: false,
     perUserAsr: false,
-    sharedAsr: false,
+    sharedAsr: true,
   },
 };
 
