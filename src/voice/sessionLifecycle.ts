@@ -1725,8 +1725,12 @@ export class SessionLifecycle {
       nativeScreenShare.lastDecodeAttemptAt = Date.now();
       nativeScreenShare.decodeInFlight = true;
       void (async () => {
+        // Decode phase: release decodeInFlight as soon as ffmpeg finishes
+        // so the next frame can start decoding immediately.  The vision
+        // model ingest runs independently and must not block the decode gate.
+        let decoded: { mimeType: string; dataBase64: string } | null = null;
         try {
-          const decoded = await decodeNativeDiscordVideoFrameToStillImage({
+          decoded = await decodeNativeDiscordVideoFrameToStillImage({
             codec: payload.codec,
             frameBase64: payload.frameBase64,
             sequenceFrameBase64s: pendingH264Sequence?.frameBase64s,
@@ -1740,37 +1744,6 @@ export class SessionLifecycle {
             nativeScreenShare.pendingH264Decode?.firstRtpTimestamp === pendingH264Sequence.firstRtpTimestamp
           ) {
             clearPendingNativeDiscordH264DecodeSequence(session, normalizedUserId);
-          }
-
-          const ingestResult = await this.host.ingestStreamFrame({
-            guildId: session.guildId,
-            streamerUserId: normalizedUserId,
-            mimeType: decoded.mimeType,
-            dataBase64: decoded.dataBase64,
-            source: `native_discord_video:${String(payload.codec || "").trim().toLowerCase() || "unknown"}`,
-            settings
-          });
-          if (!ingestResult?.accepted) {
-            const ingestReason = String(ingestResult?.reason || "").trim().toLowerCase();
-            if (
-              ingestReason &&
-              ingestReason !== "watch_not_active" &&
-              ingestReason !== "target_user_mismatch"
-            ) {
-              this.host.store.logAction({
-                kind: "voice_runtime",
-                guildId: session.guildId,
-                channelId: session.textChannelId,
-                userId: normalizedUserId,
-                content: "native_discord_video_frame_rejected",
-                metadata: {
-                  sessionId: session.id,
-                  reason: ingestReason,
-                  codec,
-                  pendingH264AccessUnitCount: pendingH264Sequence?.frameBase64s.length || null
-                }
-              });
-            }
           }
         } catch (error) {
           const errorMessage = String((error as Error)?.message || error);
@@ -1807,6 +1780,55 @@ export class SessionLifecycle {
           });
         } finally {
           nativeScreenShare.decodeInFlight = false;
+        }
+
+        // Ingest phase: send decoded frame to vision model independently.
+        // This runs outside the decodeInFlight gate so the next frame can
+        // start decoding while the vision model processes this one.
+        if (!decoded) return;
+        try {
+          const ingestResult = await this.host.ingestStreamFrame({
+            guildId: session.guildId,
+            streamerUserId: normalizedUserId,
+            mimeType: decoded.mimeType,
+            dataBase64: decoded.dataBase64,
+            source: `native_discord_video:${String(payload.codec || "").trim().toLowerCase() || "unknown"}`,
+            settings
+          });
+          if (!ingestResult?.accepted) {
+            const ingestReason = String(ingestResult?.reason || "").trim().toLowerCase();
+            if (
+              ingestReason &&
+              ingestReason !== "watch_not_active" &&
+              ingestReason !== "target_user_mismatch"
+            ) {
+              this.host.store.logAction({
+                kind: "voice_runtime",
+                guildId: session.guildId,
+                channelId: session.textChannelId,
+                userId: normalizedUserId,
+                content: "native_discord_video_frame_rejected",
+                metadata: {
+                  sessionId: session.id,
+                  reason: ingestReason,
+                  codec,
+                  pendingH264AccessUnitCount: pendingH264Sequence?.frameBase64s.length || null
+                }
+              });
+            }
+          }
+        } catch (ingestError) {
+          this.host.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: normalizedUserId,
+            content: `native_discord_video_ingest_failed: ${String((ingestError as Error)?.message || ingestError)}`,
+            metadata: {
+              sessionId: session.id,
+              codec
+            }
+          });
         }
       })();
     };
