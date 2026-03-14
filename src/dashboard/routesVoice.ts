@@ -142,6 +142,9 @@ function invalidateGuildMemoryRuntime(bot: DashboardBot, guildId: string) {
   session.guildFactProfile = null;
   session.behavioralFactCache = null;
   session.conversationHistoryCaches = null;
+  if (session.warmMemory?.snapshot) {
+    session.warmMemory.snapshot = null;
+  }
   manager.primeSessionFactProfiles(session);
   return true;
 }

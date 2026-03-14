@@ -1039,6 +1039,9 @@ export class ClankerBot {
     session.guildFactProfile = null;
     session.behavioralFactCache = null;
     session.conversationHistoryCaches = null;
+    if (session.warmMemory?.snapshot) {
+      session.warmMemory.snapshot = null;
+    }
     this.voiceSessionManager.primeSessionFactProfiles(session);
     return true;
   }

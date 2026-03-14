@@ -1102,7 +1102,7 @@ export class MemoryManager {
         text: query,
         trace: {
           ...trace,
-          source: "memory_query"
+          source: String((trace as Record<string, unknown>)?.source || "memory_query")
         }
       });
       const queryEmbedding = Array.isArray(queryEmbeddingResult?.embedding)
