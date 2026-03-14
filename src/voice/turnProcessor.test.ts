@@ -144,17 +144,9 @@ test("queueRealtimeTurn dedupes repeated transcript revisions for the same ASR u
 
 test("queueRealtimeTurn revises an active ASR utterance before audio starts", async () => {
   const runtimeLogs = [];
-  let releaseTranscription = () => {};
-  const transcriptionGate = new Promise<void>((resolve) => {
-    releaseTranscription = resolve;
-  });
   const manager = createVoiceTestManager();
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
-  };
-  manager.transcribePcmTurn = async () => {
-    await transcriptionGate;
-    return "Um, can you look up...";
   };
   manager.evaluateVoiceReplyDecision = async () => {
     throw new Error("superseded turn should not reach decision");
@@ -190,7 +182,8 @@ test("queueRealtimeTurn revises an active ASR utterance before audio starts", as
     captureReason: "max_duration",
     queuedAt: Date.now() - 50,
     bridgeUtteranceId: 21,
-    bridgeRevision: 1
+    bridgeRevision: 1,
+    transcriptOverride: "Um, can you look up"
   });
   await Promise.resolve();
 
@@ -202,7 +195,6 @@ test("queueRealtimeTurn revises an active ASR utterance before audio starts", as
     bridgeUtteranceId: 21
   });
 
-  releaseTranscription();
   await turnRun;
 
   assert.equal(session.pendingRealtimeTurns.length, 1);

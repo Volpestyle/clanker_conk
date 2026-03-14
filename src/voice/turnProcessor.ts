@@ -1519,7 +1519,8 @@ export class TurnProcessor {
     bridgeUtteranceId = null,
     bridgeRevision = 1,
     mergedTurnCount = 1,
-    droppedHeadBytes = 0
+    droppedHeadBytes = 0,
+    serverVadConfirmed = false
   }: RunRealtimeTurnArgs) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
@@ -1559,7 +1560,8 @@ export class TurnProcessor {
       bridgeRevision: normalizedBridgeRevision,
       musicWakeFollowupEligibleAtCapture: Boolean(musicWakeFollowupEligibleAtCapture),
       mergedTurnCount: Math.max(1, Number(mergedTurnCount || 1)),
-      droppedHeadBytes: Math.max(0, Number(droppedHeadBytes || 0))
+      droppedHeadBytes: Math.max(0, Number(droppedHeadBytes || 0)),
+      serverVadConfirmed: Boolean(serverVadConfirmed)
     };
     const isSuperseded = (stage: string) => {
       const superseded = this.isRealtimeTurnSuperseded(
@@ -1744,28 +1746,34 @@ export class TurnProcessor {
             minAsrClipBytes
           }
         });
-      } else if (!hasTranscriptOverride && this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
-        asrStartedAtMs = Date.now();
-        const transcriptionResult = await transcribePcmTurnWithPlan({
-          transcribe: (args) => this.host.transcribePcmTurn(args),
-          session,
+      } else if (!hasTranscriptOverride) {
+        // No bridge transcript available. With per-user ASR as the default
+        // transcription path for all modes, a turn without a bridge transcript
+        // means the ASR bridge wasn't connected yet or the capture was
+        // non-speech audio. Drop the turn rather than running file-based ASR
+        // which hallucinates on ambient noise and music.
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
           userId,
-          pcmBuffer: normalizedPcmBuffer,
-          plan: transcriptionPlan,
-          sampleRateHz,
-          captureReason,
-          traceSource: "voice_realtime_turn_decider",
-          errorPrefix: "voice_realtime_transcription_failed",
-          emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
-          emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-          asrLanguage: asrLanguageGuidance.language,
-          asrPrompt: asrLanguageGuidance.prompt
+          content: "voice_turn_dropped_no_bridge_transcript",
+          metadata: {
+            sessionId: session.id,
+            source: "realtime",
+            captureReason: String(captureReason || "stream_end"),
+            pcmBytes: normalizedPcmBuffer.length,
+            clipDurationMs,
+            rms: Number(silenceGate.rms.toFixed(6)),
+            peak: Number(silenceGate.peak.toFixed(6)),
+            activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+            serverVadConfirmed,
+            bridgeUtteranceId: normalizedBridgeUtteranceId,
+            queueWaitMs,
+            pendingQueueDepth
+          }
         });
-        turnTranscript = transcriptionResult.transcript;
-        resolvedFallbackModel = transcriptionResult.fallbackModel;
-        resolvedTranscriptionPlanReason = transcriptionResult.reason;
-        usedFallbackModelForTranscript = transcriptionResult.usedFallbackModel;
-        asrCompletedAtMs = Date.now();
+        return;
       }
 
       const realtimeTranscriptGuard = inspectAsrTranscript(turnTranscript, STT_TRANSCRIPT_MAX_CHARS);

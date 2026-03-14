@@ -113,7 +113,7 @@ const REALTIME_PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     updateInstructions: true,
     updateTools: false,
     cancelResponse: false,
-    perUserAsr: false,
+    perUserAsr: true,
     sharedAsr: true,
   },
   elevenlabs_realtime: {
@@ -121,7 +121,7 @@ const REALTIME_PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     updateInstructions: false,
     updateTools: false,
     cancelResponse: false,
-    perUserAsr: false,
+    perUserAsr: true,
     sharedAsr: true,
   },
 };

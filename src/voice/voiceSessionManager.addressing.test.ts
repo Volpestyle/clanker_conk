@@ -339,7 +339,7 @@ test("reply decider allows direct wake-word pings via the bridge classifier with
     },
     userId: "speaker-1",
     settings: bridgeSettings(),
-    transcript: "clanker"
+    transcript: "clanky"
   });
 
   assert.equal(decision.allow, true);
@@ -348,7 +348,7 @@ test("reply decider allows direct wake-word pings via the bridge classifier with
   assert.equal(callCount, 1);
 });
 
-test("reply decider allows short clanker wake ping through the bridge classifier", async () => {
+test("reply decider allows short exact bot-name wake ping through the bridge classifier", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -366,7 +366,7 @@ test("reply decider allows short clanker wake ping through the bridge classifier
     },
     userId: "speaker-1",
     settings: bridgeSettings(),
-    transcript: "yo clanker"
+    transcript: "yo clanky"
   });
 
   assert.equal(decision.allow, true);
@@ -825,7 +825,7 @@ test("reply decider uses classifier with directAddressed hint without memory loo
         enabled: true
       }
     }),
-    transcript: "clanker what do i usually watch?"
+    transcript: "clanky what do i usually watch?"
   });
 
   assert.equal(decision.allow, true);
@@ -2028,7 +2028,7 @@ test("direct address denied when classifier LLM is unavailable", async () => {
     },
     userId: "speaker-1",
     settings: bridgeSettings(),
-    transcript: "clanker can you explain that"
+    transcript: "clanky can you explain that"
   });
 
   assert.equal(decision.allow, false);
@@ -2449,18 +2449,11 @@ test("reply decider drops expired command followup sessions", async () => {
   assert.equal(decision.reason, "command_only_not_addressed");
 });
 
-test("runRealtimeTurn in voice_agent trusts empty mini transcript without fallback", async () => {
+test("runRealtimeTurn drops turns without bridge transcript", async () => {
   const runtimeLogs = [];
-  const attemptedModels = [];
   const manager = createManager();
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
-  };
-  manager.llm.isAsrReady = () => true;
-  manager.llm.transcribeAudio = async () => ({ text: "unused" });
-  manager.transcribePcmTurn = async ({ model }) => {
-    attemptedModels.push(String(model || ""));
-    return "";
   };
   manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
     allow: true,
@@ -2471,7 +2464,7 @@ test("runRealtimeTurn in voice_agent trusts empty mini transcript without fallba
   });
 
   const session = {
-    id: "session-voice-agent-fallback-1",
+    id: "session-no-bridge-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
     mode: "voice_agent",
@@ -2491,153 +2484,29 @@ test("runRealtimeTurn in voice_agent trusts empty mini transcript without fallba
     captureReason: "stream_end"
   });
 
-  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe"]);
+  const droppedLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_dropped_no_bridge_transcript"
+  );
+  assert.equal(Boolean(droppedLog), true);
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );
-  assert.equal(Boolean(addressingLog), true);
-  assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_no_fallback_runtime");
-  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, undefined);
-  assert.equal(addressingLog?.metadata?.transcriptionUsedFallbackModel, false);
-  assert.equal(addressingLog?.metadata?.transcriptChars, 0);
+  assert.equal(addressingLog, undefined);
 });
 
-test("runRealtimeTurn skips ASR on very short speaking_end clips", async () => {
-  const runtimeLogs = [];
-  let transcribeCalls = 0;
-  const manager = createManager();
-  manager.store.logAction = (row) => {
-    runtimeLogs.push(row);
-  };
-  manager.llm.isAsrReady = () => true;
-  manager.llm.transcribeAudio = async () => ({ text: "unused" });
-  manager.transcribePcmTurn = async () => {
-    transcribeCalls += 1;
-    return "should-not-happen";
-  };
-  manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
-    allow: transcript ? true : false,
-    reason: transcript ? "native_realtime" : "missing_transcript",
-    participantCount: 2,
-    directAddressed: false,
-    transcript
-  });
-
-  const session = {
-    id: "session-short-clip-skip-1",
-    guildId: "guild-1",
-    textChannelId: "chan-1",
-    mode: "voice_agent",
-    ending: false,
-    pendingRealtimeInputBytes: 0,
-    realtimeInputSampleRateHz: 24000,
-    realtimeClient: {
-      appendInputAudioPcm() {}
-    },
-    settingsSnapshot: baseSettings()
-  };
-
-  await manager.turnProcessor.runRealtimeTurn({
-    session,
-    userId: "speaker-1",
-    pcmBuffer: Buffer.from([1, 2, 3, 4]),
-    captureReason: "speaking_end"
-  });
-
-  assert.equal(transcribeCalls, 0);
-  assert.equal(
-    runtimeLogs.some(
-      (row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_transcription_skipped_short_clip"
-    ),
-    true
-  );
-  const addressingLog = runtimeLogs.find(
-    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
-  );
-  assert.equal(Boolean(addressingLog), true);
-  assert.equal(addressingLog?.metadata?.asrSkippedShortClip, true);
-});
-
-test("runRealtimeTurn transcribes speaking_end clips above minimum duration threshold", async () => {
-  const runtimeLogs = [];
-  let transcribeCalls = 0;
-  const manager = createManager();
-  manager.store.logAction = (row) => {
-    runtimeLogs.push(row);
-  };
-  manager.llm.isAsrReady = () => true;
-  manager.llm.transcribeAudio = async () => ({ text: "unused" });
-  manager.transcribePcmTurn = async () => {
-    transcribeCalls += 1;
-    return "yo";
-  };
-  manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
-    allow: transcript ? true : false,
-    reason: transcript ? "native_realtime" : "missing_transcript",
-    participantCount: 2,
-    directAddressed: false,
-    transcript
-  });
-
-  const session = {
-    id: "session-short-clip-strong-signal-1",
-    guildId: "guild-1",
-    textChannelId: "chan-1",
-    mode: "voice_agent",
-    ending: false,
-    pendingRealtimeInputBytes: 0,
-    realtimeInputSampleRateHz: 24000,
-    realtimeClient: {
-      appendInputAudioPcm() {}
-    },
-    settingsSnapshot: baseSettings()
-  };
-
-  const sampleRateHz = 24000;
-  const minAsrClipBytes = Math.max(
-    2,
-    Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
-  );
-  const aboveThresholdClip = Buffer.alloc(minAsrClipBytes + 2, 10);
-
-  await manager.turnProcessor.runRealtimeTurn({
-    session,
-    userId: "speaker-1",
-    pcmBuffer: aboveThresholdClip,
-    captureReason: "speaking_end"
-  });
-
-  assert.equal(transcribeCalls, 1);
-  assert.equal(
-    runtimeLogs.some(
-      (row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_transcription_skipped_short_clip"
-    ),
-    false
-  );
-  const addressingLog = runtimeLogs.find(
-    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
-  );
-  assert.equal(Boolean(addressingLog), true);
-  assert.equal(addressingLog?.metadata?.asrSkippedShortClip, false);
-  assert.equal(addressingLog?.metadata?.transcript, undefined);
-  assert.equal(addressingLog?.metadata?.transcriptChars, "yo".length);
-});
+// File-ASR-specific tests (short-clip skip, model selection, clip duration threshold)
+// were removed: runRealtimeTurn no longer has a file-ASR fallback path.
+// The per-user ASR bridge is the canonical transcription source for all modes.
+// File-ASR logic still exists in runFileAsrTurn for non-realtime paths.
 
 test("runRealtimeTurn forwards short post-reply clips through merged realtime generation", async () => {
   const runtimeLogs = [];
-  let transcribeCalls = 0;
   let replyCalls = 0;
   const manager = createManager({
     generate: async () => ({ text: "YES" })
   });
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
-  };
-  manager.llm.isAsrReady = () => true;
-  manager.llm.transcribeAudio = async () => ({ text: "unused" });
-  manager.transcribePcmTurn = async () => {
-    transcribeCalls += 1;
-    return "Guten士";
   };
   manager.runRealtimeBrainReply = async () => {
     replyCalls += 1;
@@ -2671,10 +2540,10 @@ test("runRealtimeTurn forwards short post-reply clips through merged realtime ge
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.alloc(22_080, 1),
-    captureReason: "speaking_end"
+    captureReason: "speaking_end",
+    transcriptOverride: "Guten士"
   });
 
-  assert.equal(transcribeCalls, 1);
   assert.equal(replyCalls, 1);
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
@@ -2803,9 +2672,6 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
   };
-  manager.llm.isAsrReady = () => true;
-  manager.llm.transcribeAudio = async () => ({ text: "side chatter" });
-  manager.transcribePcmTurn = async () => "side chatter";
   manager.evaluateVoiceReplyDecision = async () => ({
     allow: false,
     reason: "classifier_deny",
@@ -2837,7 +2703,8 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
-    captureReason: "stream_end"
+    captureReason: "stream_end",
+    transcriptOverride: "side chatter"
   });
   const runOutcome = await Promise.race([
     turnRun.then(() => "done"),
@@ -2898,7 +2765,8 @@ test("runRealtimeTurn queues direct-addressed bot-turn-open turns for deferred f
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
-    captureReason: "stream_end"
+    captureReason: "stream_end",
+    transcriptOverride: "hey clanker"
   });
 
   assert.equal(appendedAudioCalls, 0);
@@ -3114,7 +2982,8 @@ test("runRealtimeTurn queues non-direct bot-turn-open turns for deferred flush",
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([8, 9, 10, 11]),
-    captureReason: "stream_end"
+    captureReason: "stream_end",
+    transcriptOverride: "hold up"
   });
 
   assert.equal(deferredTurns.length, 1);
@@ -3164,7 +3033,8 @@ test("runRealtimeTurn logs buffered output-lock telemetry when deferring a turn"
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([21, 22, 23, 24]),
-    captureReason: "stream_end"
+    captureReason: "stream_end",
+    transcriptOverride: "yo"
   });
 
   const addressingLog = runtimeLogs.find(
@@ -3219,7 +3089,8 @@ test("runRealtimeTurn drops classifier_deny turns without deferral", async () =>
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([12, 13, 14, 15]),
-    captureReason: "stream_end"
+    captureReason: "stream_end",
+    transcriptOverride: "whatever"
   });
 
   assert.equal(deferredTurns.length, 0);
@@ -3499,12 +3370,13 @@ test("runRealtimeTurn uses brain reply generation when admission allows turn", a
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([8, 9, 10, 11]),
-    captureReason: "stream_end"
+    captureReason: "stream_end",
+    transcriptOverride: "tell me more"
   });
 
   assert.equal(brainPayloads.length, 1);
   assert.equal(brainPayloads[0]?.session, session);
-  assert.equal(brainPayloads[0]?.transcript, "");
+  assert.equal(brainPayloads[0]?.transcript, "tell me more");
   assert.equal(brainPayloads[0]?.directAddressed, false);
   assert.equal(brainPayloads[0]?.source, "realtime");
 });
@@ -4812,14 +4684,15 @@ test("runRealtimeTurn uses native realtime forwarding when strategy is native", 
     session,
     userId: "speaker-1",
     pcmBuffer,
-    captureReason: "stream_end"
+    captureReason: "stream_end",
+    transcriptOverride: "hello"
   });
 
   assert.equal(brainPayloads.length, 0);
   assert.equal(forwardedPayloads.length, 1);
   assert.equal(forwardedPayloads[0]?.session, session);
   assert.equal(forwardedPayloads[0]?.pcmBuffer, pcmBuffer);
-  assert.equal(forwardedPayloads[0]?.transcript, "");
+  assert.equal(forwardedPayloads[0]?.transcript, "hello");
 });
 
 test("runRealtimeTurn keeps native strategy when soundboard is enabled", async () => {
@@ -4870,14 +4743,15 @@ test("runRealtimeTurn keeps native strategy when soundboard is enabled", async (
     session,
     userId: "speaker-1",
     pcmBuffer,
-    captureReason: "stream_end"
+    captureReason: "stream_end",
+    transcriptOverride: "hello"
   });
 
   assert.equal(brainPayloads.length, 0);
   assert.equal(forwardedPayloads.length, 1);
   assert.equal(forwardedPayloads[0]?.session, session);
   assert.equal(forwardedPayloads[0]?.pcmBuffer, pcmBuffer);
-  assert.equal(forwardedPayloads[0]?.transcript, "");
+  assert.equal(forwardedPayloads[0]?.transcript, "hello");
 });
 
 test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-brain text flow", async () => {
