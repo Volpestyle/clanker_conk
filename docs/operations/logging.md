@@ -91,6 +91,17 @@ info/warn/error events as `OutMsg::Log` IPC messages. These flow through the TLV
 control channel to `clankvoxClient._handleMessage()`, which routes them to `logAction`.
 The existing stderr `fmt` layer is preserved for developer terminal visibility.
 
+## Loki ingestion delay
+
+After stopping a session, the most recent events may not be queryable in
+Grafana for 15–30 seconds while the Loki ingester flushes its in-memory
+chunks. If you need immediate access to the latest logs, query the ndjson
+file directly:
+
+```bash
+rg '<sessionId>' data/logs/runtime-actions.ndjson | rg '"event":"<event_name>"'
+```
+
 ## Local Loki stack
 
 The repository includes:
@@ -238,6 +249,50 @@ Design rule:
 If a weird behavior requires an operator to manually stitch together five log
 lines across captioning, tool calls, memory, and final delivery, the logs are
 present but the debugging product is still incomplete.
+
+## Voice LLM call correlation
+
+Voice brain generation calls emit `llm_call` events under `kind="llm_call"`,
+not `kind="voice_runtime"`. To join them with voice pipeline events, filter
+by `sessionId` (which both event families carry) or by
+`source="voice_realtime_generation"`.
+
+Suggested query:
+
+```logql
+{job="clanker_runtime",kind="llm_call"} |~ "voice_realtime_generation"
+```
+
+Or by sessionId:
+
+```logql
+{job="clanker_runtime",kind="llm_call"} |~ "<sessionId>"
+```
+
+Key `llm_call` metadata for voice latency triage:
+
+- `provider`, `model` — which LLM handled the turn
+- `usage.inputTokens`, `usage.outputTokens` — token counts
+- `usage.cacheReadTokens`, `usage.cacheWriteTokens` — prompt cache hit rate
+- `responseChars` — output length
+- `stopReason` — `end_turn`, `tool_use`, `max_tokens`
+- `streaming` — whether streaming transport was used
+- `sessionId` — voice session correlation key
+
+## Voice prompt size triage
+
+`realtime_reply_requested` carries per-turn prompt size summary fields for
+quick bloat detection without parsing the full `replyPrompts` bundle:
+
+- `systemPromptChars` — static system prompt length
+- `userPromptChars` — per-turn dynamic user prompt length
+- `toolCount` — number of tool definitions exposed
+- `toolDefinitionChars` — total JSON chars of tool schemas
+- `totalPromptChars` — sum of system + user + context + tool chars
+- `contextTurnsSent` — conversation context messages included
+- `contextCharsSent` — total chars in context messages
+
+Use these to spot prompt growth over a session without parsing JSON.
 
 ## Voice memory attribution
 

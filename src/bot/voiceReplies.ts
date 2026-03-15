@@ -49,7 +49,8 @@ import {
   normalizeVoiceRuntimeEventContext,
   normalizeVoiceAddressingTargetToken,
   normalizeInlineText,
-  parseSoundboardDirectiveSequence
+  parseSoundboardDirectiveSequence,
+  extractNoteDirectives
 } from "../voice/voiceSessionHelpers.ts";
 import {
   invalidateSessionBehavioralMemoryCache,
@@ -218,28 +219,35 @@ function hasInlineSoundboardDirective(text: string) {
   return /\[\[\s*SOUNDBOARD:/i.test(text);
 }
 
-function stripInlineSoundboardDirectives(text: unknown, maxLen = 520) {
-  const normalized = sanitizeBotText(normalizeSkipSentinel(String(text || "")), maxLen);
+function stripInlineSoundboardDirectives(text: unknown) {
+  const withoutNotes = extractNoteDirectives(String(text || "")).text;
+  const normalized = sanitizeBotText(normalizeSkipSentinel(withoutNotes), 0);
   if (!normalized || normalized === "[SKIP]") return normalized;
   if (!hasInlineSoundboardDirective(normalized)) return normalized;
-  return sanitizeBotText(parseSoundboardDirectiveSequence(normalized).text, maxLen);
+  return sanitizeBotText(parseSoundboardDirectiveSequence(normalized).text, 0);
 }
 
 function normalizeVoiceReplyText(
   text: unknown,
   {
-    maxLen = 520,
+    maxLen,
     preserveInlineSoundboardDirectives = false
   }: {
     maxLen?: number;
     preserveInlineSoundboardDirectives?: boolean;
   } = {}
 ) {
-  const normalized = sanitizeBotText(normalizeSkipSentinel(String(text || "")), maxLen);
+  // Strip [[NOTE:...]] directives before any other normalization so they
+  // are never sent to TTS — even in the streaming path where sentence
+  // chunks are dispatched before the post-generation extractNoteDirectives call.
+  const withoutNotes = extractNoteDirectives(String(text || "")).text;
+  // Pass 0 when no maxLen to bypass sanitizeBotText's default Discord limit.
+  const effectiveMaxLen = maxLen ?? 0;
+  const normalized = sanitizeBotText(normalizeSkipSentinel(withoutNotes), effectiveMaxLen);
   if (!normalized || normalized === "[SKIP]") return normalized;
   if (preserveInlineSoundboardDirectives) return normalized;
   if (!hasInlineSoundboardDirective(normalized)) return normalized;
-  return sanitizeBotText(parseSoundboardDirectiveSequence(normalized).text, maxLen);
+  return sanitizeBotText(parseSoundboardDirectiveSequence(normalized).text, effectiveMaxLen);
 }
 
 function hasGeneratedVoiceAddressing(addressing: GeneratedVoiceAddressing | null) {
@@ -1311,7 +1319,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       source: "voice_realtime_generation",
       event: sessionId ? "voice_session" : "voice_turn",
       reason: null,
-      messageId: null
+      messageId: null,
+      sessionId: sessionId || null
     };
 
     runtime.store.logAction({
@@ -1482,7 +1491,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
 
     const captureGenerationText = (rawText: unknown) => {
       const normalized = normalizeVoiceReplyText(rawText, {
-        maxLen: 520,
         preserveInlineSoundboardDirectives
       });
       if (!normalized || normalized === "[SKIP]") return;
@@ -1523,7 +1531,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           voiceOutputLeaseMode = parsedReplyAddressing.voiceOutputLeaseMode;
         }
         const resolvedSpokenText = normalizeVoiceReplyText(parsedReplyAddressing.text, {
-          maxLen: 520,
           preserveInlineSoundboardDirectives
         });
         const thinkAloudPrefixNonStream = voiceThinking === "think_aloud" && generation.thinkingText
@@ -1546,7 +1553,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         maxBufferChars: Number(voiceConversationPolicy.streaming?.maxBufferChars),
         onSentence(text) {
           const normalized = normalizeVoiceReplyText(text, {
-            maxLen: 520,
             preserveInlineSoundboardDirectives
           });
           if (!normalized || normalized === "[SKIP]" || signal?.aborted) return;
@@ -1639,10 +1645,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         voiceOutputLeaseMode = parsedReplyAddressing.voiceOutputLeaseMode;
       }
       const resolvedSpokenText = normalizeVoiceReplyText(parsedReplyAddressing.text, {
-        maxLen: 520,
         preserveInlineSoundboardDirectives
       }) || normalizeVoiceReplyText(mergeSpokenReplyText(streamedTextParts), {
-        maxLen: 520,
         preserveInlineSoundboardDirectives
       });
       const thinkAloudPrefix = voiceThinking === "think_aloud" && generation.thinkingText
@@ -1677,7 +1681,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       !signal?.aborted
     ) {
       const preToolText = normalizeVoiceReplyText(mergeSpokenReplyText(spokenTextParts), {
-        maxLen: 520,
         preserveInlineSoundboardDirectives
       });
       if (preToolText && preToolText !== "[SKIP]") {
@@ -1711,7 +1714,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       voiceToolLoopSteps < VOICE_TOOL_LOOP_MAX_STEPS &&
       voiceTotalToolCalls < VOICE_TOOL_LOOP_MAX_CALLS
     ) {
-      const generationHasSpokenText = Boolean(stripInlineSoundboardDirectives(generation.resolvedSpokenText, 520));
+      const generationHasSpokenText = Boolean(stripInlineSoundboardDirectives(generation.resolvedSpokenText));
       const assistantContent = ensureAssistantContentIncludesResolvedText(
         buildContextContentBlocks(generation.rawContent, generation.resolvedSpokenText),
         generation.resolvedSpokenText
@@ -1932,7 +1935,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     const replyPrompts = buildLoggedPromptBundle(promptCapture, voiceToolLoopSteps);
 
     const finalText = normalizeVoiceReplyText(mergeSpokenReplyText(spokenTextParts), {
-      maxLen: 520,
       preserveInlineSoundboardDirectives
     });
     if (!finalText && playedSoundboardRefs.length === 0 && !leaveVoiceChannelRequested) {

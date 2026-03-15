@@ -279,7 +279,8 @@ export class LLMService {
       source: null,
       event: null,
       reason: null,
-      messageId: null
+      messageId: null,
+      sessionId: null
     },
     jsonSchema = "",
     tools = [],
@@ -300,6 +301,7 @@ export class LLMService {
       event?: unknown;
       reason?: unknown;
       messageId?: unknown;
+      sessionId?: unknown;
     };
     jsonSchema?: string;
     tools?: ChatModelRequest["tools"];
@@ -336,7 +338,8 @@ export class LLMService {
       source: null,
       event: null,
       reason: null,
-      messageId: null
+      messageId: null,
+      sessionId: null
     },
     jsonSchema = "",
     tools = [],
@@ -358,6 +361,7 @@ export class LLMService {
       event?: unknown;
       reason?: unknown;
       messageId?: unknown;
+      sessionId?: unknown;
     };
     jsonSchema?: string;
     tools?: ChatModelRequest["tools"];
@@ -380,7 +384,8 @@ export class LLMService {
       source: trace.source == null ? null : String(trace.source),
       event: trace.event == null ? null : String(trace.event),
       reason: trace.reason == null ? null : String(trace.reason),
-      messageId: trace.messageId == null ? null : String(trace.messageId)
+      messageId: trace.messageId == null ? null : String(trace.messageId),
+      sessionId: trace.sessionId == null ? null : String(trace.sessionId)
     };
     const effectiveSystemPrompt =
       normalizedJsonSchema && provider !== "codex-cli" && provider !== "codex_cli_session" && provider !== "openai" && provider !== "openai-oauth"
@@ -470,6 +475,7 @@ export class LLMService {
           event: normalizedTrace.event || null,
           reason: normalizedTrace.reason || null,
           messageId: normalizedTrace.messageId || null,
+          sessionId: normalizedTrace.sessionId || null,
           streaming: usedStreamingTransport,
           systemPrompt: effectiveSystemPrompt || null,
           userPrompt: userPrompt || null,

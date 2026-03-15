@@ -21,6 +21,7 @@ export type LlmTrace = {
   event?: string | null;
   reason?: string | null;
   messageId?: string | null;
+  sessionId?: string | null;
 };
 
 export type ImageInput = {

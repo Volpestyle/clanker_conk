@@ -1064,6 +1064,21 @@ export async function runVoiceReplyPipeline(
       });
     }
     storeExtractedNotes();
+    const promptSizeSummary = (() => {
+      if (!replyPrompts || typeof replyPrompts !== "object") return {};
+      const rp = replyPrompts as Record<string, unknown>;
+      const sysChars = typeof rp.systemPrompt === "string" ? rp.systemPrompt.length : 0;
+      const userChars = typeof rp.initialUserPrompt === "string" ? rp.initialUserPrompt.length : 0;
+      const toolsArr = Array.isArray(rp.tools) ? rp.tools : [];
+      const toolDefChars = JSON.stringify(toolsArr).length;
+      return {
+        systemPromptChars: sysChars,
+        userPromptChars: userChars,
+        toolCount: toolsArr.length,
+        toolDefinitionChars: toolDefChars,
+        totalPromptChars: sysChars + userChars + contextMessageChars + toolDefChars
+      };
+    })();
     host.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -1091,7 +1106,8 @@ export async function runVoiceReplyPipeline(
         replyPrompts,
         contextTurnsSent: contextMessages.length,
         contextTurnsAvailable: contextTurns.length,
-        contextCharsSent: contextMessageChars
+        contextCharsSent: contextMessageChars,
+        ...promptSizeSummary
       }
     });
   } catch (error) {
