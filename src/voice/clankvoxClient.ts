@@ -62,6 +62,22 @@ export type ClankvoxUserVideoFrame = {
   rid: string | null;
   daveDecrypted: boolean;
 };
+export type ClankvoxDecodedVideoFrame = {
+  userId: string;
+  ssrc: number;
+  width: number;
+  height: number;
+  jpegBase64: string;
+  rtpTimestamp: number;
+  streamType: string | null;
+  rid: string | null;
+  /** Instantaneous coarse-luma diff score (0.0–1.0). */
+  changeScore: number;
+  /** EMA-smoothed change score for filtering single-frame noise. */
+  emaChangeScore: number;
+  /** True when instantaneous diff indicates a hard scene cut. */
+  isSceneCut: boolean;
+};
 export type ClankvoxUserVideoEnd = {
   userId: string;
   ssrc: number | null;
@@ -321,6 +337,31 @@ function parseUserVideoFrame(msg: JsonRecord): ClankvoxUserVideoFrame | null {
     streamType: asString(msg.streamType),
     rid: asString(msg.rid),
     daveDecrypted: asBoolean(msg.daveDecrypted) ?? false
+  };
+}
+
+function parseDecodedVideoFrame(msg: JsonRecord): ClankvoxDecodedVideoFrame | null {
+  const userId = asString(msg.userId);
+  const ssrc = asNumber(msg.ssrc);
+  const width = asNumber(msg.width);
+  const height = asNumber(msg.height);
+  const jpegBase64 = asString(msg.jpegBase64);
+  const rtpTimestamp = asNumber(msg.rtpTimestamp);
+  if (!userId || ssrc === null || width === null || height === null || !jpegBase64 || rtpTimestamp === null) {
+    return null;
+  }
+  return {
+    userId,
+    ssrc,
+    width,
+    height,
+    jpegBase64,
+    rtpTimestamp,
+    streamType: asString(msg.streamType),
+    rid: asString(msg.rid),
+    changeScore: asNumber(msg.changeScore) ?? 0,
+    emaChangeScore: asNumber(msg.emaChangeScore) ?? 0,
+    isSceneCut: asBoolean(msg.isSceneCut) ?? false
   };
 }
 
@@ -715,6 +756,13 @@ export class ClankvoxClient extends EventEmitter {
         const frame = parseUserVideoFrame(msg);
         if (frame) {
           this.emit("userVideoFrame", frame);
+        }
+        break;
+      }
+      case "decoded_video_frame": {
+        const frame = parseDecodedVideoFrame(msg);
+        if (frame) {
+          this.emit("decodedVideoFrame", frame);
         }
         break;
       }

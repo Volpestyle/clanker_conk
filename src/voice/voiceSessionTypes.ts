@@ -735,6 +735,9 @@ export interface VoiceSessionStreamWatchState {
     latestFrameMimeType: string | null;
     latestFrameDataBase64: string;
     latestFrameAt: number;
+    latestChangeScore: number;
+    latestEmaChangeScore: number;
+    latestIsSceneCut: boolean;
 }
 
 export interface VoiceSessionNativeScreenShareStreamState {
@@ -764,16 +767,6 @@ export interface VoiceSessionNativeScreenShareSharerState {
     lastFrameKeyframeAt: number;
 }
 
-export interface VoiceSessionNativeScreenSharePendingH264DecodeState {
-    userId: string;
-    startedAt: number;
-    updatedAt: number;
-    firstRtpTimestamp: number;
-    lastRtpTimestamp: number;
-    frameBase64s: string[];
-    approximateBytes: number;
-}
-
 export interface VoiceSessionNativeScreenShareState {
     sharers: Map<string, VoiceSessionNativeScreenShareSharerState>;
     subscribedTargetUserId: string | null;
@@ -792,7 +785,6 @@ export interface VoiceSessionNativeScreenShareState {
     transportReason: string | null;
     transportUpdatedAt: number;
     transportConnectedAt: number;
-    pendingH264Decode: VoiceSessionNativeScreenSharePendingH264DecodeState | null;
 }
 
 export interface VoiceSessionGoLiveStreamState {

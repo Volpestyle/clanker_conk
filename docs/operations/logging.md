@@ -438,9 +438,26 @@ Interpretation notes:
 - `clankvox_transport_decrypt_failed` fires once per unique payload type when transport-level (AES-GCM / XChaCha20) decryption fails. If this fires for audio PT (111) or video PTs (103/105), the transport crypto AAD computation may be wrong. Inbound RTCP packets (PT 72-76) are filtered before decrypt and should never appear here.
 - `clankvox_h264_frame_nal_diagnostic` logs NAL types, keyframe status, and frame byte count at frame 1-5 and every 100th frame. `video_keyframe_count=0` after hundreds of frames means no SPS/IDR has arrived. `nal_types=[7, 8, 1]` means SPS+PPS were prepended to a P-slice from the depacketizer cache (normal for Go Live).
 - DAVE video passthrough warnings (`DAVE: video frame from user ... appears unencrypted`) are expected on Go Live streams. Video frames that fail DAVE decrypt with `UnencryptedWhenPassthroughDisabled` are dropped instead of forwarded, because the DAVE library's unencrypted detection can misfire on Go Live video that IS encrypted. Audio passthrough is still allowed on the stream watch transport since that audio channel is not used for ASR.
-- `native_discord_video_decode_failed` with `ffmpeg_decode_timeout` means ffmpeg hung waiting for EOF. This is an ffmpeg H264 raw demuxer issue. The current workaround pipes H264 data through `cat | ffmpeg` to guarantee clean pipe close.
-- `native_discord_video_decode_failed` with `deblocking_filter_idc out of range` or `reference count overflow` on frames that have `headerHex` starting with valid SPS bytes means DAVE-encrypted video was forwarded as cleartext. The DAVE video drop fix should prevent this.
-- `native_discord_video_decode_failed` with `h264_missing_parameter_sets` means the depacketizer hasn't cached SPS/PPS yet. Wait for more frames.
+- `native_discord_video_decode_failed` with `ffmpeg_decode_timeout` applies only to VP8 frames (H264 is decoded in-process by clankvox's persistent OpenH264 decoder and does not use ffmpeg). This means ffmpeg hung waiting for EOF on a VP8 decode.
+- `native_discord_video_decode_failed` with `deblocking_filter_idc out of range` or `reference count overflow` on frames that have `headerHex` starting with valid SPS bytes means DAVE-encrypted video was forwarded as cleartext. The DAVE video drop fix should prevent this. This applies only to VP8 ffmpeg decode; H264 decode errors surface through clankvox-side log events (see below).
+- `native_discord_video_decode_failed` with `h264_missing_parameter_sets` is a legacy VP8/ffmpeg path error. H264 parameter set management is handled internally by the persistent OpenH264 decoder in clankvox.
+
+### H264 persistent decoder (clankvox)
+
+The persistent OpenH264 decoder in clankvox emits its own diagnostic events:
+
+- `clankvox_persistent_h264_decoder_created` — a new per-user OpenH264 decoder instance was created for H264 decode. Logged once per user per session.
+- `clankvox_first_h264_frame_decoded` — the first successful H264 frame decode for a user session. Indicates the decoder has valid reference state and is producing JPEG output.
+- `clankvox_openh264_decode_error` — an individual H264 frame failed to decode. Includes error detail from OpenH264. Sporadic errors are normal (especially after mid-stream attach); sustained errors trigger a decoder reset.
+- `clankvox_openh264_decoder_reset` — the decoder was destroyed and recreated after 50 consecutive decode errors. This clears all accumulated reference frame state. A fresh IDR keyframe is needed to resume decode.
+- `clankvox_decoder_reset_requesting_pli` — after a decoder reset, clankvox sends PLI to Discord requesting a fresh keyframe for decoder re-initialization.
+- `clankvox_frame_diff_periodic` — periodic scene-cut metrics emitted alongside decoded frames. Includes frame difference scores used for scene-change detection in the stream-watch pipeline.
+
+Interpretation notes:
+
+- If `clankvox_first_h264_frame_decoded` never appears after `clankvox_persistent_h264_decoder_created`, the decoder is not receiving decodable frames. Check DAVE decrypt status and whether IDR keyframes are arriving.
+- If `clankvox_openh264_decoder_reset` fires repeatedly, the stream may lack IDR keyframes entirely or DAVE decrypt is failing on keyframes. Cross-reference with `clankvox_h264_frame_nal_diagnostic` to confirm keyframe presence.
+- The decoder processes ALL H264 frames (IDR + P-frames) for reference state accumulation, but JPEG emission is rate-limited to `nativeDiscordMaxFramesPerSecond`. Decode errors on P-frames before the first IDR are expected and not actionable.
 
 Useful metadata fields:
 

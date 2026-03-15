@@ -678,6 +678,8 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.streamWatch?.keyframeIntervalMs ?? defaultVoiceStreamWatch.keyframeIntervalMs,
     voiceStreamWatchAutonomousCommentaryEnabled:
       resolved?.voice?.streamWatch?.autonomousCommentaryEnabled ?? defaultVoiceStreamWatch.autonomousCommentaryEnabled,
+    voiceStreamWatchBrainContextMode:
+      resolved?.voice?.streamWatch?.brainContextMode ?? defaultVoiceStreamWatch.brainContextMode,
     voiceStreamWatchBrainContextEnabled:
       resolved?.voice?.streamWatch?.brainContextEnabled ?? defaultVoiceStreamWatch.brainContextEnabled,
     voiceStreamWatchBrainContextMinIntervalSeconds:
@@ -691,6 +693,15 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.streamWatch?.brainContextModel ?? defaultVoiceStreamWatch.brainContextModel ?? "",
     voiceStreamWatchBrainContextPrompt:
       resolved?.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt,
+    voiceStreamWatchDirectMinIntervalSeconds:
+      resolved?.voice?.streamWatch?.directMinIntervalSeconds ?? defaultVoiceStreamWatch.directMinIntervalSeconds,
+    voiceStreamWatchDirectMaxEntries:
+      resolved?.voice?.streamWatch?.directMaxEntries ?? defaultVoiceStreamWatch.directMaxEntries,
+    voiceStreamWatchDirectChangeThreshold:
+      resolved?.voice?.streamWatch?.directChangeThreshold ?? defaultVoiceStreamWatch.directChangeThreshold,
+    voiceStreamWatchDirectChangeMinIntervalSeconds:
+      resolved?.voice?.streamWatch?.directChangeMinIntervalSeconds ??
+      defaultVoiceStreamWatch.directChangeMinIntervalSeconds,
     voiceStreamWatchNativeDiscordMaxFramesPerSecond:
       resolved?.voice?.streamWatch?.nativeDiscordMaxFramesPerSecond ??
       defaultVoiceStreamWatch.nativeDiscordMaxFramesPerSecond,
@@ -1644,12 +1655,17 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         maxFrameBytes: Number(form.voiceStreamWatchMaxFrameBytes),
         keyframeIntervalMs: Number(form.voiceStreamWatchKeyframeIntervalMs),
         autonomousCommentaryEnabled: Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled),
+        brainContextMode: String(form.voiceStreamWatchBrainContextMode || "direct").trim().toLowerCase(),
         brainContextEnabled: Boolean(form.voiceStreamWatchBrainContextEnabled),
         brainContextProvider: String(form.voiceStreamWatchBrainContextProvider || "").trim(),
         brainContextModel: String(form.voiceStreamWatchBrainContextModel || "").trim(),
         brainContextMinIntervalSeconds: Number(form.voiceStreamWatchBrainContextMinIntervalSeconds),
         brainContextMaxEntries: Number(form.voiceStreamWatchBrainContextMaxEntries),
         brainContextPrompt: String(form.voiceStreamWatchBrainContextPrompt || "").trim(),
+        directMinIntervalSeconds: Number(form.voiceStreamWatchDirectMinIntervalSeconds),
+        directMaxEntries: Number(form.voiceStreamWatchDirectMaxEntries),
+        directChangeThreshold: Number(form.voiceStreamWatchDirectChangeThreshold),
+        directChangeMinIntervalSeconds: Number(form.voiceStreamWatchDirectChangeMinIntervalSeconds),
         nativeDiscordMaxFramesPerSecond: Number(form.voiceStreamWatchNativeDiscordMaxFramesPerSecond),
         nativeDiscordPreferredQuality: Number(form.voiceStreamWatchNativeDiscordPreferredQuality),
         nativeDiscordPreferredPixelCount: Number(form.voiceStreamWatchNativeDiscordPreferredPixelCount),

@@ -101,7 +101,7 @@ function createSession(overrides = {}) {
       transportStatus: null,
       transportReason: null,
       transportUpdatedAt: 0,
-      transportConnectedAt: 0
+      transportConnectedAt: 0,
     },
     userCaptures: new Map(),
     pendingResponse: false,
@@ -290,16 +290,7 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
       transportStatus: "ready",
       transportReason: "old_reason",
       transportUpdatedAt: 123,
-      transportConnectedAt: 123,
-      pendingH264Decode: {
-        userId: "target-1",
-        startedAt: 123,
-        updatedAt: 123,
-        firstRtpTimestamp: 1,
-        lastRtpTimestamp: 2,
-        frameBase64s: ["AAAA"],
-        approximateBytes: 3
-      }
+      transportConnectedAt: 123
     },
     streamWatch: {
       active: false,
@@ -351,7 +342,6 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
   assert.equal(nativeScreenShare.lastDecodeFailureReason, null);
   assert.equal(nativeScreenShare.activeStreamKey, null);
   assert.equal(nativeScreenShare.transportStatus, null);
-  assert.equal(nativeScreenShare.pendingH264Decode, null);
   assert.deepEqual([...nativeScreenShare.sharers.keys()], []);
 });
 

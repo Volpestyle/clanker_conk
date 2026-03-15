@@ -884,7 +884,10 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           frameWindowStartedAt: 0,
           latestFrameMimeType: null,
           latestFrameDataBase64: "",
-          latestFrameAt: 0
+          latestFrameAt: 0,
+          latestChangeScore: 0,
+          latestEmaChangeScore: 0,
+          latestIsSceneCut: false
         },
         nativeScreenShare: createNativeDiscordScreenShareState(),
         goLiveStream: createGoLiveStreamState(),

@@ -35,11 +35,11 @@ The native Discord screen watch pipeline is built end to end in clankvox and Bun
   `GUILD_CREATE` voice state scan for pre-existing streamers on connect
 - Gateway OP20 `STREAM_WATCH` request dispatch from the selfbot session
 - `clankvox` `stream_watch` IPC + second transport role
-- video receive, DAVE decrypt, H264/VP8 depacketization, IPC, ffmpeg decode, stream-watch ingest
+- video receive, DAVE decrypt, H264/VP8 depacketization
+- H264: persistent in-process OpenH264 decoder in clankvox decodes all frames (IDR + P-frames), turbojpeg encodes to JPEG, emitted as `DecodedVideoFrame` IPC
+- VP8: raw bitstream forwarded to Bun for per-frame ffmpeg keyframe decode
 - explicit-target native watch can start from discovered Go Live state before
   native video-state frames have populated the sharer list
-- Bun normalizes H264 payloads to Annex-B before `ffmpeg` decode so length-prefixed
-  AVC access units do not fail decode by shape alone
 
 **Validated live** on the selfbot runtime (March 13, 2026):
 
@@ -49,7 +49,8 @@ The native Discord screen watch pipeline is built end to end in clankvox and Bun
 - `clankvox` opens the second stream transport, completes the modern watcher handshake,
   reaches DAVE-ready, and forwards encrypted H264 frames back to Bun
 - DAVE MLS E2EE session completes successfully on the stream watch transport, though per-frame video decrypt currently fails for Go Live (frames arrive during the post-commit unencrypted window instead)
-- ffmpeg decodes sampled VP8 keyframes and H264 access units (IDR or SPS+PPS+P-slice) to JPEG successfully
+- H264 frames are decoded in-process by clankvox's persistent OpenH264 decoder and emitted as pre-encoded JPEG via `DecodedVideoFrame` IPC
+- VP8 keyframes are decoded by Bun via per-frame ffmpeg
 - stream-watch brain context pipeline ingests frames and produces accurate visual commentary
 - DAVE channel ID derivation (`BigInt(rtcServerId) - 1`) confirmed working
 - two-checkpoint link fallback suppression prevents duplicate transports when native watch is active
@@ -281,7 +282,8 @@ These are the same opcodes as the regular voice connection but exchanged on the 
     → Encrypted RTP/UDP video packets arrive
     → Transport decrypt (AES-GCM/XChaCha20) → depacketize H264/VP8 → DAVE decrypt attempt
     → DAVE video decrypt currently fails for Go Live (frames forwarded from post-commit unencrypted window)
-    → ffmpeg decode to JPEG → stream-watch pipeline
+    → H264: persistent OpenH264 decoder in clankvox → turbojpeg JPEG encode → DecodedVideoFrame IPC → stream-watch pipeline
+    → VP8: raw bitstream IPC → Bun ffmpeg decode to JPEG → stream-watch pipeline
 ```
 
 ### OP0 Identify (stream connection)
@@ -378,7 +380,10 @@ All of this is implemented and tested:
 - H264 depacketization: single NAL, STAP-A, FU-A (`video.rs`)
 - VP8 depacketization: payload descriptor stripping, frame reassembly (`video.rs`)
 - RTP sequence gap detection to prevent cross-packet frame corruption (`video.rs`)
-- Video frame IPC: `UserVideoState`, `UserVideoFrame`, `UserVideoEnd` (`ipc.rs`)
+- Persistent H264 decode via OpenH264 (`openh264` crate v0.9) with per-user decoder state (`video_decoder.rs`)
+- JPEG encode via turbojpeg (`turbojpeg` crate v1.4) for decoded H264 frames (`video_decoder.rs`)
+- `DecodedVideoFrame` IPC emission with pre-encoded JPEG, dimensions, and scene-cut metrics (`video_decoder.rs`, `ipc.rs`)
+- Video frame IPC: `UserVideoState`, `UserVideoFrame`, `UserVideoEnd`, `DecodedVideoFrame` (`ipc.rs`)
 - Dedicated bounded outbound video queue with backpressure logging (`ipc.rs`)
 - Per-user video subscription management (`capture_supervisor.rs`)
 - Remote video state merge semantics for partial updates (`capture_supervisor.rs`)
@@ -397,9 +402,9 @@ All of this is implemented and tested:
 
 - `clankvoxClient.ts`: IPC for `subscribe_user_video`, `unsubscribe_user_video`, video events
 - `nativeDiscordScreenShare.ts`: Active sharer tracking, target resolution
-- `sessionLifecycle.ts`: Video state/frame/end event handlers
+- `sessionLifecycle.ts`: Video state/frame/end event handlers, `onDecodedVideoFrame` for H264 JPEG ingest
 - `screenShare.ts`: Native-first with share-link fallback, telemetry
-- `voiceStreamWatch.ts`: ffmpeg H264/VP8 keyframe decode to JPEG, stream-watch pipeline
+- `voiceStreamWatch.ts`: stream-watch pipeline, frame ingest from DecodedVideoFrame (H264) and ffmpeg (VP8)
 
 ### Video send pipeline (clankvox + Bun)
 
@@ -434,7 +439,9 @@ Current rollout boundary:
 - If credentials are already present, Bun immediately sends `stream_watch_connect` to `clankvox`
 - If credentials arrive later, discovery callbacks connect the `stream_watch` transport when `STREAM_SERVER_UPDATE` lands
 - `clankvox` emits role-aware `transport_state`, `userVideoState`, `userVideoFrame`, and `userVideoEnd`
-- Bun decodes sampled VP8 keyframes and H264 IDR access units to JPEG and feeds them into the existing stream-watch commentary path
+- For H264, `clankvox` decodes all frames (IDR + P-frames) via a persistent OpenH264 decoder, encodes to JPEG via turbojpeg, and emits `DecodedVideoFrame` IPC messages; Bun ingests the pre-encoded JPEG directly
+- For VP8, Bun decodes sampled keyframes to JPEG via per-frame ffmpeg
+- Decoded frames from either codec path feed into the existing stream-watch commentary path
 - `STREAM_DELETE` prunes the cached sharer and tears native watch down
 - Native transport failure/disconnect tears native watch down and directly requests share-link fallback when requester + text-channel context exist
 
@@ -486,7 +493,7 @@ There is no separate standalone settings block for outbound native publish. Musi
 - **`direct`** (default): No vision triage model. Frames are sent directly to the main voice brain as image attachments. The brain sees the screen itself and decides whether to speak. The brain can write `[[NOTE:your observation]]` directives to maintain private self-notes about what it has seen — these persist as rolling context for future turns, but the images themselves are ephemeral (fire and forget). A `[SKIP] [[NOTE:...]]` output means "I see this, I'm noting it, but I have nothing to say right now."
 
 Direct mode settings:
-- `directMinIntervalSeconds` (default: 10, range: 3–120): minimum gap between direct brain turns
+- `directMinIntervalSeconds` (default: 8, range: 3–120): minimum gap between direct brain turns
 - `directMaxEntries` (default: 12): maximum rolling self-note buffer size
 
 - **`context_brain`**: A separate vision triage model analyzes each frame and produces a short note + urgency classification (`high` / `low` / `none`). Only `high` urgency frames trigger a main brain turn. Notes accumulate as rolling context injected into all subsequent voice brain replies. Lower cost per frame, but the brain only sees triage summaries rather than the actual screen.
@@ -527,9 +534,9 @@ Direct mode is the default because it is more aligned with agent autonomy — th
 ## Risk Assessment
 
 - **DAVE on stream connections.** Stream connections use DAVE channel ID `BigInt(rtc_server_id) - 1n`. Confirmed working live. However, DAVE per-frame video decrypt does not work for Go Live — the `davey` library classifies Go Live video frames as `UnencryptedWhenPassthroughDisabled` when they are likely encrypted. Video frames that fail DAVE decrypt are dropped to prevent feeding encrypted garbage to ffmpeg. Screen watch currently relies on the initial unencrypted frames that arrive during the DAVE transition window after session commit.
-- **PLI/FIR keyframe requests do not work.** clankvox uses `protocol: "udp"` for stream connections. Discord's media server only processes RTCP PLI/FIR feedback from WebRTC peers. PLI/FIR packets are still sent as a best-effort hint, but keyframes cannot be requested on demand. The H264 receive path compensates by always prepending cached SPS+PPS to every frame and treating SPS-containing access units as keyframes.
+- **PLI/FIR keyframe requests do not work.** clankvox uses `protocol: "udp"` for stream connections. Discord's media server only processes RTCP PLI/FIR feedback from WebRTC peers. PLI/FIR packets are still sent as a best-effort hint, but keyframes cannot be requested on demand. The persistent H264 decoder compensates by processing all frames (IDR + P-frames) for reference state accumulation, and auto-resets with PLI after 50 consecutive errors.
 - **Transport crypto AAD for RTP.** Discord's `rtpsize` AEAD modes authenticate the RTP fixed header + CSRC + 4-byte extension prefix as AAD. The extension body is part of the ciphertext. `decrypt()` recomputes AAD from raw packet bytes and must NOT use `parse_rtp_header`'s `header_size` (which includes the extension body). Inbound RTCP (PT 72-76 per RFC 5761 mux) is filtered before decrypt.
-- **ffmpeg H264 decode EOF.** The H264 raw demuxer (`-f h264`) hangs on single-frame files. Bun pipes H264 through `cat | ffmpeg -fflags +genpts -f h264 -i pipe:0` to guarantee EOF delivery.
+- **VP8 ffmpeg decode EOF.** VP8 still uses per-frame ffmpeg decode on the Bun side. H264 decode is handled entirely in-process by clankvox's persistent OpenH264 decoder and does not use ffmpeg.
 - **RTX loss recovery is still limited.** The receive path currently traces and drops RTX payloads; retransmission support remains future work.
 - **Sender compatibility is narrower than receive.** Outbound publish is still H264-only and still centered on music lifecycle or browser-session share. `visualizerMode: "off"` also depends on a URL-backed source relay path being available.
 

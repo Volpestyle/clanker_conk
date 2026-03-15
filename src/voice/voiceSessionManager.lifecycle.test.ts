@@ -2694,48 +2694,6 @@ test("bindSessionHandlers does not request share-link recovery when STREAM_LINK_
   assert.equal(fallbackSkipped?.metadata?.skipReason, "stream_link_fallback_disabled");
 });
 
-test("bindSessionHandlers ignores delta-only H264 frames until a keyframe starts native first-frame decode", async () => {
-  const { manager, logs } = createManager();
-  const voxClient = new EventEmitter();
-  const session = createSession({
-    cleanupHandlers: [],
-    voxClient,
-    streamWatch: {
-      active: true,
-      targetUserId: "user-2",
-      requestedByUserId: "user-1",
-      lastFrameAt: 0,
-      lastCommentaryAt: 0,
-      ingestedFrameCount: 0
-    }
-  });
-
-  manager.sessionLifecycle.bindSessionHandlers(session, session.settingsSnapshot);
-  voxClient.emit("userVideoFrame", {
-    userId: "user-2",
-    codec: "H264",
-    keyframe: false,
-    rtpTimestamp: 101,
-    frameBase64: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x41, 0xaa, 0xbb]).toString("base64")
-  });
-  voxClient.emit("userVideoFrame", {
-    userId: "user-2",
-    codec: "H264",
-    keyframe: false,
-    rtpTimestamp: 202,
-    frameBase64: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x41, 0xcc, 0xdd]).toString("base64")
-  });
-  await flushMicrotasks();
-
-  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
-  assert.equal(nativeScreenShare.pendingH264Decode, null);
-  assert.equal(nativeScreenShare.lastDecodeAttemptAt, 0);
-  assert.equal(
-    logs.some((entry) => String(entry?.content || "").startsWith("native_discord_video_decode_failed")),
-    false
-  );
-});
-
 test("startInboundCapture drops provisional noise before activity promotion while streaming provisional ASR audio", async () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";

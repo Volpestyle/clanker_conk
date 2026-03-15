@@ -3,10 +3,8 @@ import assert from "node:assert/strict";
 import {
   applyNativeDiscordVideoState,
   clearNativeDiscordScreenShareState,
-  clearPendingNativeDiscordH264DecodeSequence,
   ensureNativeDiscordScreenShareState,
   listActiveNativeDiscordScreenSharers,
-  selectNativeDiscordH264BootstrapSequence,
   recordNativeDiscordVideoFrame
 } from "./nativeDiscordScreenShare.ts";
 
@@ -167,134 +165,6 @@ test("clearNativeDiscordScreenShareState resets the existing state object in pla
   assert.equal(state.decodeInFlight, false);
   assert.equal(state.lastDecodeFailureReason, null);
   assert.equal(state.ffmpegAvailable, null);
-});
-
-test("selectNativeDiscordH264BootstrapSequence seeds bootstrap from a keyframe and keeps that candidate across delta frames", () => {
-  const session = {
-    nativeScreenShare: {
-      sharers: new Map(),
-      subscribedTargetUserId: "user-1",
-      decodeInFlight: false,
-      lastDecodeAttemptAt: 0,
-      lastDecodeSuccessAt: 0,
-      lastDecodeFailureAt: 0,
-      lastDecodeFailureReason: null,
-      ffmpegAvailable: true,
-      pendingH264Decode: null
-    }
-  };
-
-  const keyframeSequence = selectNativeDiscordH264BootstrapSequence(session, {
-    userId: "user-1",
-    frameBase64: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x67]).toString("base64"),
-    keyframe: true,
-    rtpTimestamp: 111
-  });
-  const carriedSequence = selectNativeDiscordH264BootstrapSequence(session, {
-    userId: "user-1",
-    frameBase64: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x41]).toString("base64"),
-    keyframe: false,
-    rtpTimestamp: 222
-  });
-
-  assert.equal(keyframeSequence?.frameBase64s.length, 1);
-  assert.equal(carriedSequence?.frameBase64s.length, 1);
-  assert.equal(carriedSequence?.firstRtpTimestamp, 111);
-  assert.equal(carriedSequence?.lastRtpTimestamp, 222);
-  assert.equal(carriedSequence?.approximateBytes, 5);
-});
-
-test("selectNativeDiscordH264BootstrapSequence ignores non-keyframes until a keyframe starts the sequence", () => {
-  const session = {
-    nativeScreenShare: {
-      sharers: new Map(),
-      subscribedTargetUserId: "user-1",
-      decodeInFlight: false,
-      lastDecodeAttemptAt: 0,
-      lastDecodeSuccessAt: 0,
-      lastDecodeFailureAt: 0,
-      lastDecodeFailureReason: null,
-      ffmpegAvailable: true,
-      pendingH264Decode: null
-    }
-  };
-
-  const deltaOnly = selectNativeDiscordH264BootstrapSequence(session, {
-    userId: "user-1",
-    frameBase64: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x41]).toString("base64"),
-    keyframe: false,
-    rtpTimestamp: 111
-  });
-
-  assert.equal(deltaOnly, null);
-  assert.equal(ensureNativeDiscordScreenShareState(session).pendingH264Decode, null);
-});
-
-test("selectNativeDiscordH264BootstrapSequence replaces the bootstrap candidate when a new keyframe arrives", () => {
-  const session = {
-    nativeScreenShare: {
-      sharers: new Map(),
-      subscribedTargetUserId: "user-1",
-      decodeInFlight: false,
-      lastDecodeAttemptAt: 0,
-      lastDecodeSuccessAt: 0,
-      lastDecodeFailureAt: 0,
-      lastDecodeFailureReason: null,
-      ffmpegAvailable: true,
-      pendingH264Decode: null
-    }
-  };
-
-  selectNativeDiscordH264BootstrapSequence(session, {
-    userId: "user-1",
-    frameBase64: Buffer.from([0x01, 0x02, 0x03]).toString("base64"),
-    keyframe: true,
-    rtpTimestamp: 111
-  });
-  selectNativeDiscordH264BootstrapSequence(session, {
-    userId: "user-1",
-    frameBase64: Buffer.from([0x04, 0x05]).toString("base64"),
-    keyframe: false,
-    rtpTimestamp: 222
-  });
-
-  const replacement = selectNativeDiscordH264BootstrapSequence(session, {
-    userId: "user-1",
-    frameBase64: Buffer.from([0x06, 0x07, 0x08, 0x09]).toString("base64"),
-    keyframe: true,
-    rtpTimestamp: 333
-  });
-
-  assert.deepEqual(replacement?.frameBase64s, [Buffer.from([0x06, 0x07, 0x08, 0x09]).toString("base64")]);
-  assert.equal(replacement?.firstRtpTimestamp, 333);
-  assert.equal(replacement?.lastRtpTimestamp, 333);
-  assert.equal(replacement?.approximateBytes, 4);
-});
-
-test("clearPendingNativeDiscordH264DecodeSequence removes the buffered bootstrap candidate for the active target", () => {
-  const session = {
-    nativeScreenShare: {
-      sharers: new Map(),
-      subscribedTargetUserId: "user-1",
-      decodeInFlight: false,
-      lastDecodeAttemptAt: 0,
-      lastDecodeSuccessAt: 0,
-      lastDecodeFailureAt: 0,
-      lastDecodeFailureReason: null,
-      ffmpegAvailable: true,
-      pendingH264Decode: null
-    }
-  };
-
-  selectNativeDiscordH264BootstrapSequence(session, {
-    userId: "user-1",
-    frameBase64: Buffer.from([0x01, 0x02, 0x03]).toString("base64"),
-    keyframe: true,
-    rtpTimestamp: 111
-  });
-  clearPendingNativeDiscordH264DecodeSequence(session, "user-1");
-
-  assert.equal(ensureNativeDiscordScreenShareState(session).pendingH264Decode, null);
 });
 
 test("listActiveNativeDiscordScreenSharers ignores explicit inactive states but keeps frame-backed watchers", () => {

@@ -22,26 +22,32 @@ A human sitting next to someone sharing their screen would:
 - Decide when to comment, ask a question, or stay quiet
 - Reference earlier screen states in conversation ("you changed that function signature from before")
 
-The agent should work the same way. Two independent, always-on layers feed into the brain's normal context:
+The agent should work the same way. The `voice.streamWatch.brainContextMode` setting controls which of two vision pipelines is active:
+
+### Direct mode (`"direct"` — default)
 
 ```
-Every frame → Scanner (cheap/fast model) → rolling temporal notes
-                                                    ↓
-                                             always in voice prompt
-
-Every voice turn during active screen watch:
-    brain sees = latest raw frame + rolling notes + conversation
+Every proactive turn → latest raw frame attached to the voice brain
+    brain sees actual screen + conversation history
+    brain writes [[NOTE:...]] self-observations for temporal continuity
     brain decides what to say (or [SKIP])
-
-Autonomous commentary (silence / scene change):
-    brain gets frame + notes, decides whether to speak
 ```
 
-**Scanner** builds temporal awareness — "they switched from VS Code to the browser", "new error dialog appeared", "they've been on this settings page for 30 seconds."
+The brain sees the actual screen on every turn. It can record `[[NOTE:your observation]]` directives that persist as rolling self-notes (capped by `directMaxEntries`). More expensive per frame, but produces richer, more contextual reactions — and aligns with agent autonomy because the brain decides what is interesting, not a separate triage model.
 
-**Direct frame** gives visual accuracy — the model sees exactly what's on screen right now.
+### Scanner mode (`"context_brain"`)
 
-These are **orthogonal, not mutually exclusive.** The scanner always runs to build rolling context. The brain always sees the current frame when generating a reply. The brain decides whether and how to reference what it sees.
+```
+Every frame → Scanner (cheap/fast model) → note + urgency (high/low/none)
+    only high urgency → triggers a brain turn
+    rolling notes always injected into voice prompt
+```
+
+A separate triage model analyzes each frame and classifies urgency. Only `high` urgency frames trigger a main brain turn. Lower cost per frame, but the brain sees summaries instead of the actual screen.
+
+### Switching modes
+
+The mode is configurable in the dashboard under **Screen watch vision mode** or via the `voice.streamWatch.brainContextMode` setting (`"direct"` or `"context_brain"`). The two modes are **mutually exclusive** — only one vision pipeline runs at a time.
 
 ## Architecture Overview
 
@@ -61,8 +67,9 @@ Discord VC user says "share my screen"
   ├─ Native Discord watch (preferred)
   │  ├─ selfbot gateway resolves target + stream credentials
   │  ├─ clankvox opens native stream-watch transport
-  │  ├─ clankvox decrypts and forwards encoded video frames
-  │  ├─ Bun decodes sampled keyframes into JPEG
+  │  ├─ clankvox decrypts and depacketizes H264/VP8 video frames
+  │  ├─ H264: persistent OpenH264 decoder in clankvox decodes to YUV, turbojpeg encodes to JPEG, sent as DecodedVideoFrame IPC
+  │  ├─ VP8: raw bitstream forwarded to Bun for per-frame ffmpeg decode to JPEG
   │  └─ feed frames to the processing pipeline
   └─ Share-link fallback
      ├─ ScreenShareSessionManager.createSession()
@@ -180,9 +187,9 @@ When a watch session ends, the default text model summarizes the accumulated key
 
 - the selfbot gateway tracks active sharers and stream credentials
 - `clankvox` opens a separate native `stream_watch` transport for the target user's active stream
-- `clankvox` emits encoded H264/VP8 frame payloads through Bun IPC
-- Bun normalizes H264 payloads from length-prefixed AVC to Annex-B start codes before `ffmpeg` decode (required for correct decode)
-- Decoded JPEGs are forwarded into the existing stream-watch pipeline
+- For H264, `clankvox` maintains a persistent per-user OpenH264 decoder that accumulates reference frame state across all frames (IDR and P-frames). Decoded YUV is encoded to JPEG via turbojpeg and emitted as `DecodedVideoFrame` IPC messages with pre-encoded JPEG, width, height, and scene-cut metrics. JPEG emission is rate-limited to `nativeDiscordMaxFramesPerSecond` but the decoder sees every frame for state accumulation. The decoder auto-resets after 50 consecutive errors and sends PLI for recovery.
+- For VP8, `clankvox` emits raw frame payloads through Bun IPC and Bun decodes sampled keyframes to JPEG via per-frame ffmpeg
+- Decoded JPEGs (from either codec path) are forwarded into the existing stream-watch pipeline
 - The latest decoded frame becomes normal voice-brain context on active turns
 - Repeating `start_screen_watch` for the same native target reuses the active watch instead of reconnecting and preserves buffered frame context
 - Successful native watch start can still be `waiting_for_frame_context`; runtime only reports `frameReady=true` once a decoded or buffered image frame exists for the watch session
@@ -222,17 +229,22 @@ All under `voice.streamWatch`:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Master toggle for screen watch, including native Discord receive and fallback capture |
-| `brainContextEnabled` | `true` | Run scanner and inject rolling notes into voice prompt |
+| `brainContextMode` | `"direct"` | Vision pipeline mode: `"direct"` (brain sees raw frames) or `"context_brain"` (scanner triage) |
+| `brainContextEnabled` | `true` | (context_brain mode) Run scanner and inject rolling notes into voice prompt |
 | `brainContextProvider` | `"claude-oauth"` | LLM provider for background frame scanner |
 | `brainContextModel` | `"claude-opus-4-6"` | Model for background frame scanner |
-| `brainContextMinIntervalSeconds` | `4` | Min seconds between scanner updates |
-| `brainContextMaxEntries` | `8` | Max rolling notes kept in brain context |
+| `brainContextMinIntervalSeconds` | `2` | Min seconds between scanner updates |
+| `brainContextMaxEntries` | `8` | (context_brain mode) Max rolling notes kept in brain context |
+| `directMinIntervalSeconds` | `8` | (direct mode) Min seconds between direct brain turns (3-120) |
+| `directMaxEntries` | `12` | (direct mode) Max rolling `[[NOTE:...]]` self-note buffer size (1-24) |
+| `directChangeThreshold` | `0.15` | (direct mode) Coarse visual-change score that can trigger an earlier brain turn |
+| `directChangeMinIntervalSeconds` | `4` | (direct mode) Cooldown for change-triggered brain turns |
 | `nativeDiscordMaxFramesPerSecond` | `2` | Max native Discord frames requested while a native watch is active |
 | `nativeDiscordPreferredQuality` | `100` | Preferred Discord stream quality hint for native subscriptions |
 | `nativeDiscordPreferredPixelCount` | `921600` | Preferred native target resolution hint (`1280x720`) |
 | `nativeDiscordPreferredStreamType` | `"screen"` | Preferred native Discord stream type hint |
 | `autonomousCommentaryEnabled` | `true` | Fire proactive brain turns on scene change / silence |
-| `minCommentaryIntervalSeconds` | `8` | Min seconds between autonomous commentary triggers |
+| `minCommentaryIntervalSeconds` | `6` | Min seconds between autonomous commentary triggers |
 | `maxFramesPerMinute` | `180` | Rate limit on frames admitted into the inference pipeline |
 | `maxFrameBytes` | `350000` | Max frame payload size admitted into the inference pipeline |
 | `keyframeIntervalMs` | `1200` | Fallback browser capture interval (500-2000) |
@@ -245,7 +257,7 @@ Environment flags that shape the transport layer:
 |---------|---------|-------------|
 | `STREAM_LINK_FALLBACK` | `true` | Master env gate for the share-link transport. Set `false` to disable link creation, link recovery, and link capability reporting while keeping native Go Live watch enabled. |
 
-Both layers are always active — there is no routing decision between "direct to brain" and "scanner generated." The brain always sees the frame; the scanner always builds temporal notes.
+The `brainContextMode` setting (`"direct"` or `"context_brain"`) determines which vision pipeline is active. In `direct` mode the brain sees raw frames; in `context_brain` mode the scanner builds temporal notes and only high-urgency frames trigger a brain turn. See the Design Philosophy section above for details on each mode.
 
 The native Discord tuning fields above are canonical `voice.streamWatch` settings. They are currently used by runtime and persisted through the settings model, but they are not yet surfaced as dedicated dashboard controls.
 
@@ -255,12 +267,10 @@ If those native fields are absent, runtime uses these defaults:
 - prefer `screen` streams
 - prefer roughly 1280x720 target pixel count
 
-Native Discord decode remains keyframe-only today. That is a fixed runtime behavior, not a stream-watch setting.
-For H264, runtime only samples access units that contain an IDR slice. SPS/PPS/SEI-only parameter updates stay cached for later decode, but they are not treated as renderable keyframes.
-If a native watch attaches mid-stream and the first subscribed frames are delta-only, `clankvox` reasserts Discord sink-wants and sends protected RTCP receiver-report / PLI / FIR feedback packets until the first renderable keyframe arrives so Bun can build initial frame context sooner.
+H264 frames are decoded in-process by a persistent OpenH264 decoder in `clankvox` (Rust). The decoder maintains reference frame state across calls, so all frames — IDR keyframes and non-IDR P-frames — are fed to the decoder for state accumulation. JPEG emission is rate-limited to `nativeDiscordMaxFramesPerSecond`, but the decoder processes every frame to keep its reference state current. Decoded YUV is encoded to JPEG via turbojpeg and sent as `DecodedVideoFrame` IPC messages. Per-user decoder state is stored in `AppState.user_video_decoders`. The decoder auto-resets after 50 consecutive decode errors and sends PLI to request a fresh keyframe for recovery.
+VP8 frames use per-frame ffmpeg decode on the Bun side (keyframe-only sampling).
+If a native watch attaches mid-stream, `clankvox` reasserts Discord sink-wants and sends protected RTCP receiver-report / PLI / FIR feedback packets until the first renderable keyframe arrives so the H264 decoder can initialize reference state.
 Those Discord sink-wants are a flat OP15 map with `any` and per-SSRC numeric quality entries, matching the desktop client wire shape.
-Bun only starts a pending H264 first-frame decode sequence after that real keyframe arrives; delta-only access units on their own are ignored instead of being sent through `ffmpeg` as failed decode attempts.
-Native still-frame decode feeds `ffmpeg` an EOF-terminated raw payload without `+nobuffer`, because single-frame H264 keyframes need normal EOF flushing to actually emit the first image.
 Each new watch session resets native frame-readiness state. `frameReady=true` means current-session pixels are available, not stale success from an older watch.
 
 ## Dashboard visibility
@@ -311,7 +321,8 @@ This separates "what the scanner saw" from "what context the VC brain currently 
 | `src/voice/voiceStreamWatch.ts` | Frame processing, scanner, commentary triggers, native transport lifecycle |
 | `src/services/screenShareSessionManager.ts` | Fallback share-link manager and share page HTML |
 | `src/bot/screenShare.ts` | Bot integration, native-first transport selection, fallback suppression |
-| `src/voice/nativeDiscordVideoDecoder.ts` | H264/VP8 keyframe decode to JPEG via ffmpeg, Annex-B normalization |
+| `src/voice/clankvox/src/video_decoder.rs` | Persistent OpenH264 H264 decoder, turbojpeg JPEG encode, scene-cut metrics |
+| `src/voice/nativeDiscordVideoDecoder.ts` | VP8 keyframe decode to JPEG via ffmpeg (H264 is decoded in-process by clankvox) |
 | `src/voice/nativeDiscordScreenShare.ts` | Active sharer tracking, target resolution |
 | `src/selfbot/streamDiscovery.ts` | Go Live stream discovery state, stream key management |
 | `src/voice/voiceReplyPipeline.ts` | Frame + notes passed to brain generation |

@@ -13,6 +13,9 @@ export const STREAM_WATCH_VISUALIZER_MODES = [
   "vectorscope"
 ] as const;
 
+export const STREAM_WATCH_BRAIN_CONTEXT_MODES = ["direct", "context_brain"] as const;
+export type StreamWatchBrainContextMode = (typeof STREAM_WATCH_BRAIN_CONTEXT_MODES)[number];
+
 type VoiceRuntimeSelection = (typeof VOICE_RUNTIME_SELECTIONS)[number];
 export type StreamWatchVisualizerMode = (typeof STREAM_WATCH_VISUALIZER_MODES)[number];
 
@@ -106,4 +109,15 @@ export function normalizeStreamWatchVisualizerMode(
   if (normalized === "waves") return "waves";
   if (normalized === "vectorscope") return "vectorscope";
   return "cqt";
+}
+
+export function normalizeStreamWatchBrainContextMode(
+  value: unknown,
+  fallback: StreamWatchBrainContextMode = "direct"
+): StreamWatchBrainContextMode {
+  const normalized = String(value || fallback || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "context_brain") return "context_brain";
+  return "direct";
 }

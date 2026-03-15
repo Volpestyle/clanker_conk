@@ -1619,7 +1619,10 @@ export class VoiceSessionManager {
     mimeType = "image/jpeg",
     dataBase64 = "",
     source = "api_stream_ingest",
-    settings = null
+    settings = null,
+    changeScore = undefined as number | undefined,
+    emaChangeScore = undefined as number | undefined,
+    isSceneCut = undefined as boolean | undefined
   }) {
     return await ingestStreamFrame(this, {
       guildId,
@@ -1627,7 +1630,10 @@ export class VoiceSessionManager {
       mimeType,
       dataBase64,
       source,
-      settings
+      settings,
+      changeScore,
+      emaChangeScore,
+      isSceneCut
     });
   }
 

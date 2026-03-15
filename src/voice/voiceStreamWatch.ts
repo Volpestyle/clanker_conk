@@ -1769,7 +1769,10 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
   mimeType = "image/jpeg",
   dataBase64 = "",
   source = "api_stream_ingest",
-  settings = null
+  settings = null,
+  changeScore = undefined as number | undefined,
+  emaChangeScore = undefined as number | undefined,
+  isSceneCut = undefined as boolean | undefined
 }) {
   const normalizedGuildId = String(guildId || "").trim();
   if (!normalizedGuildId) {
@@ -1909,6 +1912,10 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
   streamWatch.latestFrameMimeType = resolvedMimeType;
   streamWatch.latestFrameDataBase64 = normalizedFrame;
   streamWatch.latestFrameAt = now;
+  // Frame-diff scores from clankvox (coarse luma diff + EMA smoothing).
+  streamWatch.latestChangeScore = typeof changeScore === "number" ? changeScore : 0;
+  streamWatch.latestEmaChangeScore = typeof emaChangeScore === "number" ? emaChangeScore : 0;
+  streamWatch.latestIsSceneCut = typeof isSceneCut === "boolean" ? isSceneCut : false;
 
   streamWatch.lastFrameAt = now;
   streamWatch.ingestedFrameCount = Number(streamWatch.ingestedFrameCount || 0) + 1;
@@ -1982,13 +1989,43 @@ async function maybeTriggerDirectStreamWatchBrainTurn(manager: StreamWatchManage
   const sinceLastInboundAudio = now - Number(session.lastInboundAudioAt || 0);
   if (Number(session.lastInboundAudioAt || 0) > 0 && sinceLastInboundAudio < STREAM_WATCH_AUDIO_QUIET_WINDOW_MS) return;
 
-  // Gate: interval — direct mode uses its own interval setting
+  // Gate: interval — direct mode uses its own interval setting, but
+  // change-triggered bypasses can fire sooner when the frame differs
+  // significantly from the last one the brain saw.
   const directMinIntervalSeconds = clamp(
     Number(streamWatchSettings.directMinIntervalSeconds) || 10,
     3,
     120
   );
-  if (now - Number(session.streamWatch?.lastCommentaryAt || 0) < directMinIntervalSeconds * 1000) return;
+  const sinceLastCommentary = now - Number(session.streamWatch?.lastCommentaryAt || 0);
+  const intervalElapsed = sinceLastCommentary >= directMinIntervalSeconds * 1000;
+
+  // ── Change-triggered bypass ──────────────────────────────────────
+  // If clankvox reported a visual change score above threshold AND the
+  // change-specific cooldown has elapsed, bypass the normal interval
+  // timer.  This lets the brain react quickly to scene changes, app
+  // switches, and significant gameplay moments.
+  const directChangeThreshold = clamp(
+    Number(streamWatchSettings.directChangeThreshold) || 0.15,
+    0.01,
+    1.0
+  );
+  const directChangeMinIntervalSeconds = clamp(
+    Number(streamWatchSettings.directChangeMinIntervalSeconds) || 4,
+    1,
+    60
+  );
+  const latestChangeScore = Number(session.streamWatch?.latestChangeScore || 0);
+  const latestEmaChangeScore = Number(session.streamWatch?.latestEmaChangeScore || 0);
+  const latestIsSceneCut = Boolean(session.streamWatch?.latestIsSceneCut);
+  const changeCooldownElapsed = sinceLastCommentary >= directChangeMinIntervalSeconds * 1000;
+  const changeTriggered = changeCooldownElapsed && (
+    latestIsSceneCut ||
+    latestChangeScore >= directChangeThreshold ||
+    latestEmaChangeScore >= directChangeThreshold
+  );
+
+  if (!intervalElapsed && !changeTriggered) return;
 
   const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
   if (!bufferedFrame) return;
@@ -1999,7 +2036,11 @@ async function maybeTriggerDirectStreamWatchBrainTurn(manager: StreamWatchManage
   };
   const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
   const firstFrame = Number(session.streamWatch?.ingestedFrameCount || 0) <= 1;
-  const triggerReason = firstFrame ? "share_start" : "direct_frame";
+  const triggerReason = firstFrame
+    ? "share_start"
+    : changeTriggered && !intervalElapsed
+      ? "change_detected"
+      : "direct_frame";
   const normalizedStreamerUserId = String(streamerUserId || "").trim() || null;
   const botUserId = String(manager.client.user?.id || "").trim() || null;
   const transcript = firstFrame
@@ -2057,7 +2098,11 @@ async function maybeTriggerDirectStreamWatchBrainTurn(manager: StreamWatchManage
       streamerUserId: streamerUserId || null,
       commentaryMode: "direct_brain_turn",
       triggerReason,
-      brainContextMode: "direct"
+      brainContextMode: "direct",
+      changeScore: latestChangeScore,
+      emaChangeScore: latestEmaChangeScore,
+      isSceneCut: latestIsSceneCut,
+      changeTriggered
     }
   });
 }

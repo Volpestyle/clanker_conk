@@ -15,6 +15,7 @@ import {
   normalizeVoiceDefaultInterruptionMode
 } from "./shared.ts";
 import {
+  normalizeStreamWatchBrainContextMode,
   normalizeStreamWatchVisualizerMode,
   resolveVoiceAdmissionModeForSettings
 } from "../../settings/voiceDashboardMappings.ts";
@@ -216,6 +217,10 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         streamWatch.autonomousCommentaryEnabled,
         DEFAULT_SETTINGS.voice.streamWatch.autonomousCommentaryEnabled
       ),
+      brainContextMode: normalizeStreamWatchBrainContextMode(
+        streamWatch.brainContextMode,
+        DEFAULT_SETTINGS.voice.streamWatch.brainContextMode
+      ),
       brainContextEnabled: normalizeBoolean(
         streamWatch.brainContextEnabled,
         DEFAULT_SETTINGS.voice.streamWatch.brainContextEnabled
@@ -246,6 +251,30 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         streamWatch.brainContextPrompt,
         DEFAULT_SETTINGS.voice.streamWatch.brainContextPrompt,
         420
+      ),
+      directMinIntervalSeconds: normalizeInt(
+        streamWatch.directMinIntervalSeconds,
+        DEFAULT_SETTINGS.voice.streamWatch.directMinIntervalSeconds,
+        3,
+        120
+      ),
+      directMaxEntries: normalizeInt(
+        streamWatch.directMaxEntries,
+        DEFAULT_SETTINGS.voice.streamWatch.directMaxEntries,
+        1,
+        24
+      ),
+      directChangeThreshold: normalizeNumber(
+        streamWatch.directChangeThreshold,
+        DEFAULT_SETTINGS.voice.streamWatch.directChangeThreshold,
+        0.01,
+        1.0
+      ),
+      directChangeMinIntervalSeconds: normalizeInt(
+        streamWatch.directChangeMinIntervalSeconds,
+        DEFAULT_SETTINGS.voice.streamWatch.directChangeMinIntervalSeconds,
+        1,
+        60
       ),
       nativeDiscordMaxFramesPerSecond: normalizeInt(
         streamWatch.nativeDiscordMaxFramesPerSecond,
