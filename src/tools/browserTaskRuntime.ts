@@ -33,6 +33,7 @@ type BrowserBrowseTaskOptions = {
   provider: string;
   model: string;
   headed?: boolean;
+  profile?: string;
   maxSteps: number;
   stepTimeoutMs: number;
   sessionTimeoutMs?: number;
@@ -194,6 +195,7 @@ export async function runBrowserBrowseTask({
   provider,
   model,
   headed,
+  profile,
   maxSteps,
   stepTimeoutMs,
   sessionTimeoutMs,
@@ -214,6 +216,7 @@ export async function runBrowserBrowseTask({
       provider,
       model,
       headed,
+      profile,
       maxSteps,
       stepTimeoutMs,
       sessionTimeoutMs,

@@ -200,6 +200,32 @@ This is implemented in:
 - `src/voice/voiceToolCalls.ts`
 - `src/voice/voiceSessionManager.ts`
 
+## Persistent Browser Profile (Authenticated Browsing)
+
+By default, every browser session starts fresh with no cookies or login state. To let the bot browse as an authenticated user, configure a persistent Chromium profile directory.
+
+### How it works
+
+`agent-browser` supports `--profile <path>`, which points to a persistent Chromium user data directory. When set, cookies, localStorage, IndexedDB, saved passwords, and all other browser state persist across sessions. The bot reuses existing login state every time it opens a browser.
+
+### Setup
+
+1. The default profile path is `~/.clanky/browser-profile`. This is used automatically — no dashboard configuration required. To use a different path, change it in the dashboard (Research & Browsing > Browser profile path) or directly in settings.
+
+2. Run a headed login session to establish auth state:
+   ```sh
+   agent-browser --profile ~/.clanky/browser-profile --headed open https://youtube.com
+   ```
+   Log into each site you want the bot to access. The profile directory persists all cookies and session data.
+
+3. Close the headed session. Future bot-initiated browser sessions automatically inherit the saved auth state.
+
+### Important notes
+
+- The profile directory is shared across all browser sessions. Concurrent sessions using the same profile may conflict — `agent-browser` handles this via its session daemon, but be aware of potential cookie mutation races.
+- Sessions that the site expires (e.g. 30-day login tokens) require re-authentication through another headed session.
+- The profile path supports `~` expansion by the shell when used via CLI. In the dashboard, use an absolute path.
+
 ## Settings
 
 The canonical persistence, preset, and save semantics for these fields live in [`../reference/settings.md`](../reference/settings.md).
@@ -210,6 +236,7 @@ Important fields:
 
 - `agentStack.runtimeConfig.browser.enabled`
 - `agentStack.runtimeConfig.browser.headed`
+- `agentStack.runtimeConfig.browser.profile`
 - `agentStack.overrides.browserRuntime` (`local_browser_agent` or `openai_computer_use`)
 - `agentStack.runtimeConfig.browser.openaiComputerUse.client` (`auto`, `openai`, or `openai-oauth`)
 - `agentStack.runtimeConfig.browser.localBrowserAgent.maxStepsPerTask`

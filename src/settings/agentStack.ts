@@ -643,6 +643,7 @@ export function getResolvedBrowserTaskConfig(settings: unknown) {
     runtime: String(resolvedStack.browserRuntime || "local_browser_agent"),
     enabled: Boolean(browserRuntime.enabled),
     headed: Boolean(browserRuntime.headed),
+    profile: String(browserRuntime.profile || "").trim(),
     maxBrowseCallsPerHour: Number(browserRuntime.localBrowserAgent?.maxBrowseCallsPerHour) || 10,
     maxStepsPerTask: Number(browserRuntime.localBrowserAgent?.maxStepsPerTask) || 15,
     stepTimeoutMs: Number(browserRuntime.localBrowserAgent?.stepTimeoutMs) || 30_000,

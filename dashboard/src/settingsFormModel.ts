@@ -267,6 +267,7 @@ function buildSettingsFormView(settings: unknown) {
       runtimeSelection: browserRuntimeSelection,
       enabled: browser.enabled,
       headed: browser.headed,
+      profile: String(browser.profile || ""),
       openAiComputerUseClient: normalizeOpenAiComputerUseClientSelection(browser.openaiComputerUse?.client),
       openAiComputerUseModel: String(browser.openaiComputerUse?.model || ""),
       maxBrowseCallsPerHour: browser.localBrowserAgent.maxBrowseCallsPerHour,
@@ -512,6 +513,7 @@ export function settingsToForm(settings: unknown) {
     maxTokens: resolved.replyGeneration.maxOutputTokens ?? defaults.replyGeneration.maxOutputTokens,
     browserEnabled: resolved.browser.enabled ?? defaults.browser.enabled,
     browserHeaded: resolved.browser.headed ?? defaults.browser.headed,
+    browserProfile: resolved.browser.profile ?? defaults.browser.profile ?? "",
     stackResolvedResearchRuntime: resolved.webSearch.runtime ?? defaultWebSearch.runtime,
     stackResolvedBrowserRuntime: resolved.browser.runtime ?? defaults.browser.runtime,
     browserRuntimeSelection: resolved.browser.runtimeSelection ?? defaults.browser.runtimeSelection,
@@ -1426,6 +1428,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         browser: {
           enabled: form.browserEnabled,
           headed: Boolean(form.browserHeaded),
+          profile: String(form.browserProfile || "").trim(),
           openaiComputerUse: {
             client: normalizedOpenAiComputerUseClient,
             model: String(form.browserOpenAiComputerUseModel || "gpt-5.4").trim()

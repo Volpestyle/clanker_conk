@@ -15,7 +15,7 @@ Use the docs in this order:
 ## Capability Hubs
 
 - [`capabilities/media.md`](capabilities/media.md) — the unified media surface: music, video, native screen watch, outbound publish, and browser visual context
-- [`capabilities/browser.md`](capabilities/browser.md) — browser runtime behavior, `browser_browse`, session continuation, cancellation, and headless visual capture
+- [`capabilities/browser.md`](capabilities/browser.md) — browser runtime behavior, `browser_browse`, persistent profiles for authenticated browsing, session continuation, cancellation, and headless visual capture
 - [`capabilities/code.md`](capabilities/code.md) — code agent runtime and worker model
 - [`capabilities/memory.md`](capabilities/memory.md) — durable memory, journals, fact extraction, and retrieval
 

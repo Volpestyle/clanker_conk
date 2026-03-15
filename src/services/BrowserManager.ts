@@ -18,6 +18,7 @@ const AGENT_BROWSER_SESSION_TAIL_LEN = 8;
 type BrowserSessionConfig = {
   headed?: boolean;
   sessionTimeoutMs?: number;
+  profile?: string;
 };
 
 export function buildAgentBrowserSessionName(sessionKey: string): string {
@@ -35,15 +36,29 @@ export function buildAgentBrowserSessionName(sessionKey: string): string {
   return readableTail ? `ab-${digest}-${readableTail}` : `ab-${digest}`;
 }
 
+function expandTilde(p: string): string {
+  if (p.startsWith("~/") || p === "~") {
+    return path.join(os.homedir(), p.slice(1));
+  }
+  return p;
+}
+
 export function buildAgentBrowserArgs(
   sessionKey: string,
   args: string[],
-  options?: Pick<BrowserSessionConfig, "headed">
+  options?: Pick<BrowserSessionConfig, "headed" | "profile">
 ): string[] {
+  const profilePath = options?.profile ? expandTilde(options.profile) : undefined;
   return [
     "--session",
     buildAgentBrowserSessionName(sessionKey),
     ...(options?.headed ? ["--headed"] : []),
+    ...(profilePath
+      ? [
+          "--profile", profilePath,
+          "--args", "--disable-blink-features=AutomationControlled"
+        ]
+      : []),
     ...args
   ];
 }
@@ -54,6 +69,7 @@ interface BrowserSession {
   lastActiveAt: number;
   headed: boolean;
   sessionTimeoutMs: number;
+  profile?: string;
 }
 
 export class BrowserManager {
@@ -86,7 +102,8 @@ export class BrowserManager {
       ...(options?.headed !== undefined ? { headed: Boolean(options.headed) } : {}),
       ...(Number.isFinite(sessionTimeoutMs) && sessionTimeoutMs > 0
         ? { sessionTimeoutMs: sessionTimeoutMs }
-        : {})
+        : {}),
+      ...(options?.profile !== undefined ? { profile: String(options.profile || "").trim() || undefined } : {})
     };
   }
 
@@ -96,7 +113,8 @@ export class BrowserManager {
     if (session) {
       return {
         headed: session.headed,
-        sessionTimeoutMs: session.sessionTimeoutMs
+        sessionTimeoutMs: session.sessionTimeoutMs,
+        profile: session.profile
       };
     }
     return this.pendingSessionConfigs.get(normalizedSessionKey) || {};
@@ -121,6 +139,9 @@ export class BrowserManager {
     if (normalizedConfig.sessionTimeoutMs !== undefined) {
       existingSession.sessionTimeoutMs = normalizedConfig.sessionTimeoutMs;
     }
+    if (normalizedConfig.profile !== undefined) {
+      existingSession.profile = normalizedConfig.profile;
+    }
   }
 
   private getOrCreateSession(sessionKey: string): BrowserSession {
@@ -142,7 +163,8 @@ export class BrowserManager {
       sessionTimeoutMs:
         Number.isFinite(config.sessionTimeoutMs) && Number(config.sessionTimeoutMs) > 0
           ? Number(config.sessionTimeoutMs)
-          : this.defaultSessionTimeoutMs
+          : this.defaultSessionTimeoutMs,
+      profile: config.profile || undefined
     };
     this.sessions.set(normalizedSessionKey, session);
     return session;

@@ -32,6 +32,20 @@ export function BrowserSettingsSection({
           Show browser window on this machine
         </label>
       </div>
+      <div>
+        <label htmlFor="browser-profile-standalone">Browser profile path</label>
+        <input
+          id="browser-profile-standalone"
+          type="text"
+          value={form.browserProfile}
+          onChange={set("browserProfile")}
+          placeholder="e.g. ~/.clanky/browser-profile"
+          style={{ width: "100%" }}
+        />
+        <p className="status-msg info" style={{ marginTop: "0.25rem" }}>
+          Persistent Chromium profile directory. Log in once with headed mode, then all future sessions inherit cookies and auth state.
+        </p>
+      </div>
 
       {form.browserEnabled && (
         <>

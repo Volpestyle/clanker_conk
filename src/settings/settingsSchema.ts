@@ -1,7 +1,7 @@
 export const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-5-mini", "gpt-5", "gpt-4.1-mini"],
-  anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6"],
-  "claude-oauth": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
+  anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-sonnet-4-0"],
+  "claude-oauth": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-0", "claude-haiku-4-5"],
   "openai-oauth": ["gpt-5.4", "gpt-5.3-codex", "gpt-5.1-codex-mini"],
   codex_cli_session: ["gpt-5.4", "gpt-5.3-codex", "gpt-5-codex"],
   xai: ["grok-3-mini-latest"],
@@ -300,6 +300,7 @@ export const DEFAULT_SETTINGS = {
       browser: {
         enabled: true,
         headed: false,
+        profile: "~/.clanky/browser-profile",
         openaiComputerUse: {
           model: "gpt-5.4",
           client: "auto"

@@ -17,7 +17,7 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 
 **Tools the Brain Can Use**
 - Web search (Brave, SerpApi) with page inspection
-- Headless browser agents for navigating and interacting with websites
+- Headless browser agents for navigating and interacting with websites (with optional persistent profile for authenticated browsing)
 - Persistent memory system (append-only journals + curated facts + vector search)
 - Image generation (GPT Image, Grok Imagine)
 - Video generation (Grok Imagine Video)
@@ -75,6 +75,19 @@ bun install
 For voice features, install `ffmpeg` and `yt-dlp` on the host.
 For optional local code-agent runtimes, ensure `claude` and/or `codex` CLI is on `PATH`.
 Point the code-agent working directory at a git repo root or subdirectory; local workers execute inside disposable worktree branches instead of the live checkout.
+
+### Browser Profile (Authenticated Browsing)
+
+By default the browser agent starts with no cookies or login state. To let it browse as an authenticated user (YouTube recommendations, logged-in dashboards, etc.), set up a persistent Chromium profile:
+
+```bash
+bun run browser:login https://accounts.google.com   # opens headed browser — log in manually
+agent-browser close                                   # close when done
+```
+
+The default profile path is `~/.clanky/browser-profile`, which is what `browser:login` uses. All future browser sessions automatically inherit your saved cookies and auth state. Re-run `bun run browser:login` to refresh expired sessions or log into additional sites.
+
+See [`docs/capabilities/browser.md`](docs/capabilities/browser.md) for details.
 
 ### Provider Notes
 
@@ -150,7 +163,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | `docs/architecture/initiative.md` | Unified text initiative cycle and discovery feed |
 | `docs/architecture/presets.md` | Preset-driven stack/runtime settings |
 | `docs/capabilities/code.md` | Code agent runtime (Claude Code, Codex CLI, Codex) |
-| `docs/capabilities/browser.md` | Browser agent runtime |
+| `docs/capabilities/browser.md` | Browser agent runtime, persistent profiles, authenticated browsing |
 | `docs/voice/voice-provider-abstraction.md` | Voice pipeline stages, providers, and settings |
 | `docs/voice/screen-share-system.md` | Screen share pipeline and frame reasoning flow |
 | `docs/voice/discord-streaming.md` | Discord-native Go Live watch/publish transport details |

@@ -88,7 +88,8 @@ test("runBrowseAgent forwards step timeout to browser tools and preserves multi-
     sessionKey: "guild-1",
     options: {
       headed: true,
-      sessionTimeoutMs: 54_321
+      sessionTimeoutMs: 54_321,
+      profile: undefined
     }
   }]);
   assert.deepEqual(llmCalls, [

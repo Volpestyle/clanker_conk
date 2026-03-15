@@ -137,7 +137,8 @@ test("runOpenAiComputerUseTask uses the GA computer tool and executes batched ac
     sessionKey: "session-1",
     options: {
       headed: true,
-      sessionTimeoutMs: 45_000
+      sessionTimeoutMs: 45_000,
+      profile: undefined
     }
   }]);
   assert.equal(requests[0]?.model, "gpt-5.4");

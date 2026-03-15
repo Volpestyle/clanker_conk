@@ -211,6 +211,7 @@ export function normalizeAgentStackSection(
       browser: {
         enabled: normalizeBoolean(browser.enabled, DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.enabled),
         headed: normalizeBoolean(browser.headed, DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.headed),
+        profile: normalizeString(browser.profile, DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.profile, 500),
         openaiComputerUse: {
           client: normalizeOpenAiComputerUseClient(browser.openaiComputerUse.client),
           model: normalizeString(

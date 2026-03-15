@@ -61,6 +61,7 @@ interface BrowseAgentOptions {
   provider: string;
   model: string;
   headed?: boolean;
+  profile?: string;
   maxSteps: number;
   stepTimeoutMs: number;
   sessionTimeoutMs?: number;
@@ -107,6 +108,7 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
     provider,
     model,
     headed,
+    profile,
     maxSteps,
     stepTimeoutMs,
     sessionTimeoutMs,
@@ -116,8 +118,13 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
 
   browserManager.configureSession(sessionKey, {
     headed,
-    sessionTimeoutMs
+    sessionTimeoutMs,
+    profile
   });
+
+  if (profile) {
+    console.log(`[browseAgent] Using persistent browser profile: ${profile}  sessionKey=${sessionKey}`);
+  }
 
   const messages: ToolLoopMessage[] = [
     { role: "user", content: instruction }
@@ -286,6 +293,7 @@ interface BrowserAgentSessionOptions {
   provider: string;
   model: string;
   headed?: boolean;
+  profile?: string;
   maxSteps: number;
   stepTimeoutMs: number;
   sessionTimeoutMs?: number;
@@ -348,7 +356,8 @@ export class BrowserAgentSession implements SubAgentSession {
 
     this.browserManager.configureSession(this.sessionKey, {
       headed: options.headed,
-      sessionTimeoutMs: options.sessionTimeoutMs
+      sessionTimeoutMs: options.sessionTimeoutMs,
+      profile: options.profile
     });
 
     this.messages = [];

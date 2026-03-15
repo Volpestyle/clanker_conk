@@ -56,10 +56,27 @@ export function ResearchBrowsingSettingsSection({
           Enable browser agent
         </label>
         {browserEnabled && (
-          <label>
-            <input type="checkbox" checked={form.browserHeaded} onChange={set("browserHeaded")} />
-            Show browser window on this machine (debug)
-          </label>
+          <>
+            <label>
+              <input type="checkbox" checked={form.browserHeaded} onChange={set("browserHeaded")} />
+              Show browser window on this machine (debug)
+            </label>
+            <div style={{ marginTop: "0.5rem" }}>
+              <label htmlFor="browser-profile">Browser profile path</label>
+              <input
+                id="browser-profile"
+                type="text"
+                value={form.browserProfile}
+                onChange={set("browserProfile")}
+                placeholder="~/.clanky/browser-profile"
+                style={{ width: "100%" }}
+              />
+              <p className="status-msg info" style={{ marginTop: "0.25rem" }}>
+                Persistent Chromium profile directory. Log in to sites once with headed mode, then all future sessions inherit cookies and auth state.
+                Clear to use ephemeral sessions with no saved state.
+              </p>
+            </div>
+          </>
         )}
       </div>
 
