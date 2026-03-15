@@ -3383,6 +3383,8 @@ export class VoiceSessionManager {
     const appendSpeech = (rawText) => {
       const normalized = normalizeVoiceText(rawText, STT_REPLY_MAX_CHARS);
       if (!normalized || !/\w/.test(normalized)) return;
+      // [SKIP] is a first-class "choose silence" signal — never speak it.
+      if (/^\[SKIP\]$/i.test(normalized.trim())) return;
       const last = steps[steps.length - 1];
       if (last?.type === "speech") {
         last.text = normalizeVoiceText(`${last.text} ${normalized}`, STT_REPLY_MAX_CHARS);

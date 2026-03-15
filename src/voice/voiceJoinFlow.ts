@@ -23,7 +23,7 @@ import { buildRealtimeFunctionTools, getVoiceMcpServerStatuses } from "./voiceTo
 import { providerSupports } from "./voiceModes.ts";
 import { createEmptyVoiceLivePromptState } from "./voicePromptState.ts";
 import { createNativeDiscordScreenShareState } from "./nativeDiscordScreenShare.ts";
-import { createGoLiveStreamState } from "../selfbot/streamDiscovery.ts";
+import { createGoLiveStreamState, buildGoLiveStreamStateFromStream } from "../selfbot/streamDiscovery.ts";
 import { createStreamPublishState } from "./voiceStreamPublish.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 import { createAssistantOutputState } from "./assistantOutputState.ts";
@@ -951,6 +951,82 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
       manager.sessions.set(guildId, session);
       manager.primeSessionFactProfiles(session);
+
+      // ── Seed pre-existing Go Live streams ─────────────────────
+      // When the bot joins a channel where someone is already streaming,
+      // the GUILD_CREATE / VOICE_STATE_UPDATE events that detected the
+      // stream fired before this session existed and were discarded.
+      // Scan two sources to catch pre-existing streams:
+      //
+      // 1. streamDiscovery.streams — retains entries from STREAM_CREATE
+      //    events that arrived while no session existed.
+      // 2. Voice channel members — discord.js exposes `streaming` on
+      //    each member's voice state (mirrors self_stream).
+      //
+      // Source 1 gives full stream metadata (streamKey, rtcServerId);
+      // source 2 gives only userId+channelId but covers cases where
+      // STREAM_CREATE wasn't received (e.g., stream started before the
+      // gateway connected).
+      const botUserId = String(manager.client.user?.id || "").trim();
+      if (manager.streamDiscovery && !session.goLiveStream?.streamKey) {
+        for (const stream of manager.streamDiscovery.streams.values()) {
+          if (
+            stream.guildId === guildId &&
+            stream.channelId === targetVoiceChannelId &&
+            String(stream.userId || "").trim() !== botUserId
+          ) {
+            session.goLiveStream = buildGoLiveStreamStateFromStream(stream);
+            manager.store.logAction({
+              kind: "stream_discovery",
+              guildId,
+              channelId: targetVoiceChannelId,
+              userId: stream.userId,
+              content: `stream_discovery_pre_existing_stream_seeded: streamKey=${stream.streamKey}`,
+              metadata: {
+                sessionId: session.id,
+                streamKey: stream.streamKey,
+                source: "stream_discovery_streams_map"
+              }
+            });
+            break;
+          }
+        }
+      }
+      // Fallback: check discord.js voice states for streaming members
+      // when streamDiscovery didn't have the stream entry (e.g., bot
+      // connected after the stream was already live and STREAM_CREATE
+      // was missed).
+      if (!session.goLiveStream?.streamKey && memberVoiceChannel?.members) {
+        for (const [memberId, member] of memberVoiceChannel.members) {
+          if (
+            String(memberId).trim() !== botUserId &&
+            member.voice?.streaming === true
+          ) {
+            const streamKey = `guild:${guildId}:${targetVoiceChannelId}:${memberId}`;
+            session.goLiveStream = {
+              ...createGoLiveStreamState(),
+              streamKey,
+              targetUserId: String(memberId),
+              guildId,
+              channelId: targetVoiceChannelId,
+              discoveredAt: Date.now(),
+            };
+            manager.store.logAction({
+              kind: "stream_discovery",
+              guildId,
+              channelId: targetVoiceChannelId,
+              userId: String(memberId),
+              content: `stream_discovery_pre_existing_stream_seeded: streamKey=${streamKey}`,
+              metadata: {
+                sessionId: session.id,
+                streamKey,
+                source: "voice_channel_member_streaming"
+              }
+            });
+            break;
+          }
+        }
+      }
 
       // Record the bot's own join as a membership event so the classifier
       // history shows "[botName] joined" as the first event.
