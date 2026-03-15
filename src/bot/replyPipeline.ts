@@ -842,7 +842,11 @@ async function buildReplyContext(
     recentConversationHistory,
     screenShare: screenShareCapability,
     videoContext,
-    channelMode: isReplyChannel ? "reply_channel" : "other_channel",
+    channelMode: isReplyChannel
+      ? "reply_channel"
+      : bot.isDiscoveryChannel(settings, message.channelId)
+        ? "discovery_channel"
+        : "other_channel",
     maxMediaPromptChars: resolveMaxMediaPromptLen(settings),
     mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
   };
@@ -1531,7 +1535,8 @@ async function sendReplyMessage(
   } = actionResult;
 
   const shouldThreadReply = addressed;
-  const canStandalonePost = isReplyChannel || !shouldThreadReply;
+  const isDiscovery = bot.isDiscoveryChannel(settings, message.channelId);
+  const canStandalonePost = isReplyChannel || isDiscovery || !shouldThreadReply;
   const sendAsReply = bot.shouldSendAsReply({
     isReplyChannel,
     shouldThreadReply,

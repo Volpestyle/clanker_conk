@@ -140,12 +140,16 @@ export function buildReplyPrompt({
   voiceMode = null,
   screenShare = null,
   videoContext = null,
-  channelMode = "other_channel",
+  channelMode = "other_channel" as "reply_channel" | "discovery_channel" | "other_channel",
   maxMediaPromptChars = 900,
   mediaPromptCraftGuidance = null
 }) {
   const parts = [];
-  const normalizedChannelMode = channelMode === "reply_channel" ? "reply_channel" : "other_channel";
+  const normalizedChannelMode = channelMode === "reply_channel"
+    ? "reply_channel"
+    : channelMode === "discovery_channel"
+      ? "discovery_channel"
+      : "other_channel";
   const triggerCount = Array.isArray(triggerMessageIds) ? triggerMessageIds.length : 0;
 
   parts.push("=== LATEST MESSAGE (TURN ANCHOR) ===");
@@ -292,10 +296,12 @@ export function buildReplyPrompt({
 
   // Channel mode
   if (normalizedChannelMode === "reply_channel") {
-    parts.push("This channel is in your ambient text pool. Short riffs and acknowledgements are fine when they fit naturally.");
+    parts.push("This channel is in your unsolicited reply pool — you can vibe here. Short riffs and acknowledgements are fine when they fit naturally.");
     parts.push("If your reply would derail, interrupt, or just repeat what was said, output [SKIP].");
+  } else if (normalizedChannelMode === "discovery_channel") {
+    parts.push("This channel is in your discovery pool — you can post freely here, but this is not your vibe channel. Only jump into existing conversations if your message is worth the interruption.");
   } else {
-    parts.push("This channel is outside your ambient text pool. Only jump in if your message is worth the interruption.");
+    parts.push("This channel is outside your ambient text and discovery pools. Only jump in if your message is worth the interruption.");
   }
 
   const normalizedReactivity = Math.max(0, Math.min(100, Number(reactivity) || 0));

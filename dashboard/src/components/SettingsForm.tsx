@@ -48,7 +48,7 @@ const BEHAVIOR_FIELDS = new Set([
 
 const PERMISSIONS_FIELDS = new Set([
   "maxMessages", "maxReactions", "minGap",
-  "replyChannels", "allowedChannels", "blockedChannels", "blockedUsers",
+  "replyChannels", "discoveryChannels", "allowedChannels", "blockedChannels", "blockedUsers",
   "catchupEnabled", "catchupLookbackHours", "catchupMaxMessages", "catchupMaxReplies"
 ]);
 

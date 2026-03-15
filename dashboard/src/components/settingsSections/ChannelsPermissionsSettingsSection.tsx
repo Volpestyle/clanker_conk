@@ -7,10 +7,18 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
   return (
     <SettingsSection id={id} title="Channels & Permissions">
       <ChannelChecklist
-        label="Ambient text pool + unsolicited reply channels"
-        hint="This is the shared eligible pool for ambient text posts and colder ambient text replies. Leave empty to keep text activity focused on direct engagement and already-active threads."
+        label="Unsolicited reply channels"
+        hint="Channels where the bot can vibe — gets a bonus to jump into conversations organically, can reply as standalone messages instead of threads, softer conversational tone. The bot won't proactively start new topics here unless also listed in discovery channels."
         value={form.replyChannels}
         onChange={set("replyChannels")}
+        channelType="text"
+      />
+
+      <ChannelChecklist
+        label="Discovery channels"
+        hint="Channels where the bot can post freely on its own initiative — proactive thoughts, sharing interesting finds from feeds, ambient text posts. A channel can be in both lists to get both behaviors."
+        value={form.discoveryChannels}
+        onChange={set("discoveryChannels")}
         channelType="text"
       />
 

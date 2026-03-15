@@ -35,3 +35,10 @@ export function isReplyChannel(settings: Settings, channelId: string) {
   if (!replyChannelIds.length) return false;
   return replyChannelIds.includes(id);
 }
+
+export function isDiscoveryChannel(settings: Settings, channelId: string) {
+  const id = String(channelId);
+  const discoveryChannelIds = normalizeIds(getReplyPermissions(settings).discoveryChannelIds);
+  if (!discoveryChannelIds.length) return false;
+  return discoveryChannelIds.includes(id);
+}

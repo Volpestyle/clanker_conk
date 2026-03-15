@@ -141,9 +141,13 @@ This delivery surface stays text-only even when the context that informed the th
 
 ## Canonical Channel Pool
 
-The unified initiative pool is:
+The initiative pool for proactive posts is:
 
-- `permissions.replies.replyChannelIds`
+- `permissions.replies.discoveryChannelIds`
+
+If `discoveryChannelIds` is empty, the initiative cycle has no eligible channels and does nothing.
+
+`replyChannelIds` is a separate concept — unsolicited reply channels where the bot gets a conversational vibe bonus (eagerness boost, standalone post eligibility, softer prompt tone) but does not proactively start new topics unless the channel is also in the discovery list.
 
 Other text permission surfaces still apply:
 

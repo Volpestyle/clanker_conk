@@ -126,6 +126,50 @@ type ResolveMediaAttachmentResult = {
 };
 
 const MAX_TOOL_IMAGE_ATTACHMENTS = 10;
+const MEDIA_FETCH_TIMEOUT_MS = 12_000;
+const MAX_MEDIA_FETCH_BYTES = 25 * 1024 * 1024; // 25 MB Discord upload limit
+
+/**
+ * Fetches an image/gif URL and returns a Buffer for Discord file attachment.
+ * Returns null if the fetch fails or the response is too large — caller
+ * should fall back to appending the URL to message content.
+ */
+async function fetchUrlAsBuffer(
+  url: string
+): Promise<{ buffer: Buffer; extension: string } | null> {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS),
+      headers: { "user-agent": "clanky/0.1 (+media-fetch)" }
+    });
+
+    if (!response.ok || !response.body) return null;
+
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > MAX_MEDIA_FETCH_BYTES) return null;
+
+    const arrayBuffer = await response.arrayBuffer();
+    if (arrayBuffer.byteLength > MAX_MEDIA_FETCH_BYTES) return null;
+
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    const extension = contentType.includes("gif")
+      ? "gif"
+      : contentType.includes("webp")
+        ? "webp"
+        : contentType.includes("jpeg") || contentType.includes("jpg")
+          ? "jpg"
+          : contentType.includes("mp4")
+            ? "mp4"
+            : contentType.includes("webm")
+              ? "webm"
+              : "png";
+
+    return { buffer: Buffer.from(arrayBuffer), extension };
+  } catch (error) {
+    console.warn("[mediaAttachment] Failed to fetch media URL as buffer:", url, error);
+    return null;
+  }
+}
 
 function buildBasePayload(text: string): MessagePayload {
   return {
@@ -142,7 +186,7 @@ function normalizeTrace(trace: MediaAttachmentTrace | undefined) {
   };
 }
 
-export function buildMessagePayloadWithImage(
+export async function buildMessagePayloadWithImage(
   text: string,
   image: GenerateImageResult
 ) {
@@ -158,6 +202,18 @@ export function buildMessagePayloadWithImage(
 
   if (image.imageUrl) {
     const normalizedUrl = String(image.imageUrl || "").trim();
+    const fetched = await fetchUrlAsBuffer(normalizedUrl);
+    if (fetched) {
+      return {
+        payload: {
+          content: String(text || "").trim(),
+          files: [{ attachment: fetched.buffer, name: `clanker-${Date.now()}.${fetched.extension}` }]
+        },
+        imageUsed: true
+      };
+    }
+
+    // Fallback: if fetch failed, append URL to content
     const trimmedText = String(text || "").trim();
     const content = trimmedText ? `${trimmedText}\n${normalizedUrl}` : normalizedUrl;
     return {
@@ -192,7 +248,7 @@ function buildMessagePayloadWithVideo(
   };
 }
 
-function buildMessagePayloadWithGif(text: string, gifUrl: string) {
+async function buildMessagePayloadWithGif(text: string, gifUrl: string) {
   const normalizedUrl = String(gifUrl || "").trim();
   if (!normalizedUrl) {
     return {
@@ -201,6 +257,18 @@ function buildMessagePayloadWithGif(text: string, gifUrl: string) {
     };
   }
 
+  const fetched = await fetchUrlAsBuffer(normalizedUrl);
+  if (fetched) {
+    return {
+      payload: {
+        content: String(text || "").trim(),
+        files: [{ attachment: fetched.buffer, name: `clanky-gif-${Date.now()}.${fetched.extension}` }]
+      },
+      gifUsed: true
+    };
+  }
+
+  // Fallback: if fetch failed, append URL to content (Discord may auto-embed)
   const trimmedText = String(text || "").trim();
   const content = trimmedText ? `${trimmedText}\n${normalizedUrl}` : normalizedUrl;
   return {
@@ -226,12 +294,12 @@ function mediaTypeToExtension(mediaType: string | null | undefined) {
   }
 }
 
-export function buildMessagePayloadWithToolImages(
+export async function buildMessagePayloadWithToolImages(
   text: string,
   imageInputs: ImageInput[] | null | undefined
 ) {
   const files: MessagePayloadFile[] = [];
-  const urls: string[] = [];
+  const unfetchedUrls: string[] = [];
 
   for (const imageInput of Array.isArray(imageInputs) ? imageInputs.slice(0, MAX_TOOL_IMAGE_ATTACHMENTS) : []) {
     const dataBase64 = String(imageInput?.dataBase64 || "").trim();
@@ -246,24 +314,36 @@ export function buildMessagePayloadWithToolImages(
 
     const url = String(imageInput?.url || "").trim();
     if (url) {
-      urls.push(url);
+      const fetched = await fetchUrlAsBuffer(url);
+      if (fetched) {
+        files.push({
+          attachment: fetched.buffer,
+          name: `clanky-tool-${files.length + 1}.${fetched.extension}`
+        });
+      } else {
+        unfetchedUrls.push(url);
+      }
     }
   }
 
   if (files.length > 0) {
     const trimmedText = String(text || "").trim();
+    // Append any URLs that failed to fetch as fallback
+    const content = unfetchedUrls.length > 0
+      ? (trimmedText ? `${trimmedText}\n${unfetchedUrls.join("\n")}` : unfetchedUrls.join("\n"))
+      : trimmedText;
     return {
       payload: {
-        content: trimmedText,
+        content,
         files
       },
       toolImagesUsed: true
     };
   }
 
-  if (urls.length > 0) {
+  if (unfetchedUrls.length > 0) {
     const trimmedText = String(text || "").trim();
-    const content = trimmedText ? `${trimmedText}\n${urls.join("\n")}` : urls.join("\n");
+    const content = trimmedText ? `${trimmedText}\n${unfetchedUrls.join("\n")}` : unfetchedUrls.join("\n");
     return {
       payload: { content },
       toolImagesUsed: true
@@ -319,7 +399,7 @@ export async function maybeAttachGeneratedImage(
       variant: normalizedVariant,
       trace: normalizeTrace(trace)
     });
-    const withImage = buildMessagePayloadWithImage(text, image);
+    const withImage = await buildMessagePayloadWithImage(text, image);
     return {
       payload: withImage.payload,
       imageUsed: withImage.imageUsed,
@@ -466,7 +546,7 @@ export async function maybeAttachReplyGif(
       };
     }
 
-    const withGif = buildMessagePayloadWithGif(text, gif.url);
+    const withGif = await buildMessagePayloadWithGif(text, gif.url);
     return {
       payload: withGif.payload,
       gifUsed: withGif.gifUsed,
@@ -512,7 +592,7 @@ export async function resolveMediaAttachment(
   };
 
   if (directive?.type === "tool_images") {
-    const toolImageResult = buildMessagePayloadWithToolImages(text, toolImageInputs);
+    const toolImageResult = await buildMessagePayloadWithToolImages(text, toolImageInputs);
     return {
       ...base,
       payload: toolImageResult.payload,

@@ -63,8 +63,8 @@ async function withTempMediaAttachmentContext(
   }
 }
 
-test("buildMessagePayloadWithImage attaches a generated buffer as a file", () => {
-  const result = buildMessagePayloadWithImage("hello", {
+test("buildMessagePayloadWithImage attaches a generated buffer as a file", async () => {
+  const result = await buildMessagePayloadWithImage("hello", {
     imageBuffer: Buffer.from("png-bytes")
   });
 
@@ -74,8 +74,8 @@ test("buildMessagePayloadWithImage attaches a generated buffer as a file", () =>
   assert.match(String(result.payload.files?.[0]?.name || ""), /^clanker-\d+\.png$/);
 });
 
-test("buildMessagePayloadWithToolImages attaches tool-returned base64 images as files", () => {
-  const result = buildMessagePayloadWithToolImages("hello", [
+test("buildMessagePayloadWithToolImages attaches tool-returned base64 images as files", async () => {
+  const result = await buildMessagePayloadWithToolImages("hello", [
     {
       mediaType: "image/png",
       dataBase64: Buffer.from("png-bytes").toString("base64")

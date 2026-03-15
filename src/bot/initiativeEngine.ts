@@ -532,9 +532,10 @@ function countRecentActions(store: InitiativeRuntime["store"], kind: string, sin
 
 export function getEligibleInitiativeChannelIds(settings: Record<string, unknown>) {
   const permissions = getReplyPermissions(settings);
-  // The reply-channel list is the canonical unified initiative pool.
+  // Discovery channels are the canonical pool for proactive/initiative posts.
+  // If empty, the initiative cycle has no eligible channels.
   return [...new Set(
-    (Array.isArray(permissions.replyChannelIds) ? permissions.replyChannelIds : [])
+    (Array.isArray(permissions.discoveryChannelIds) ? permissions.discoveryChannelIds : [])
       .map((value) => String(value || "").trim())
       .filter(Boolean)
   )];

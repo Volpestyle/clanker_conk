@@ -183,7 +183,7 @@ The flooding harness runs this pipeline:
 
 Current limitation:
 
-- The replay harness currently buckets initiative channels from the legacy `permissions.initiativeChannelIds` field in `scripts/replay/core/db.ts`. The live runtime treats `permissions.replies.replyChannelIds` as the canonical initiative-eligible pool, so replay initiative/non-initiative buckets are still a compatibility approximation until that harness is updated.
+- The replay harness reads initiative channels from `permissions.replies.discoveryChannelIds`, matching the live runtime.
 
 ### Running the Flooding Replay
 

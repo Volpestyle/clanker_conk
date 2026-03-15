@@ -158,6 +158,7 @@ type GetReplyAddressSignalRuntimeFn = (
 type IsChannelAllowedRuntimeFn = (settings: Record<string, unknown>, channelId: string) => boolean;
 type IsUserBlockedRuntimeFn = (settings: Record<string, unknown>, userId: string) => boolean;
 type IsReplyChannelRuntimeFn = (settings: Record<string, unknown>, channelId: string) => boolean;
+type IsDiscoveryChannelRuntimeFn = (settings: Record<string, unknown>, channelId: string) => boolean;
 type ShouldAttemptReplyDecisionRuntimeFn = (payload: {
   settings: Record<string, unknown>;
   recentMessages: Array<Record<string, unknown>>;
@@ -214,6 +215,7 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   activeReplies: ActiveReplyRegistry;
   getReplyAddressSignal: GetReplyAddressSignalRuntimeFn;
   isReplyChannel: IsReplyChannelRuntimeFn;
+  isDiscoveryChannel: IsDiscoveryChannelRuntimeFn;
   shouldAttemptReplyDecision: ShouldAttemptReplyDecisionRuntimeFn;
   loadFactProfile: StripFirstArg<LoadFactProfileFn>;
   getConversationHistoryForPrompt: StripFirstArg<GetConversationHistoryForPromptFn>;

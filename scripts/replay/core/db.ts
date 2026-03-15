@@ -93,12 +93,11 @@ export function resolveBotUserId(messages: MessageRow[]) {
 
 export function loadInitiativeChannelIds(runtimeSettings: Record<string, unknown>) {
   const permissions = runtimeSettings.permissions as {
-    initiativeChannelIds?: unknown[];
+    replies?: { discoveryChannelIds?: unknown[] };
   } | null;
-  if (!permissions || !Array.isArray(permissions.initiativeChannelIds)) {
-    return new Set<string>();
-  }
-  return new Set(permissions.initiativeChannelIds.map((value) => String(value)));
+  const discoveryList = permissions?.replies?.discoveryChannelIds;
+  if (!Array.isArray(discoveryList)) return new Set<string>();
+  return new Set(discoveryList.map((value) => String(value)));
 }
 
 export function primeReplayHistory(messages: MessageRow[], since: string) {

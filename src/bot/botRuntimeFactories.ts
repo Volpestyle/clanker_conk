@@ -49,6 +49,7 @@ import {
 } from "./memorySlice.ts";
 import {
   isChannelAllowed as isChannelAllowedForPermissions,
+  isDiscoveryChannel as isDiscoveryChannelForPermissions,
   isReplyChannel as isReplyChannelForPermissions,
   isUserBlocked as isUserBlockedForPermissions
 } from "./permissions.ts";
@@ -445,6 +446,11 @@ export function buildReplyPipelineRuntime(
     isReplyChannel: (settings, channelId) =>
       isReplyChannelForPermissions(
         settings as Parameters<typeof isReplyChannelForPermissions>[0],
+        String(channelId)
+      ),
+    isDiscoveryChannel: (settings, channelId) =>
+      isDiscoveryChannelForPermissions(
+        settings as Parameters<typeof isDiscoveryChannelForPermissions>[0],
         String(channelId)
       ),
     getReactionEmojiOptions: (guild) => bot.getReactionEmojiOptions(guild),

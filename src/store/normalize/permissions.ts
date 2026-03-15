@@ -22,6 +22,7 @@ export function normalizePermissionsSection(section: Settings["permissions"]): S
         DEFAULT_SETTINGS.permissions.replies.allowReactions
       ),
       replyChannelIds: normalizeStringList(replies.replyChannelIds, 200, 60),
+      discoveryChannelIds: normalizeStringList(replies.discoveryChannelIds, 200, 60),
       allowedChannelIds: normalizeStringList(replies.allowedChannelIds, 200, 60),
       blockedChannelIds: normalizeStringList(replies.blockedChannelIds, 200, 60),
       blockedUserIds: normalizeStringList(replies.blockedUserIds, 200, 60),

@@ -23,7 +23,21 @@ async function withTempStore(run: (store: Store) => Promise<void>) {
   }
 }
 
-test("getEligibleInitiativeChannelIds uses the canonical unified reply-channel pool", () => {
+test("getEligibleInitiativeChannelIds uses discoveryChannelIds", () => {
+  const rawSettings: unknown = {
+    permissions: {
+      replies: {
+        discoveryChannelIds: ["discovery-1"]
+      }
+    }
+  };
+
+  const settings = normalizeSettings(rawSettings);
+
+  assert.deepEqual(getEligibleInitiativeChannelIds(settings), ["discovery-1"]);
+});
+
+test("getEligibleInitiativeChannelIds returns empty when only replyChannelIds are set", () => {
   const rawSettings: unknown = {
     permissions: {
       replies: {
@@ -34,7 +48,7 @@ test("getEligibleInitiativeChannelIds uses the canonical unified reply-channel p
 
   const settings = normalizeSettings(rawSettings);
 
-  assert.deepEqual(getEligibleInitiativeChannelIds(settings), ["reply-1"]);
+  assert.deepEqual(getEligibleInitiativeChannelIds(settings), []);
 });
 
 test("maybeRunInitiativeCycle starts the min-gap cooldown after an initiative skip", async () => {
@@ -52,6 +66,7 @@ test("maybeRunInitiativeCycle starts the min-gap cooldown after an initiative sk
           allowUnsolicitedReplies: true,
           allowReactions: false,
           replyChannelIds: [channelId],
+          discoveryChannelIds: [channelId],
           allowedChannelIds: [channelId],
           blockedChannelIds: [],
           blockedUserIds: [],
@@ -258,6 +273,7 @@ test("maybeRunInitiativeCycle revisits a pending thought even during fresh-thoug
           allowUnsolicitedReplies: true,
           allowReactions: false,
           replyChannelIds: [channelId],
+          discoveryChannelIds: [channelId],
           allowedChannelIds: [channelId],
           blockedChannelIds: [],
           blockedUserIds: [],
@@ -507,6 +523,7 @@ test("maybeRunInitiativeCycle can post a fresh thought in another guild while a 
           allowUnsolicitedReplies: true,
           allowReactions: false,
           replyChannelIds: [channelOneId, channelTwoId],
+          discoveryChannelIds: [channelOneId, channelTwoId],
           allowedChannelIds: [channelOneId, channelTwoId],
           blockedChannelIds: [],
           blockedUserIds: [],
@@ -780,6 +797,7 @@ test("maybeRunInitiativeCycle preserves a pending thought on structured contract
           allowUnsolicitedReplies: true,
           allowReactions: false,
           replyChannelIds: [channelId],
+          discoveryChannelIds: [channelId],
           allowedChannelIds: [channelId],
           blockedChannelIds: [],
           blockedUserIds: [],

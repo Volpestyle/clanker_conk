@@ -816,6 +816,7 @@ export function settingsToForm(settings: unknown) {
     discoveryXNitterBase:
       resolved?.discovery?.xNitterBaseUrl ?? defaultDiscovery.xNitterBaseUrl,
     replyChannels: formatLineList(resolved?.permissions?.replyChannelIds),
+    discoveryChannels: formatLineList(resolved?.permissions?.discoveryChannelIds),
     allowedChannels: formatLineList(resolved?.permissions?.allowedChannelIds),
     blockedChannels: formatLineList(resolved?.permissions?.blockedChannelIds),
     blockedUsers: formatLineList(resolved?.permissions?.blockedUserIds)
@@ -1317,6 +1318,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         allowUnsolicitedReplies: form.allowUnsolicitedReplies,
         allowReactions: form.allowReactions,
         replyChannelIds: parseUniqueList(form.replyChannels),
+        discoveryChannelIds: parseUniqueList(form.discoveryChannels),
         allowedChannelIds: parseUniqueList(form.allowedChannels),
         blockedChannelIds: parseUniqueList(form.blockedChannels),
         blockedUserIds: parseUniqueList(form.blockedUsers),
@@ -1746,6 +1748,7 @@ const LIST_FORM_KEYS: ReadonlySet<string> = new Set([
   "discoveryXHandles",
   "codeAgentAllowedUserIds",
   "replyChannels",
+  "discoveryChannels",
   "allowedChannels",
   "blockedChannels",
   "blockedUsers"

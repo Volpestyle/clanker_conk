@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createTestSettings } from "../testSettings.ts";
 import {
   isChannelAllowed,
+  isDiscoveryChannel,
   isReplyChannel,
   isUserBlocked
 } from "./permissions.ts";
@@ -34,7 +35,7 @@ test("isChannelAllowed defaults open when allowlist is empty", () => {
   assert.equal(isChannelAllowed(settings, "any-channel"), true);
 });
 
-test("isReplyChannel matches the unified initiative channel list", () => {
+test("isReplyChannel matches the unsolicited reply channel list", () => {
   const settings = createTestSettings({
     permissions: {
       replies: {
@@ -45,6 +46,19 @@ test("isReplyChannel matches the unified initiative channel list", () => {
 
   assert.equal(isReplyChannel(settings, "reply-1"), true);
   assert.equal(isReplyChannel(settings, "other"), false);
+});
+
+test("isDiscoveryChannel matches the discovery channel list", () => {
+  const settings = createTestSettings({
+    permissions: {
+      replies: {
+        discoveryChannelIds: ["discovery-1"]
+      }
+    }
+  });
+
+  assert.equal(isDiscoveryChannel(settings, "discovery-1"), true);
+  assert.equal(isDiscoveryChannel(settings, "other"), false);
 });
 
 test("isUserBlocked matches normalized blocked user ids", () => {

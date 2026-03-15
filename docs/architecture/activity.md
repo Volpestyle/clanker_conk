@@ -272,14 +272,15 @@ The operator-facing knobs are:
 
 ### Text Scope
 
-Reactive replies and ambient text delivery both respect the text permission surfaces:
+Reactive replies and ambient text delivery respect the text permission surfaces:
 
-- `permissions.replies.replyChannelIds`
+- `permissions.replies.replyChannelIds` — unsolicited reply channels where the bot vibes (eagerness bonus, standalone posts, softer prompt tone)
+- `permissions.replies.discoveryChannelIds` — discovery channels where the bot can post freely on its own initiative (proactive thoughts, feed shares)
 - `permissions.replies.allowedChannelIds`
 - `permissions.replies.blockedChannelIds`
 - `permissions.replies.blockedUserIds`
 
-`replyChannelIds` is the unified initiative pool. If it is empty, the initiative cycle has no eligible text channels.
+`discoveryChannelIds` is the canonical initiative pool for proactive posts. If it is empty, the initiative cycle has no eligible text channels. A channel can appear in both lists to get both behaviors (vibe bonus + proactive posting).
 
 Being active in VC can inform text prompt context, but it does not by itself promote unrelated text turns into `ACTIVE`.
 
