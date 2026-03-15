@@ -221,6 +221,7 @@ export const DEFAULT_SETTINGS = {
       allowUnsolicitedReplies: true,
       allowReactions: true,
       replyChannelIds: [],
+      discoveryChannelIds: [],
       allowedChannelIds: [],
       blockedChannelIds: [],
       blockedUserIds: [],
@@ -564,7 +565,8 @@ export const DEFAULT_SETTINGS = {
       directChangeMinIntervalSeconds: 4,
       nativeDiscordMaxFramesPerSecond: 2,
       nativeDiscordPreferredQuality: 100,
-      nativeDiscordPreferredPixelCount: 1280 * 720,
+      nativeDiscordPreferredPixelCount: 640 * 360,
+      nativeDiscordJpegQuality: 60,
       nativeDiscordPreferredStreamType: "screen",
       sharePageMaxWidthPx: 960,
       sharePageJpegQuality: 0.6

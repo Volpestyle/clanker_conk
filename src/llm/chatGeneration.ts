@@ -122,6 +122,20 @@ function buildAnthropicMessagesRequest({
   const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
   const normalizedTools = Array.isArray(tools) ? tools : [];
   const cachedSystemPrompt = buildAnthropicCachedSystemPrompt(systemPrompt);
+  // Strict tools are only supported by Claude models from Sonnet 4.5 onward.
+  // Older models (Sonnet 4.0, 3.x, etc.) reject the parameter with a 400 error.
+  const modelSupportsStrictTools = (() => {
+    const m = String(model || "");
+    if (!m) return true;
+    // claude-3-* models (3.5, 3.7, etc.) don't support strict tools
+    if (m.startsWith("claude-3")) return false;
+    // claude-sonnet-4-0, claude-sonnet-4 (base, no point release) don't support strict tools
+    if (m === "claude-sonnet-4" || m === "claude-sonnet-4-0" || m.startsWith("claude-sonnet-4-0-")) return false;
+    if (m === "claude-opus-4" || m === "claude-opus-4-0" || m.startsWith("claude-opus-4-0-")) return false;
+    // claude-haiku-3 doesn't support strict tools
+    if (m.startsWith("claude-haiku-3")) return false;
+    return true;
+  })();
   const toolsParam = normalizedTools.length
     ? {
         tools: addAnthropicCacheBreakpointToLastItem(normalizedTools, !cachedSystemPrompt).map((tool) => ({
@@ -129,7 +143,7 @@ function buildAnthropicMessagesRequest({
           description: tool.description,
           input_schema: tool.input_schema,
           ...(tool.cache_control ? { cache_control: tool.cache_control } : {}),
-          ...(tool.strict ? { strict: true } : {})
+          ...(modelSupportsStrictTools && tool.strict ? { strict: true } : {})
         }))
       }
     : {};

@@ -1611,6 +1611,46 @@ export function VoiceModeSettingsSection({
                     />
                   </div>
                   <div>
+                    <label htmlFor="voice-stream-watch-native-pixel-count">Native receive resolution</label>
+                    <select
+                      id="voice-stream-watch-native-pixel-count"
+                      value={String(form.voiceStreamWatchNativeDiscordPreferredPixelCount || 230400)}
+                      onChange={set("voiceStreamWatchNativeDiscordPreferredPixelCount")}
+                    >
+                      <option value="129600">480x270 (Low -- fastest LLM)</option>
+                      <option value="230400">640x360 (Medium -- recommended)</option>
+                      <option value="518400">960x540 (High)</option>
+                      <option value="921600">1280x720 (Full HD -- slowest LLM)</option>
+                    </select>
+                    <p className="vps-runtime-summary-note">
+                      Resolution requested from Discord for screen share frames. Lower resolution means smaller images sent to the LLM, reducing latency.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-stream-watch-native-jpeg-quality">Native frame JPEG quality</label>
+                    <select
+                      id="voice-stream-watch-native-jpeg-quality"
+                      value={String(form.voiceStreamWatchNativeDiscordJpegQuality || 60)}
+                      onChange={set("voiceStreamWatchNativeDiscordJpegQuality")}
+                    >
+                      <option value="30">30 (Lowest -- smallest frames)</option>
+                      <option value="40">40</option>
+                      <option value="50">50</option>
+                      <option value="60">60 (Recommended)</option>
+                      <option value="75">75 (Previous default)</option>
+                      <option value="90">90 (High -- largest frames)</option>
+                    </select>
+                    <p className="vps-runtime-summary-note">
+                      JPEG compression quality for decoded screen share frames before sending to LLM. Lower quality = smaller images = fewer tokens = faster responses.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="split">
+                  <div>
                       <label htmlFor="voice-stream-watch-keyframe-interval-ms">Fallback browser capture interval (ms)</label>
                     <input
                       id="voice-stream-watch-keyframe-interval-ms"

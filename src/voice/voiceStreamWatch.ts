@@ -261,7 +261,12 @@ function resolveNativeDiscordVideoSubscriptionSettings(settings = null) {
     preferredPixelCount:
       preferredPixelCountRaw > 0
         ? clamp(preferredPixelCountRaw, 64 * 64, 3840 * 2160)
-        : 1280 * 720,
+        : 640 * 360,
+    jpegQuality: clamp(
+      Number(streamWatchSettings.nativeDiscordJpegQuality) || 60,
+      10,
+      100
+    ),
     preferredStreamType:
       String(streamWatchSettings.nativeDiscordPreferredStreamType || "screen")
         .trim()
@@ -677,7 +682,8 @@ function subscribeNativeDiscordVideo(
       maxFramesPerSecond: subscription.maxFramesPerSecond,
       preferredQuality: subscription.preferredQuality,
       preferredPixelCount: subscription.preferredPixelCount,
-      preferredStreamType: subscription.preferredStreamType
+      preferredStreamType: subscription.preferredStreamType,
+      jpegQuality: subscription.jpegQuality
     });
     if (session.nativeScreenShare && typeof session.nativeScreenShare === "object") {
       session.nativeScreenShare.subscribedTargetUserId = normalizedTargetUserId;
@@ -1583,7 +1589,8 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
         maxFramesPerSecond: subscription.maxFramesPerSecond,
         preferredQuality: subscription.preferredQuality,
         preferredPixelCount: subscription.preferredPixelCount,
-        preferredStreamType: null  // accept any stream type (webcam)
+        preferredStreamType: null,  // accept any stream type (webcam)
+        jpegQuality: subscription.jpegQuality
       });
       const nativeState = ensureNativeDiscordScreenShareState(session);
       nativeState.subscribedTargetUserId = resolvedTarget;

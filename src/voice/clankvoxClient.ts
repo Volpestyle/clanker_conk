@@ -157,6 +157,7 @@ type ClankvoxCommand =
       preferredQuality: number;
       preferredPixelCount: number | null;
       preferredStreamType: string | null;
+      jpegQuality: number | null;
     }
   | { type: "unsubscribe_user_video"; userId: string }
   | {
@@ -1107,14 +1108,16 @@ export class ClankvoxClient extends EventEmitter {
     userId,
     maxFramesPerSecond = 2,
     preferredQuality = 100,
-    preferredPixelCount = 1280 * 720,
-    preferredStreamType = "screen"
+    preferredPixelCount = 640 * 360,
+    preferredStreamType = "screen",
+    jpegQuality
   }: {
     userId: string;
     maxFramesPerSecond?: number;
     preferredQuality?: number;
     preferredPixelCount?: number | null;
     preferredStreamType?: string | null;
+    jpegQuality?: number | null;
   }) {
     this._send({
       type: "subscribe_user_video",
@@ -1125,7 +1128,11 @@ export class ClankvoxClient extends EventEmitter {
         preferredPixelCount === null || preferredPixelCount === undefined
           ? null
           : Math.max(1, Math.floor(Number(preferredPixelCount) || 0)),
-      preferredStreamType: String(preferredStreamType || "").trim() || null
+      preferredStreamType: String(preferredStreamType || "").trim() || null,
+      jpegQuality:
+        jpegQuality === null || jpegQuality === undefined
+          ? null
+          : Math.max(10, Math.min(100, Math.floor(Number(jpegQuality) || 60)))
     });
   }
 

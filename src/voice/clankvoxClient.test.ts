@@ -259,7 +259,8 @@ test("ClankvoxClient subscribeUserVideo forwards the native video subscription c
       maxFramesPerSecond: 3,
       preferredQuality: 80,
       preferredPixelCount: 2_073_600,
-      preferredStreamType: "screen"
+      preferredStreamType: "screen",
+      jpegQuality: null
     },
     {
       type: "unsubscribe_user_video",

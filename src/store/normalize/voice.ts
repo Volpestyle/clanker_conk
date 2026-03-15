@@ -294,6 +294,12 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         64 * 64,
         3840 * 2160
       ),
+      nativeDiscordJpegQuality: normalizeInt(
+        streamWatch.nativeDiscordJpegQuality,
+        DEFAULT_SETTINGS.voice.streamWatch.nativeDiscordJpegQuality,
+        10,
+        100
+      ),
       nativeDiscordPreferredStreamType: normalizeString(
         streamWatch.nativeDiscordPreferredStreamType,
         DEFAULT_SETTINGS.voice.streamWatch.nativeDiscordPreferredStreamType,

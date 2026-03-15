@@ -566,8 +566,9 @@ test("enableWatchStreamForUser subscribes native Discord video and stopWatchStre
       userId: "user-2",
       maxFramesPerSecond: 2,
       preferredQuality: 100,
-      preferredPixelCount: 921600,
-      preferredStreamType: "screen"
+      preferredPixelCount: 230400,
+      preferredStreamType: "screen",
+      jpegQuality: 60
     },
     {
       type: "unsubscribe",

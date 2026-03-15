@@ -713,6 +713,9 @@ export function settingsToForm(settings: unknown) {
     voiceStreamWatchNativeDiscordPreferredPixelCount:
       resolved?.voice?.streamWatch?.nativeDiscordPreferredPixelCount ??
       defaultVoiceStreamWatch.nativeDiscordPreferredPixelCount,
+    voiceStreamWatchNativeDiscordJpegQuality:
+      resolved?.voice?.streamWatch?.nativeDiscordJpegQuality ??
+      defaultVoiceStreamWatch.nativeDiscordJpegQuality,
     voiceStreamWatchNativeDiscordPreferredStreamType:
       resolved?.voice?.streamWatch?.nativeDiscordPreferredStreamType ??
       defaultVoiceStreamWatch.nativeDiscordPreferredStreamType,
@@ -1672,6 +1675,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         nativeDiscordMaxFramesPerSecond: Number(form.voiceStreamWatchNativeDiscordMaxFramesPerSecond),
         nativeDiscordPreferredQuality: Number(form.voiceStreamWatchNativeDiscordPreferredQuality),
         nativeDiscordPreferredPixelCount: Number(form.voiceStreamWatchNativeDiscordPreferredPixelCount),
+        nativeDiscordJpegQuality: Number(form.voiceStreamWatchNativeDiscordJpegQuality),
         nativeDiscordPreferredStreamType: String(form.voiceStreamWatchNativeDiscordPreferredStreamType || "").trim(),
         sharePageMaxWidthPx: Number(form.voiceStreamWatchSharePageMaxWidthPx),
         sharePageJpegQuality: Number(form.voiceStreamWatchSharePageJpegQuality)

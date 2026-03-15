@@ -357,7 +357,7 @@ test("resolveProviderModelOptions merges catalog values with provider fallback d
     },
     "anthropic"
   );
-  assert.deepEqual(anthropic, ["claude-haiku-4-5", "claude-sonnet-4-6"]);
+  assert.deepEqual(anthropic, ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-sonnet-4-0"]);
 });
 
 test("resolveBrowserProviderModelOptions merges catalog values with browser defaults", () => {
@@ -383,7 +383,7 @@ test("resolveBrowserProviderModelOptions merges catalog values with browser defa
     },
     "claude-oauth"
   );
-  assert.deepEqual(claudeOAuth, ["claude-haiku-4-5", "claude-opus-4-6", "claude-sonnet-4-6"]);
+  assert.deepEqual(claudeOAuth, ["claude-haiku-4-5", "claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-0"]);
 });
 
 test("resolvePresetModelSelection preserves a valid current model even when the catalog is stale", () => {

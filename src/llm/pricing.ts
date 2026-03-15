@@ -107,6 +107,13 @@ const DEFAULT_PRICING = {
       cacheReadPer1M: 0.3,
       outputPer1M: 15.0
     },
+    "claude-sonnet-4-0": {
+      inputPer1M: 3.0,
+      cacheWritePer1M: 3.75,
+      cacheWrite1hPer1M: 6.0,
+      cacheReadPer1M: 0.3,
+      outputPer1M: 15.0
+    },
     "claude-3-7-sonnet-latest": {
       inputPer1M: 3.0,
       cacheWritePer1M: 3.75,
@@ -205,6 +212,7 @@ const MODEL_ALIASES = {
   "claude sonnet 4.6": "claude-sonnet-4-6",
   "claude sonnet 4.5": "claude-sonnet-4-5",
   "claude sonnet 4": "claude-sonnet-4",
+  "claude sonnet 4.0": "claude-sonnet-4-0",
   "claude sonnet 3.7": "claude-3-7-sonnet-latest",
   "claude haiku 4.5": "claude-haiku-4-5",
   "claude opus 3": "claude-opus-3",
