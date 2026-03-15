@@ -659,6 +659,7 @@ export class VoiceSessionManager {
     this.musicPlayback = createMusicPlaybackProvider(this.appConfig || {});
     this.musicSearch = createMusicSearchProvider(this.appConfig || {});
     this.musicPlayer = createDiscordMusicPlayer();
+    this.musicPlayer.logAction = (entry) => this.store.logAction(entry);
     this.bargeInController = new BargeInController(this);
     this.captureManager = new CaptureManager(this);
     this.deferredActionQueue = new DeferredActionQueue(this);
@@ -2912,6 +2913,13 @@ export class VoiceSessionManager {
     const queue = this.getPendingRealtimeAssistantUtterances(session);
     const clearedCount = queue.length;
     if (!clearedCount) return 0;
+    // Capture source summary of dropped utterances before clearing
+    const droppedSources: string[] = [];
+    let droppedTextChars = 0;
+    for (const entry of queue) {
+      droppedSources.push(String(entry.source || "unknown"));
+      droppedTextChars += entry.utteranceText ? entry.utteranceText.length : 0;
+    }
     session.pendingRealtimeAssistantUtterances = [];
     session.lastRealtimeAssistantUtteranceDrainBlockSignature = null;
     this.syncRealtimeAssistantUtteranceBackpressure(session, {
@@ -2927,7 +2935,9 @@ export class VoiceSessionManager {
       metadata: {
         sessionId: session.id,
         reason: String(reason || "cleared"),
-        clearedCount
+        clearedCount,
+        droppedSources: droppedSources.length <= 10 ? droppedSources : droppedSources.slice(0, 10),
+        droppedTextChars
       }
     });
     return clearedCount;

@@ -1871,9 +1871,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       )
       .filter(Boolean)
       .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
-    console.info(
-      `[voiceMusic] search complete guildId=${resolvedGuildId} sessionId=${session.id} query=${JSON.stringify(resolvedQuery)} platform=${resolvedPlatform || "auto"} resultCount=${normalizedSearchResults.length} durationMs=${Date.now() - searchStartedAt}`
-    );
+    manager.store.logAction({ kind: "voice_music", content: "voice_music_search_complete", metadata: { guildId: resolvedGuildId, sessionId: session.id, query: resolvedQuery, platform: resolvedPlatform || "auto", resultCount: normalizedSearchResults.length, durationMs: Date.now() - searchStartedAt } });
 
     if (normalizedSearchResults.length > 1) {
       const handled = await requestDisambiguation(normalizedSearchResults);
@@ -2138,9 +2136,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       mustNotify
     });
   }
-  console.info(
-    `[voiceMusic] request complete guildId=${resolvedGuildId} sessionId=${session.id} provider=${playbackResult.provider} totalMs=${Date.now() - requestStartedAt} query=${JSON.stringify(playbackResult.query || playbackQuery || "")}`
-  );
+  manager.store.logAction({ kind: "voice_music", content: "voice_music_request_complete", metadata: { guildId: resolvedGuildId, sessionId: session.id, provider: playbackResult.provider, totalMs: Date.now() - requestStartedAt, query: playbackResult.query || playbackQuery || "" } });
   return true;
 }
 

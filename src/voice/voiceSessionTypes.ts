@@ -383,6 +383,16 @@ export interface VoicePendingResponse {
     utteranceText: string | null;
     latencyContext: VoicePendingResponseLatencyContext | null;
     musicWakeRefreshAfterSpeech?: boolean;
+    /** PCM bytes actually forwarded to clankvox for playback. */
+    audioDeliveredBytes?: number;
+    /** Number of audio_delta chunks forwarded to clankvox. */
+    audioDeliveredChunks?: number;
+    /** PCM bytes dropped by barge-in suppression for this utterance. */
+    audioSuppressedBytes?: number;
+    /** Number of audio_delta chunks dropped by barge-in suppression. */
+    audioSuppressedChunks?: number;
+    /** Timestamp of the first audio_delta chunk forwarded for this utterance. */
+    firstAudioAt?: number;
 }
 
 export interface VoiceLastRequestedRealtimeUtterance {

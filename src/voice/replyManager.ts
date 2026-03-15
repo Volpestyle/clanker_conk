@@ -1149,7 +1149,12 @@ export class ReplyManager {
       outputLeaseMode: normalizedOutputLeaseMode,
       utteranceText: normalizedUtteranceText,
       latencyContext: normalizedLatencyContext,
-      musicWakeRefreshAfterSpeech: Boolean(musicWakeRefreshAfterSpeech)
+      musicWakeRefreshAfterSpeech: Boolean(musicWakeRefreshAfterSpeech),
+      audioDeliveredBytes: 0,
+      audioDeliveredChunks: 0,
+      audioSuppressedBytes: 0,
+      audioSuppressedChunks: 0,
+      firstAudioAt: 0
     };
     this.grantOutputLease(session, {
       mode: normalizedOutputLeaseMode,
@@ -1427,6 +1432,63 @@ export class ReplyManager {
             : null
       }
     });
+
+    // --- Bot utterance completion telemetry ---
+    // Closes the observability gap between "text sent to TTS" and
+    // "audio actually played to Discord".  Pairs with the per-utterance
+    // audio byte counters incremented in the onAudioDelta handler.
+    if (pending) {
+      const utteranceTextLength = pending.utteranceText ? pending.utteranceText.length : 0;
+      const audioDeliveredBytes = Math.max(0, Number(pending.audioDeliveredBytes || 0));
+      const audioDeliveredChunks = Math.max(0, Number(pending.audioDeliveredChunks || 0));
+      const audioSuppressedBytes = Math.max(0, Number(pending.audioSuppressedBytes || 0));
+      const audioSuppressedChunks = Math.max(0, Number(pending.audioSuppressedChunks || 0));
+      const firstAudioAt = Math.max(0, Number(pending.firstAudioAt || 0));
+      const requestedAt = Math.max(0, Number(pending.requestedAt || 0));
+      const outputSampleRate = Number(session.realtimeOutputSampleRateHz) || 24000;
+      // PCM 16-bit mono: 2 bytes per sample
+      const estimatedPlaybackMs = outputSampleRate > 0
+        ? Math.round((audioDeliveredBytes / 2 / outputSampleRate) * 1000)
+        : 0;
+      const firstAudioLatencyMs = firstAudioAt && requestedAt
+        ? Math.max(0, firstAudioAt - requestedAt)
+        : null;
+      const totalAudioBytes = audioDeliveredBytes + audioSuppressedBytes;
+      const deliveryRatio = totalAudioBytes > 0
+        ? Math.round((audioDeliveredBytes / totalAudioBytes) * 100)
+        : hadAudio ? 100 : 0;
+      // Buffered TTS samples still in the clankvox pipeline at response_done time
+      const ttsBufferedSamplesAtDone = this.getBufferedTtsSamples(session);
+
+      this.host.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.botUserId,
+        content: "bot_utterance_completed",
+        metadata: {
+          sessionId: session.id,
+          requestId: pending.requestId,
+          source: pending.source,
+          utteranceTextLength,
+          utteranceTextPreview: pending.utteranceText
+            ? pending.utteranceText.slice(0, 120)
+            : null,
+          hadAudio,
+          hadBargeSuppression,
+          audioDeliveredBytes,
+          audioDeliveredChunks,
+          audioSuppressedBytes,
+          audioSuppressedChunks,
+          estimatedPlaybackMs,
+          firstAudioLatencyMs,
+          deliveryRatio,
+          ttsBufferedSamplesAtDone,
+          ttsProviderEndReason: responseStatus || "completed",
+          mode: session.mode || null
+        }
+      });
+    }
 
     if (!pending) {
       this.syncAssistantOutputState(session, "response_done_without_pending");

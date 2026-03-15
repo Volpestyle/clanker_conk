@@ -704,7 +704,7 @@ async function readResponseBodyLimited(response, maxBytes) {
     try {
       await reader.cancel();
     } catch (error) {
-      console.warn("[WebSearchService] Failed to cancel response reader:", error);
+      this.store.logAction({kind: "search_service", content: "search_reader_cancel_failed", metadata: { error: String(error?.message || error) }});
     }
   }
 

@@ -57,7 +57,19 @@ export class DiscordMusicPlayer {
   private voxClient: ClankvoxClient | null = null;
   private currentTrack: MusicSearchResult | null = null;
 
-  constructor() {}
+  logAction: ((action: { kind: string; guildId?: string | null; channelId?: string | null; content: string; metadata?: Record<string, unknown> }) => void) | null;
+
+  constructor() {
+    this.logAction = null;
+  }
+
+  private log(content: string, metadata?: Record<string, unknown>) {
+    if (this.logAction) {
+      try {
+        this.logAction({ kind: "music_player", content, metadata: metadata || {} });
+      } catch { /* ignore */ }
+    }
+  }
 
   /** Bind to the current session's subprocess client. */
   setVoxClient(client: ClankvoxClient | null): void {
@@ -112,9 +124,7 @@ export class DiscordMusicPlayer {
       );
       this.currentTrack = track;
 
-      console.info(
-        `[musicPlayer] queued subprocess playback title=${JSON.stringify(track.title)} platform=${track.platform} resolveMs=${Date.now() - resolutionStartedAt} source=${resolvedPlaybackUrl.source} direct=${resolvedPlaybackUrl.resolvedDirectUrl}`
-      );
+      this.log("music_player_queued_subprocess_playback", { title: track.title, platform: track.platform, resolveMs: Date.now() - resolutionStartedAt, source: resolvedPlaybackUrl.source, direct: resolvedPlaybackUrl.resolvedDirectUrl });
       return {
         ok: true,
         error: null,
@@ -325,20 +335,14 @@ export class DiscordMusicPlayer {
         .find(Boolean);
 
       if (!resolvedUrl) {
-        console.warn(
-          `[musicPlayer] yt-dlp returned no direct URL title=${JSON.stringify(track.title)} platform=${track.platform} resolveMs=${Date.now() - resolveStartedAt}`
-        );
+        this.log("music_player_ytdlp_no_direct_url", { title: track.title, platform: track.platform, resolveMs: Date.now() - resolveStartedAt });
         return null;
       }
 
-      console.info(
-        `[musicPlayer] yt-dlp resolved direct stream title=${JSON.stringify(track.title)} platform=${track.platform} resolveMs=${Date.now() - resolveStartedAt}`
-      );
+      this.log("music_player_ytdlp_resolved", { title: track.title, platform: track.platform, resolveMs: Date.now() - resolveStartedAt });
       return resolvedUrl;
     } catch (error) {
-      console.warn(
-        `[musicPlayer] yt-dlp resolution failed title=${JSON.stringify(track.title)} platform=${track.platform} resolveMs=${Date.now() - resolveStartedAt} error=${JSON.stringify(getErrorMessage(error))}`
-      );
+      this.log("music_player_ytdlp_resolution_failed", { title: track.title, platform: track.platform, resolveMs: Date.now() - resolveStartedAt, error: String(error) });
       return null;
     }
   }

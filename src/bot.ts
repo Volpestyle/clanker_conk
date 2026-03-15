@@ -58,6 +58,7 @@ import {
 import { generateTextCancelAcknowledgement } from "./bot/textCancelAcknowledgement.ts";
 import {
   isChannelAllowed as isChannelAllowedForPermissions,
+  isDiscoveryChannel as isDiscoveryChannelForPermissions,
   isReplyChannel as isReplyChannelForPermissions,
   isUserBlocked as isUserBlockedForPermissions
 } from "./bot/permissions.ts";
@@ -507,19 +508,19 @@ export class ClankerBot {
         await interaction.editReply(responseText);
       }
     } catch (error) {
-      console.error("[slashCommands] Error handling /clank browse:", error);
+      this.store.logAction({ kind: "bot_error", guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id, content: "slash_command_browse_error", metadata: { error: String(error instanceof Error ? error.message : error) } });
       const message = error instanceof Error ? error.message : String(error);
       if (isAbortError(error)) {
         try {
           await interaction.editReply("Browser session was cancelled.");
         } catch (replyError) {
-          console.warn("[slashCommands] Failed to edit cancelled browse reply:", replyError);
+           this.store.logAction({ kind: "bot_error", guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id, content: "slash_command_browse_cancelled_reply_failed", metadata: { error: String(replyError instanceof Error ? replyError.message : replyError) } });
         }
       } else {
         try {
           await interaction.editReply(`An error occurred while browsing: ${message}`);
         } catch (replyError) {
-          console.warn("[slashCommands] Failed to edit browse error reply:", replyError);
+           this.store.logAction({ kind: "bot_error", guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id, content: "slash_command_browse_error_reply_failed", metadata: { error: String(replyError instanceof Error ? replyError.message : replyError) } });
         }
       }
     }
@@ -603,12 +604,12 @@ export class ClankerBot {
         await interaction.editReply(responseText || "Code task completed with no output.");
       }
     } catch (error) {
-      console.error("[slashCommands] Error handling /clank code:", error);
+      this.store.logAction({ kind: "bot_error", guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id, content: "slash_command_code_error", metadata: { error: String(error instanceof Error ? error.message : error) } });
       const message = error instanceof Error ? error.message : String(error);
       try {
         await interaction.editReply(`An error occurred while running code task: ${message}`);
       } catch (replyError) {
-        console.warn("[slashCommands] Failed to edit code error reply:", replyError);
+         this.store.logAction({ kind: "bot_error", guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id, content: "slash_command_code_error_reply_failed", metadata: { error: String(replyError instanceof Error ? replyError.message : replyError) } });
       }
     }
   }
@@ -618,7 +619,7 @@ export class ClankerBot {
       this.hasConnectedAtLeastOnce = true;
       this.reconnectAttempts = 0;
       this.lastGatewayEventAt = Date.now();
-      console.log(`Logged in as ${this.client.user?.tag || this.client.user?.username || "unknown"}`);
+      this.store.logAction({ kind: "bot_lifecycle", content: "bot_logged_in", metadata: { tag: this.client.user?.tag || this.client.user?.username || "unknown" } });
 
       this.streamDiscoveryCleanup = setupStreamDiscovery(
         this.client as never,
@@ -975,6 +976,7 @@ export class ClankerBot {
       try {
         await this.memory.drainIngestQueue({ timeoutMs: 4000 });
       } catch (error) {
+        try { this.store.logAction({ kind: "bot_error", content: "shutdown_drain_memory_queue_failed", metadata: { error: String(error instanceof Error ? error.message : error) } }); } catch { /* store may be closing */ }
         console.warn("[ClankerBot] Failed to drain memory ingest queue during shutdown:", error);
       }
     }
@@ -982,6 +984,7 @@ export class ClankerBot {
       try {
         await this.browserManager.closeAll();
       } catch (error) {
+        try { this.store.logAction({ kind: "bot_error", content: "shutdown_close_browser_sessions_failed", metadata: { error: String(error instanceof Error ? error.message : error) } }); } catch { /* store may be closing */ }
         console.warn("[ClankerBot] Failed to close browser sessions during shutdown:", error);
       }
     }
@@ -1243,7 +1246,7 @@ export class ClankerBot {
         }
         return true;
       } catch (error) {
-        console.warn("[textCommands] Failed to send cancellation acknowledgement:", error);
+        this.store.logAction({ kind: "bot_error", guildId: message.guildId, channelId: message.channelId, userId: message.author.id, content: "text_cancel_acknowledgement_failed", metadata: { error: String(error instanceof Error ? error.message : error) } });
       }
     }
 
@@ -1251,7 +1254,7 @@ export class ClankerBot {
       await message.react(TEXT_CANCEL_FALLBACK_REACTION);
       return true;
     } catch (error) {
-      console.warn("[textCommands] Failed to react to cancelled text command:", error);
+      this.store.logAction({ kind: "bot_error", guildId: message.guildId, channelId: message.channelId, userId: message.author.id, content: "text_cancel_reaction_failed", metadata: { error: String(error instanceof Error ? error.message : error) } });
       return false;
     }
   }
@@ -1454,12 +1457,13 @@ export class ClankerBot {
     // Resolve target channel: prefer reply channels, then guild system channel,
     // then first sendable channel in the guild.
     const permissions = getReplyPermissions(settings);
-    const replyChannelIds = Array.isArray(permissions.replyChannelIds)
-      ? permissions.replyChannelIds.map((id) => String(id).trim()).filter(Boolean)
-      : [];
+    const greetingCandidateIds = [
+      ...(Array.isArray(permissions.replyChannelIds) ? permissions.replyChannelIds : []),
+      ...(Array.isArray(permissions.discoveryChannelIds) ? permissions.discoveryChannelIds : [])
+    ].map((id) => String(id).trim()).filter(Boolean);
 
     let targetChannel = null;
-    for (const channelId of replyChannelIds) {
+    for (const channelId of greetingCandidateIds) {
       const channel = this.client.channels.cache.get(channelId);
       if (isSendableChannel(channel) && isChannelAllowedForPermissions(settings, channelId)) {
         targetChannel = channel;
@@ -1727,7 +1731,8 @@ export class ClankerBot {
         triggerMessageIds,
         source,
         sendAsReply: true,
-        canStandalonePost: isReplyChannelForPermissions(settings, String(message.channelId)),
+        canStandalonePost: isReplyChannelForPermissions(settings, String(message.channelId))
+          || isDiscoveryChannelForPermissions(settings, String(message.channelId)),
         addressing,
         replyPrompts,
         automationControl: resultMetadata || null,
@@ -1994,6 +1999,7 @@ export class ClankerBot {
 
     const explicit = [
       ...permissions.replyChannelIds,
+      ...permissions.discoveryChannelIds,
       ...permissions.allowedChannelIds
     ];
 

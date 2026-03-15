@@ -747,6 +747,9 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
       // --- Await subprocess that was spawning in parallel with API connect ---
       voxClient = await subprocessSpawnPromise;
+      if (voxClient) {
+        voxClient.logAction = (action) => manager.store.logAction(action);
+      }
 
       const now = Date.now();
       const session: VoiceSession = {

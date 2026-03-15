@@ -131,7 +131,7 @@ export class LLMService {
       try {
         this.claudeOAuth = createClaudeOAuthClient(appConfig.claudeOAuthRefreshToken || "");
       } catch (error) {
-        console.error("[claude-oauth] Failed to initialize:", error);
+        this.store.logAction({kind: "llm_lifecycle", content: "claude_oauth_init_failed", metadata: { error: String(error?.message || error) }});
       }
     }
 
@@ -140,7 +140,7 @@ export class LLMService {
       try {
         this.codexOAuth = createCodexOAuthClient(appConfig.openaiOAuthRefreshToken || "");
       } catch (error) {
-        console.error("[openai-oauth] Failed to initialize:", error);
+        this.store.logAction({kind: "llm_lifecycle", content: "openai_oauth_init_failed", metadata: { error: String(error?.message || error) }});
       }
     }
 
@@ -161,9 +161,9 @@ export class LLMService {
       const startedAt = Date.now();
       try {
         await this.claudeOAuth.warmup();
-        console.log(`[claude-oauth] Token warmup completed in ${Date.now() - startedAt}ms`);
+        this.store.logAction({kind: "llm_lifecycle", content: "claude_oauth_warmup_completed", metadata: { durationMs: Date.now() - startedAt }});
       } catch (error) {
-        console.error(`[claude-oauth] Token warmup failed after ${Date.now() - startedAt}ms:`, error);
+        this.store.logAction({kind: "llm_lifecycle", content: "claude_oauth_warmup_failed", metadata: { durationMs: Date.now() - startedAt, error: String(error?.message || error) }});
       }
     }
   }

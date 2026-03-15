@@ -845,6 +845,8 @@ export class SessionLifecycle {
         const pending = session.pendingResponse;
         if (pending && typeof pending === "object") {
           pending.audioReceivedAt = Number(session.lastAudioDeltaAt || now);
+          pending.audioSuppressedBytes = Math.max(0, Number(pending.audioSuppressedBytes || 0)) + pcmByteLength;
+          pending.audioSuppressedChunks = Math.max(0, Number(pending.audioSuppressedChunks || 0)) + 1;
         }
         this.host.replyManager.syncAssistantOutputState(session, "audio_delta_suppressed");
         return;
@@ -875,6 +877,16 @@ export class SessionLifecycle {
         return;
       }
 
+      // Track per-utterance audio delivery telemetry
+      const pending = session.pendingResponse;
+      if (pending && typeof pending === "object") {
+        pending.audioDeliveredBytes = Math.max(0, Number(pending.audioDeliveredBytes || 0)) + pcmByteLength;
+        pending.audioDeliveredChunks = Math.max(0, Number(pending.audioDeliveredChunks || 0)) + 1;
+        if (!pending.firstAudioAt) {
+          pending.firstAudioAt = now;
+        }
+      }
+
       this.host.replyManager.markBotTurnOut(session, settings);
       this.host.replyManager.syncAssistantOutputState(session, "audio_delta");
       if (isRealtimeMode(session.mode)) {
@@ -882,7 +894,6 @@ export class SessionLifecycle {
       }
 
       if (this.host.replyManager.pendingResponseHasAudio(session)) {
-        const pending = session.pendingResponse;
         if (pending) {
           pending.audioReceivedAt = session.lastAudioDeltaAt;
         }
@@ -1342,9 +1353,7 @@ export class SessionLifecycle {
 
     const onCrashed = ({ code, signal }) => {
       if (session.ending) return;
-      console.error(
-        `[voiceSessionManager] subprocess crashed code=${code} signal=${signal} guild=${session.guildId}`
-      );
+      this.host.store.logAction({kind: "voice_error", content: "clankvox_subprocess_crashed", metadata: { code, signal, guildId: session.guildId, sessionId: session.id }});
       this.fireAndForgetEndSession(session, {
         guildId: session.guildId,
         reason: "subprocess_crashed",

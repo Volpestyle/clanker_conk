@@ -196,7 +196,6 @@ type PendingTtsIngressChunk = {
   remainingOutputSamples: number;
 };
 
-const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 const TTS_INGRESS_TARGET_SAMPLES = 48_000 * 2; // Keep clankvox's live TTS buffer around 2s.
 const TTS_INGRESS_CHUNK_MS = 240;
 const TTS_INGRESS_RECHECK_MS = 60;
@@ -393,6 +392,7 @@ export class ClankvoxClient extends EventEmitter {
   private _exitWaiterPromise: Promise<void> | null = null;
   private lastVoiceSessionId: string | null = null;
   private lastVoiceStateUserId: string | null = null;
+  logAction: ((action: { kind: string; guildId?: string | null; channelId?: string | null; userId?: string | null; content: string; metadata?: Record<string, unknown> }) => void) | null = null;
 
   constructor(guildId: string, channelId: string, guild: ClankvoxGuildLike) {
     super();
@@ -400,6 +400,16 @@ export class ClankvoxClient extends EventEmitter {
     this.guildId = guildId;
     this.channelId = channelId;
     this.guild = guild;
+  }
+
+  private log(kind: string, content: string, metadata?: Record<string, unknown>) {
+    if (this.logAction) {
+      try {
+        this.logAction({ kind, content, metadata: metadata || {} });
+      } catch {
+        // Structured logging failed — fall through to console
+      }
+    }
   }
 
   static async spawn(
@@ -451,6 +461,7 @@ export class ClankvoxClient extends EventEmitter {
           },
         });
       } else {
+        this.log("voice_lifecycle", "clankvox_prebuilt_binary_not_found");
         console.warn(
           "[clankvox] Pre-built binary not found, using cargo run --release (slow first start)"
         );
@@ -466,6 +477,7 @@ export class ClankvoxClient extends EventEmitter {
         });
       }
     } catch (err) {
+      this.log("voice_error", "clankvox_spawn_error", { error: String((err as Error)?.message || err) });
       console.error("[clankvox] spawn error:", err);
       this.emit("error", `spawn_error: ${String((err as Error)?.message || err)}`);
       this._resolveExitWaiter?.();
@@ -512,6 +524,7 @@ export class ClankvoxClient extends EventEmitter {
 
   private _handleExit(exitCode: number | null, signalCode: number | null) {
     if (!this.destroyed) {
+      this.log("voice_error", "clankvox_exited_unexpectedly", { exitCode, signalCode });
       console.error(
         `[clankvox] exited unexpectedly code=${exitCode} signal=${signalCode}`
       );
@@ -608,24 +621,23 @@ export class ClankvoxClient extends EventEmitter {
     const adapter = guild.voiceAdapterCreator({
       onVoiceServerUpdate: (data) => {
         this.adapterCallbackCount.voiceServer++;
-        if (AUDIO_DEBUG) {
-          console.log(
-            `[clankvox] adapter onVoiceServerUpdate #${this.adapterCallbackCount.voiceServer}`,
-            `endpoint=${data?.endpoint ?? "null"} token=${data?.token ? "present" : "missing"}`
-          );
-        }
+        this.log("voice_runtime", "clankvox_voice_server_update", {
+          endpoint: data?.endpoint ?? null,
+          hasToken: !!data?.token,
+          count: this.adapterCallbackCount.voiceServer
+        });
         this._send({ type: "voice_server", data });
       },
       onVoiceStateUpdate: (data) => {
         this.adapterCallbackCount.voiceState++;
         this.lastVoiceSessionId = asString(data?.session_id)?.trim() || null;
         this.lastVoiceStateUserId = asString(data?.user_id)?.trim() || null;
-        if (AUDIO_DEBUG) {
-          console.log(
-            `[clankvox] adapter onVoiceStateUpdate #${this.adapterCallbackCount.voiceState}`,
-            `session_id=${data?.session_id ?? "null"} channel_id=${data?.channel_id ?? "null"} user_id=${data?.user_id ?? "null"}`
-          );
-        }
+        this.log("voice_runtime", "clankvox_voice_state_update", {
+          sessionId: data?.session_id ?? null,
+          channelId: data?.channel_id ?? null,
+          userId: data?.user_id ?? null,
+          count: this.adapterCallbackCount.voiceState
+        });
         this._send({ type: "voice_state", data });
       }
     });
@@ -824,12 +836,29 @@ export class ClankvoxClient extends EventEmitter {
         }
         break;
       }
+      case "log": {
+        const level = String(msg.level || "info").trim();
+        const target = String(msg.target || "").trim();
+        const message = String(msg.message || "").trim();
+        const fields = msg.fields && typeof msg.fields === "object" ? msg.fields : {};
+
+        // Map Rust tracing levels to our log levels
+        const kind = level === "error" ? "voice_error"
+          : level === "warn" ? "voice_error"
+          : "voice_runtime";
+
+        // Use the message as the content key (clankvox events use descriptive names like clankvox_voice_ready)
+        const content = message || `clankvox_${target.split("::").pop() || "trace"}`;
+
+        this.log(kind, content, {
+          clankvoxLevel: level,
+          clankvoxTarget: target,
+          ...(typeof fields === "object" && fields !== null ? fields as Record<string, unknown> : {})
+        });
+        break;
+      }
       default:
-        if (AUDIO_DEBUG) {
-          console.log(
-            `[clankvox] unknown message: ${msgType}`
-          );
-        }
+        this.log("voice_runtime", "clankvox_unknown_ipc_message", { messageType: msgType });
         break;
     }
   }
@@ -877,18 +906,18 @@ export class ClankvoxClient extends EventEmitter {
     if (!payload || !this.guild) return;
     this.adapterCallbackCount.op4Forward++;
     const payloadData = isRecord(payload.d) ? payload.d : null;
-    if (AUDIO_DEBUG) {
-      console.log(
-        `[clankvox] _forwardToGateway OP4 #${this.adapterCallbackCount.op4Forward}`,
-        `guild_id=${payloadData?.guild_id ?? "null"} channel_id=${payloadData?.channel_id ?? "null"}`
-      );
-    }
+    this.log("voice_runtime", "clankvox_gateway_op4_forwarded", {
+      guildId: payloadData?.guild_id ?? null,
+      channelId: payloadData?.channel_id ?? null,
+      count: this.adapterCallbackCount.op4Forward
+    });
     try {
       const shard = this.guild.shard;
       if (shard && typeof shard.send === "function") {
         shard.send(payload);
       }
     } catch (err) {
+      this.log("voice_error", "clankvox_gateway_op4_forward_failed", { error: String((err as Error)?.message || err) });
       console.error(
         "[clankvox] failed to forward OP4 to gateway:",
         err

@@ -1361,14 +1361,56 @@ test("dashboard settings save replaces the full authored snapshot so default rev
 });
 
 test("dashboard settings save success logging stays quiet by default and can be enabled", async () => {
-  const priorConsoleInfo = console.info;
-  const infoCalls: unknown[][] = [];
-  console.info = (...args) => {
-    infoCalls.push(args);
-  };
+  const defaultActions: { content: string }[] = [];
+  const defaultLoggingResult = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    const prev = store.onActionLogged;
+    store.onActionLogged = (action) => {
+      defaultActions.push(action);
+      if (prev) prev(action);
+    };
 
-  try {
-    const defaultLoggingResult = await withDashboardServer({}, async ({ baseUrl }) => {
+    const beforeResponse = await fetch(`${baseUrl}/api/settings`);
+    assert.equal(beforeResponse.status, 200);
+    const beforeJson = await beforeResponse.json();
+    const expectedUpdatedAt = String(beforeJson._meta?.updatedAt || "");
+    assert.equal(Boolean(expectedUpdatedAt), true);
+
+    const response = await fetch(`${baseUrl}/api/settings`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        _meta: {
+          expectedUpdatedAt
+        },
+        ...beforeJson.intent
+      })
+    });
+
+    assert.equal(response.status, 200);
+  });
+
+  if (defaultLoggingResult?.skipped) {
+    return;
+  }
+
+  assert.equal(defaultActions.some((a) => a.content === "settings_save_success"), false);
+
+  const debugActions: { content: string }[] = [];
+  const debugLoggingResult = await withDashboardServer(
+    {
+      appConfigOverrides: {
+        dashboardSettingsSaveDebug: true
+      }
+    },
+    async ({ baseUrl, store }) => {
+      const prev = store.onActionLogged;
+      store.onActionLogged = (action) => {
+        debugActions.push(action);
+        if (prev) prev(action);
+      };
+
       const beforeResponse = await fetch(`${baseUrl}/api/settings`);
       assert.equal(beforeResponse.status, 200);
       const beforeJson = await beforeResponse.json();
@@ -1389,54 +1431,14 @@ test("dashboard settings save success logging stays quiet by default and can be 
       });
 
       assert.equal(response.status, 200);
-    });
-
-    if (defaultLoggingResult?.skipped) {
-      return;
     }
+  );
 
-    assert.equal(infoCalls.some((args) => args[0] === "Saved dashboard settings snapshot"), false);
-
-    infoCalls.length = 0;
-
-    const debugLoggingResult = await withDashboardServer(
-      {
-        appConfigOverrides: {
-          dashboardSettingsSaveDebug: true
-        }
-      },
-      async ({ baseUrl }) => {
-        const beforeResponse = await fetch(`${baseUrl}/api/settings`);
-        assert.equal(beforeResponse.status, 200);
-        const beforeJson = await beforeResponse.json();
-        const expectedUpdatedAt = String(beforeJson._meta?.updatedAt || "");
-        assert.equal(Boolean(expectedUpdatedAt), true);
-
-        const response = await fetch(`${baseUrl}/api/settings`, {
-          method: "PUT",
-          headers: {
-            "content-type": "application/json"
-          },
-          body: JSON.stringify({
-            _meta: {
-              expectedUpdatedAt
-            },
-            ...beforeJson.intent
-          })
-        });
-
-        assert.equal(response.status, 200);
-      }
-    );
-
-    if (debugLoggingResult?.skipped) {
-      return;
-    }
-
-    assert.equal(infoCalls.some((args) => args[0] === "Saved dashboard settings snapshot"), true);
-  } finally {
-    console.info = priorConsoleInfo;
+  if (debugLoggingResult?.skipped) {
+    return;
   }
+
+  assert.equal(debugActions.some((a) => a.content === "settings_save_success"), true);
 });
 
 test("dashboard settings save reports runtime apply failure without rolling back the saved config", async () => {

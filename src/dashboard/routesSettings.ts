@@ -52,9 +52,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
 
     const current = store.getSettingsRecord();
     if (!expectedUpdatedAt) {
-      console.warn("Rejected dashboard settings save without version metadata", {
-        currentUpdatedAt: current.updatedAt
-      });
+      store.logAction({kind: "dashboard", content: "settings_save_rejected_no_version", metadata: { currentUpdatedAt: current.updatedAt }});
       return c.json(
         {
           error: "settings_version_required",
@@ -71,10 +69,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     }
 
     if (current.updatedAt && expectedUpdatedAt !== current.updatedAt) {
-      console.warn("Rejected stale dashboard settings save", {
-        expectedUpdatedAt,
-        currentUpdatedAt: current.updatedAt
-      });
+      store.logAction({kind: "dashboard", content: "settings_save_rejected_stale", metadata: { expectedUpdatedAt, currentUpdatedAt: current.updatedAt }});
       return c.json(
         {
           error: "settings_conflict",
@@ -92,10 +87,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
 
     const saved = store.replaceSettingsWithVersion(body, expectedUpdatedAt);
     if (!saved.ok) {
-      console.warn("Rejected dashboard settings save after compare-and-swap conflict", {
-        expectedUpdatedAt,
-        currentUpdatedAt: saved.updatedAt
-      });
+      store.logAction({kind: "dashboard", content: "settings_save_rejected_cas_conflict", metadata: { expectedUpdatedAt, currentUpdatedAt: saved.updatedAt }});
       return c.json(
         {
           error: "settings_conflict",
@@ -112,10 +104,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     }
 
     if (appConfig.dashboardSettingsSaveDebug) {
-      console.info("Saved dashboard settings snapshot", {
-        previousUpdatedAt: current.updatedAt,
-        updatedAt: saved.updatedAt
-      });
+      store.logAction({kind: "dashboard", content: "settings_save_success", metadata: { previousUpdatedAt: current.updatedAt, updatedAt: saved.updatedAt }});
     }
 
     let saveAppliedToRuntime = true;
@@ -125,7 +114,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     } catch (error) {
       saveAppliedToRuntime = false;
       saveApplyError = error instanceof Error ? error.message : String(error);
-      console.error("Saved settings, but failed to apply them to the live runtime:", error);
+      store.logAction({kind: "dashboard", level: "error", content: "settings_save_runtime_apply_failed", metadata: { error: String(error?.message || error) }});
     }
 
     return c.json(

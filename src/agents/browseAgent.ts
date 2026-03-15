@@ -123,7 +123,7 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
   });
 
   if (profile) {
-    console.log(`[browseAgent] Using persistent browser profile: ${profile}  sessionKey=${sessionKey}`);
+    store.logAction({kind: "browser_agent", content: "browser_persistent_profile", metadata: { profile, sessionKey }});
   }
 
   const messages: ToolLoopMessage[] = [
@@ -257,7 +257,7 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
     }
   } finally {
     await browserManager.close(sessionKey).catch((err) => {
-      console.warn(`[browseAgent] Error closing browser session ${sessionKey}:`, err);
+      store.logAction({kind: "browser_agent", content: "browser_session_close_error", metadata: { sessionKey, error: String(err?.message || err) }});
     });
   }
 
@@ -634,7 +634,7 @@ export class BrowserAgentSession implements SubAgentSession {
     if (!this.browserClosed) {
       this.browserClosed = true;
       this.browserManager.close(this.sessionKey).catch((err) => {
-        console.warn(`[BrowserAgentSession] Error closing session ${this.sessionKey}:`, err);
+        this.store.logAction({kind: "browser_agent", content: "browser_agent_session_close_error", metadata: { sessionKey: this.sessionKey, error: String(err?.message || err) }});
       });
     }
   }

@@ -1787,6 +1787,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         const toolErrorSummary = result.isError
           ? summarizeReplyToolError(result.content)
           : null;
+        const toolResultSummary = summarizeToolResultForLog(result.content, toolCall.name);
 
         runtime.store.logAction({
           kind: "voice_runtime",
@@ -1806,7 +1807,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             durationMs: toolDurationMs,
             imageInputCount: Array.isArray(result.imageInputs) ? result.imageInputs.length : 0,
             isError: result.isError || false,
-            error: toolErrorSummary
+            error: toolErrorSummary,
+            toolResultSummary
           }
         });
 
@@ -2071,6 +2073,111 @@ function summarizeReplyToolError(content: unknown) {
   const errorText = normalizeInlineText(payloadError, 280);
   if (errorText) return errorText;
   return normalizeInlineText(content, 280) || null;
+}
+
+/**
+ * Extract a compact, structured summary of a tool result for logging.
+ * Returns null for tools whose results are uninteresting to log.
+ * For search/play tools, extracts result titles and IDs so operators
+ * can see what the model was offered without wading through full payloads.
+ */
+function summarizeToolResultForLog(
+  content: unknown,
+  toolName: string
+): Record<string, unknown> | string | null {
+  const MAX_RESULT_PREVIEW_CHARS = 400;
+  const payload = parseReplyToolResultPayload(content);
+  if (!payload) {
+    // Not JSON — return a truncated string preview
+    const raw = String(content || "").trim();
+    if (!raw) return null;
+    return raw.length > MAX_RESULT_PREVIEW_CHARS
+      ? raw.slice(0, MAX_RESULT_PREVIEW_CHARS) + "…"
+      : raw;
+  }
+
+  const name = String(toolName || "").trim().toLowerCase();
+
+  // Music/video search and play tools: extract result titles and IDs
+  if (
+    name === "video_search" || name === "video_play" ||
+    name === "music_search" || name === "music_play" ||
+    name === "music_queue_add" || name === "music_queue_next"
+  ) {
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    const resultSummaries = results.slice(0, 5).map((r: unknown) => {
+      if (!r || typeof r !== "object") return null;
+      const entry = r as Record<string, unknown>;
+      return {
+        title: normalizeInlineText(entry.title, 80) || null,
+        id: normalizeInlineText(entry.id, 60) || null,
+        platform: normalizeInlineText(entry.platform, 20) || null,
+        channel: normalizeInlineText(entry.channel || entry.artist || entry.artists, 60) || null,
+        url: normalizeInlineText(entry.url, 120) || null
+      };
+    }).filter(Boolean);
+    return {
+      ok: payload.ok ?? null,
+      resultCount: results.length,
+      results: resultSummaries.length > 0 ? resultSummaries : null,
+      selectedId: normalizeInlineText(payload.selectedId || payload.selection_id, 60) || null,
+      trackTitle: normalizeInlineText(payload.title || payload.trackTitle, 80) || null,
+      trackId: normalizeInlineText(payload.trackId || payload.id, 60) || null,
+      playing: payload.playing ?? null,
+      error: normalizeInlineText(payload.error, 200) || null
+    };
+  }
+
+  // Browser browse: extract session ID and completion status
+  if (name === "browser_browse") {
+    return {
+      ok: payload.ok ?? null,
+      sessionId: normalizeInlineText(payload.session_id, 40) || null,
+      completed: payload.completed ?? null,
+      error: normalizeInlineText(payload.error, 200) || null,
+      resultChars: String(content || "").length
+    };
+  }
+
+  // Web search: extract query and result count
+  if (name === "web_search") {
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    return {
+      resultCount: results.length,
+      resultTitles: results.slice(0, 3).map((r: unknown) =>
+        normalizeInlineText((r as Record<string, unknown>)?.title, 80)
+      ).filter(Boolean),
+      error: normalizeInlineText(payload.error, 200) || null
+    };
+  }
+
+  // Memory tools: compact summary
+  if (name === "memory_write" || name === "memory_search") {
+    return {
+      ok: payload.ok ?? null,
+      count: Array.isArray(payload.written) ? payload.written.length
+        : Array.isArray(payload.results) ? payload.results.length
+        : null,
+      error: normalizeInlineText(payload.error, 200) || null
+    };
+  }
+
+  // Screen watch: started/stopped
+  if (name === "start_screen_watch" || name === "stop_screen_watch") {
+    return {
+      ok: payload.ok ?? null,
+      started: payload.started ?? null,
+      stopped: payload.stopped ?? null,
+      error: normalizeInlineText(payload.error, 200) || null
+    };
+  }
+
+  // Default: truncated raw content
+  const raw = String(content || "").trim();
+  if (!raw) return null;
+  return raw.length > MAX_RESULT_PREVIEW_CHARS
+    ? raw.slice(0, MAX_RESULT_PREVIEW_CHARS) + "…"
+    : raw;
 }
 
 function classifyVoiceToolPrePlaybackRecovery(

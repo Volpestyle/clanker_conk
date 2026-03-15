@@ -516,7 +516,7 @@ export async function runOpenAiComputerUseTask({
     throw error;
   } finally {
     await browserManager.close(sessionKey).catch((closeError) => {
-      console.warn(`[openAiComputerUseRuntime] Error closing browser session ${sessionKey}:`, closeError);
+      store.logAction({kind: "bot_error", content: "computer_use_browser_session_close_error", metadata: { sessionKey, error: String(closeError?.message || closeError) }});
     });
   }
 }

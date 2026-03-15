@@ -292,10 +292,13 @@ test("runOpenAiComputerUseTask logs structured failures and preserves the origin
     /browser_open_failed/
   );
 
-  assert.equal(logs.length, 1);
+  assert.equal(logs.length, 2);
   assert.equal(logs[0]?.kind, "browser_browse_failed");
   assert.equal((logs[0]?.metadata as Record<string, unknown>)?.sessionKey, "session-2");
   assert.equal((logs[0]?.metadata as Record<string, unknown>)?.runtime, "openai_computer_use");
   assert.equal((logs[0]?.metadata as Record<string, unknown>)?.errorMessage, "browser_open_failed");
   assert.equal((logs[0]?.metadata as Record<string, unknown>)?.currentUrl, "https://example.com/failure");
+  // Second log: browser session close error (now routed through store.logAction)
+  assert.equal(logs[1]?.content, "computer_use_browser_session_close_error");
+  assert.equal((logs[1]?.metadata as Record<string, unknown>)?.error, "close_failed");
 });

@@ -68,6 +68,29 @@ DASHBOARD_SETTINGS_SAVE_DEBUG=false
 `RUNTIME_STRUCTURED_LOGS_FILE_PATH` is the file Promtail tails into Loki.
 `DASHBOARD_SETTINGS_SAVE_DEBUG=true` enables the otherwise-silent dashboard settings save success log.
 
+## Log pipeline coverage
+
+All structured runtime events flow through `Store.onActionLogged` → ndjson file → Promtail → Loki.
+
+| Source | Loki? | How |
+|--------|-------|-----|
+| `store.logAction()` calls (text runtime, voice runtime, LLM, tools, dashboard) | Yes | Direct pipeline |
+| ClankvoxClient Bun-side events (`clankvox_voice_server_update`, `clankvox_gateway_op4_forwarded`, etc.) | Yes | `logAction` callback injected at voice join |
+| Clankvox Rust tracing events (`clankvox_voice_ready`, `clankvox_first_video_frame_forwarded`, DAVE decrypt, H264 decoder, etc.) | Yes | IPC `log` message → `_handleMessage` → `logAction` |
+| MusicPlayer events (`music_player_ytdlp_resolved`, `music_player_ytdlp_resolution_failed`, etc.) | Yes | `logAction` callback injected at session init |
+| VoiceMusicPlayback events (`voice_music_search_complete`, `voice_music_request_complete`) | Yes | Direct `store.logAction` |
+| Dashboard settings events (`settings_save_rejected_stale`, `settings_save_success`, etc.) | Yes | Direct `store.logAction` |
+| Bot lifecycle events (`bot_logged_in`, `slash_command_browse_error`, etc.) | Yes | Direct `store.logAction` |
+| LLM OAuth events (`claude_oauth_init_failed`, `claude_oauth_warmup_completed`, etc.) | Yes | Direct `store.logAction` |
+| Shutdown fallback console lines | No | Last-resort fallback when store may be closing |
+| Fatal startup errors (before store is created) | No | `console.error` — store does not exist yet |
+| Golden harness CLI output | No | Intentional CLI report printer |
+
+Clankvox Rust tracing events are bridged via a custom `tracing::Layer` that serializes
+info/warn/error events as `OutMsg::Log` IPC messages. These flow through the TLV
+control channel to `clankvoxClient._handleMessage()`, which routes them to `logAction`.
+The existing stderr `fmt` layer is preserved for developer terminal visibility.
+
 ## Local Loki stack
 
 The repository includes:
@@ -132,7 +155,7 @@ Minimum replay payload for a text or multimodal turn:
 - addressing / admission decision
 - prompt bundle (`metadata.replyPrompts`)
 - LLM calls in order, including `toolNames`, `toolCallCount`, `stopReason`, and transcript/output previews
-- tool loop steps and tool results
+- tool loop steps and tool results (voice brain tool calls carry `toolResultSummary` with structured result data including search result titles, IDs, and selected tracks)
 - tool failures such as `browser_browse_failed`, including runtime, provider/model, URL, and error details
 - attachment artifacts, image lookup results, fetched pages, or other retrieved context
 - final delivered action: reaction, sent message, sent reply, skip, or failure
@@ -274,6 +297,7 @@ Interpretation notes:
 
 - `voice_brain_*` events come from the full-brain reply path. They should carry `metadata.replyPath="brain"` and `metadata.realtimeToolOwnership="transport_only"`.
 - Failed `voice_brain_tool_call` events also carry `metadata.error` with the tool-returned error summary when one is available, so you do not need to infer the failure from `metadata.isError` alone.
+- `voice_brain_tool_call` carries `metadata.toolResultSummary` with a structured summary of what the tool returned. For search/play tools this includes result titles, IDs, platforms, and selected track info. For browser tools it includes session ID and completion status. For other tools it falls back to a truncated raw string. This eliminates the need to cross-reference tool results from follow-up LLM call logs.
 - `realtime_tool_call_*` events come from provider-native tool execution. These happen only when the session owns provider tools directly (`realtimeToolOwnership="provider_native"`).
 - `session.mode` still tells you which realtime runtime carried audio. It does not, by itself, tell you who owned planning or tools.
 
@@ -419,6 +443,51 @@ Operator notes:
 - if `outputLockReason=bot_audio_buffered` persists for more than a couple seconds after `openai_realtime_response_done`, suspect stale `clankvox` playback telemetry rather than real remaining speech
 - if `voice_turn_addressing` shows `reason=bot_turn_open` but a same-moment `voice_direct_address_interrupt` follows, the turn cut through output lock because it was an allowed wake-word / bot-name interruption
 - if a deferred turn keeps rescheduling, inspect whether `voice_activity_started` is followed by `voice_turn_dropped_silence_gate`; silence-only captures should not be treated the same as real live speech
+
+## Bot utterance playback telemetry
+
+When speech sounds cut off mid-sentence or you need to verify how much of the
+model's intended text was actually spoken aloud, use the per-utterance playback
+telemetry.
+
+Start with this event:
+
+- `bot_utterance_completed`
+
+This fires when the TTS provider signals it has finished generating audio for a
+given utterance (ElevenLabs `isFinal`, OpenAI `response.done`, etc.). It
+captures the full audio delivery picture for that single utterance.
+
+Suggested query:
+
+```logql
+{job="clanker_runtime",kind="voice_runtime"} |= "bot_utterance_completed"
+```
+
+Inspect these metadata fields together:
+
+- `utteranceTextLength` — characters of text sent to the TTS provider
+- `utteranceTextPreview` — first 120 characters of the intended speech
+- `hadAudio` — did any audio reach clankvox at all
+- `audioDeliveredBytes` — PCM bytes actually forwarded to clankvox for playback
+- `audioDeliveredChunks` — number of audio_delta chunks forwarded
+- `audioSuppressedBytes` — PCM bytes dropped by barge-in suppression
+- `audioSuppressedChunks` — number of audio_delta chunks dropped by barge-in suppression
+- `estimatedPlaybackMs` — estimated playback duration from delivered bytes (PCM 16-bit mono at output sample rate)
+- `firstAudioLatencyMs` — time from utterance request to first audio chunk delivered
+- `deliveryRatio` — percentage of total audio bytes that were delivered vs suppressed (100 = all delivered, 0 = all suppressed)
+- `ttsBufferedSamplesAtDone` — clankvox TTS buffer depth when the provider signalled done; high values mean audio is still in the pipeline
+- `ttsProviderEndReason` — why the TTS provider ended (e.g. `completed`, `cancelled`)
+- `hadBargeSuppression` — whether barge-in suppression was active when this response finished
+
+Interpretation notes:
+
+- if `deliveryRatio < 100` and `audioSuppressedBytes > 0`, a barge-in interrupt caused some TTS audio to be silently dropped. The bot was generating speech but the user interrupted, and the remaining audio was suppressed.
+- if `estimatedPlaybackMs` is much shorter than expected for `utteranceTextLength` (rough rule: ~150 WPM, or ~4 chars per 100ms), the TTS stream may have ended prematurely.
+- if `hadAudio=false` and `utteranceTextLength > 0`, the TTS provider returned no audio at all for that text. Check ElevenLabs idle-timeout reconnect events or `voice_text_utterance_failed`.
+- if `ttsBufferedSamplesAtDone` is high (> 48000 = ~1 second), audio is still in the clankvox pipeline waiting to be played. This is normal if the response just finished; it is suspicious if the bot goes silent while buffer samples remain.
+- pair with `realtime_assistant_utterance_queue_cleared` to see how many queued sentence chunks from the same brain turn were dropped before they could be spoken. The `droppedSources` field shows what kinds of utterances were lost and `droppedTextChars` shows the total unspoken text.
+- for end-to-end speech reconstruction, correlate `bot_utterance_completed` with `realtime_reply_requested` (text generated) and `voice_turn_finalized` (user speech) using `sessionId` and `requestId`.
 
 ## Video transport and DAVE decrypt workflow
 
