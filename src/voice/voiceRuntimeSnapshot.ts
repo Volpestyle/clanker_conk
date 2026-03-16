@@ -11,7 +11,7 @@ import {
 import { listActiveNativeDiscordScreenSharers } from "./nativeDiscordScreenShare.ts";
 import { isRealtimeMode, resolveRealtimeProvider } from "./voiceSessionHelpers.ts";
 import type {
-  StreamWatchBrainContextEntry,
+  StreamWatchNoteEntry,
   VoiceAddressingState,
   VoiceConversationContext,
   VoiceLivePromptSnapshotEntry,
@@ -45,7 +45,7 @@ type RuntimeSnapshotDeferredActionQueueLike = {
   getDeferredQueuedUserTurns: (session: VoiceSession) => unknown[];
 };
 
-type StreamWatchBrainContextLike = {
+type StreamWatchNotePayloadLike = {
   prompt?: string | null;
   notes?: unknown[];
   lastAt?: number;
@@ -80,10 +80,10 @@ interface VoiceRuntimeSnapshotDeps {
     now?: number;
     maxItems?: number;
   }) => VoiceAddressingState | null;
-  getStreamWatchBrainContextForPrompt: (
+  getStreamWatchNotesForPrompt: (
     session: VoiceSession,
     settings: Record<string, unknown> | null
-  ) => StreamWatchBrainContextLike;
+  ) => StreamWatchNotePayloadLike;
   snapshotMusicRuntimeState: (session: VoiceSession) => unknown;
 }
 
@@ -469,8 +469,8 @@ export function buildVoiceRuntimeSnapshot(
       session.modelContextSummary && typeof session.modelContextSummary === "object"
         ? session.modelContextSummary.decider || null
         : null;
-    const streamWatchRawEntries: StreamWatchBrainContextEntry[] = Array.isArray(session.streamWatch?.brainContextEntries)
-      ? session.streamWatch.brainContextEntries
+    const streamWatchRawEntries: StreamWatchNoteEntry[] = Array.isArray(session.streamWatch?.noteEntries)
+      ? session.streamWatch.noteEntries
       : [];
     const streamWatchVisualFeed = streamWatchRawEntries
       .map((entry) => {
@@ -487,7 +487,7 @@ export function buildVoiceRuntimeSnapshot(
         };
       })
       .filter((entry) => entry !== null);
-    const streamWatchBrainContext = deps.getStreamWatchBrainContextForPrompt(
+    const streamWatchNotes = deps.getStreamWatchNotesForPrompt(
       session,
       session.settingsSnapshot || null
     );
@@ -685,28 +685,28 @@ export function buildVoiceRuntimeSnapshot(
         latestFrameApproxBytes: streamWatchLatestFrameApproxBytes,
         acceptedFrameCountInWindow: Number(session.streamWatch?.acceptedFrameCountInWindow || 0),
         frameWindowStartedAt: toIsoOrNull(session.streamWatch?.frameWindowStartedAt),
-        lastBrainContextAt: toIsoOrNull(session.streamWatch?.lastBrainContextAt),
-        lastBrainContextProvider: session.streamWatch?.lastBrainContextProvider || null,
-        lastBrainContextModel: session.streamWatch?.lastBrainContextModel || null,
-        brainContextCount: Array.isArray(session.streamWatch?.brainContextEntries)
-          ? session.streamWatch.brainContextEntries.length
+        lastNoteAt: toIsoOrNull(session.streamWatch?.lastNoteAt),
+        lastNoteProvider: session.streamWatch?.lastNoteProvider || null,
+        lastNoteModel: session.streamWatch?.lastNoteModel || null,
+        noteCount: Array.isArray(session.streamWatch?.noteEntries)
+          ? session.streamWatch.noteEntries.length
           : 0,
         ingestedFrameCount: Number(session.streamWatch?.ingestedFrameCount || 0),
         visualFeed: streamWatchVisualFeed,
-        brainContextPayload: streamWatchBrainContext
+        notePayload: streamWatchNotes
           ? {
-            prompt: String(streamWatchBrainContext.prompt || "").trim(),
-            notes: Array.isArray(streamWatchBrainContext.notes)
-              ? streamWatchBrainContext.notes
+            prompt: String(streamWatchNotes.prompt || "").trim(),
+            notes: Array.isArray(streamWatchNotes.notes)
+              ? streamWatchNotes.notes
                 .map((note) => String(note || "").trim())
                 .filter(Boolean)
                 .slice(-24)
               : [],
-            lastAt: Number(streamWatchBrainContext.lastAt || 0)
-              ? new Date(Number(streamWatchBrainContext.lastAt || 0)).toISOString()
+            lastAt: Number(streamWatchNotes.lastAt || 0)
+              ? new Date(Number(streamWatchNotes.lastAt || 0)).toISOString()
               : null,
-            provider: streamWatchBrainContext.provider || null,
-            model: streamWatchBrainContext.model || null
+            provider: streamWatchNotes.provider || null,
+            model: streamWatchNotes.model || null
           }
           : null,
         nativeDiscord: {

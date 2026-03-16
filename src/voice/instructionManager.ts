@@ -211,7 +211,7 @@ interface BuildRealtimeMemorySliceArgs {
 type InstructionManagerHost = VoiceToolCallManager & {
   store: InstructionStoreLike;
   resolveVoiceSpeakerName: (session: VoiceSession, userId?: string | null) => string;
-  getStreamWatchBrainContextForPrompt: (
+  getStreamWatchNotesForPrompt: (
     session: VoiceSession,
     settings?: InstructionSettings
   ) => StreamWatchPromptContext | null;
@@ -753,11 +753,11 @@ export class InstructionManager {
       maxChars: REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
       stage: "build_realtime_instructions"
     });
-    const streamWatchBrainContext = this.host.getStreamWatchBrainContextForPrompt(session, settings);
+    const streamWatchNotes = this.host.getStreamWatchNotesForPrompt(session, settings);
     const hasScreenFrameContext =
-      Array.isArray(streamWatchBrainContext?.notes) && streamWatchBrainContext.notes.length > 0;
-    const hasActiveScreenFrameContext = hasScreenFrameContext && Boolean(streamWatchBrainContext?.active);
-    const hasRecentScreenFrameMemory = hasScreenFrameContext && !streamWatchBrainContext?.active;
+      Array.isArray(streamWatchNotes?.notes) && streamWatchNotes.notes.length > 0;
+    const hasActiveScreenFrameContext = hasScreenFrameContext && Boolean(streamWatchNotes?.active);
+    const hasRecentScreenFrameMemory = hasScreenFrameContext && !streamWatchNotes?.active;
     const screenShareCapability = this.host.getVoiceScreenWatchCapability({
       settings,
       guildId: session?.guildId || null,
@@ -1136,8 +1136,8 @@ export class InstructionManager {
       sections.push(
         [
           hasActiveScreenFrameContext ? "Screen-watch frame context:" : "Recent screen-watch memory:",
-          `- Guidance: ${String(streamWatchBrainContext?.prompt || "").trim()}`,
-          ...(streamWatchBrainContext?.notes || []).slice(-8).map((note) => `- ${note}`),
+          `- Guidance: ${String(streamWatchNotes?.prompt || "").trim()}`,
+          ...(streamWatchNotes?.notes || []).slice(-8).map((note) => `- ${note}`),
           hasActiveScreenFrameContext
             ? "- Treat these notes as snapshots, not a continuous feed."
             : "- Treat these notes as earlier snapshots, not a current live view."

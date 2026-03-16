@@ -32,7 +32,7 @@ export type VoiceVisualFeedEntry = {
   speakerName: string | null;
 };
 
-export type VoiceBrainContextPayload = {
+export type VoiceNotePayload = {
   prompt: string;
   notes: string[];
   lastAt: string | null;
@@ -75,7 +75,7 @@ export type GenerationContextSnapshot = {
   conversationContext: {
     attentionMode?: "ACTIVE" | "AMBIENT" | string;
     currentSpeakerActive?: boolean;
-    streamWatchBrainContext?: string[];
+    streamWatchNotes?: string[];
     addressing?: { talkingTo?: string | null; confidence?: number } | null;
     [key: string]: unknown;
   } | null;
@@ -284,12 +284,12 @@ export type VoiceSession = {
     acceptedFrameCountInWindow: number;
     frameWindowStartedAt: string | null;
     ingestedFrameCount: number;
-    lastBrainContextAt: string | null;
-    lastBrainContextProvider: string | null;
-    lastBrainContextModel: string | null;
-    brainContextCount: number;
+    lastNoteAt: string | null;
+    lastNoteProvider: string | null;
+    lastNoteModel: string | null;
+    noteCount: number;
     visualFeed: VoiceVisualFeedEntry[];
-    brainContextPayload: VoiceBrainContextPayload;
+    notePayload: VoiceNotePayload;
   };
   asrSessions: AsrSessionSnapshot[] | null;
   brainTools: BrainToolEntry[] | null;

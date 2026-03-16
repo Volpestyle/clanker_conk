@@ -3256,8 +3256,7 @@ test("smoke: runRealtimeBrainReply passes membership context into generation wit
   settingsSnapshot.voice.conversationPolicy.ambientReplyEagerness = 60;
   settingsSnapshot.voice.streamWatch = {
     enabled: true,
-    brainContextEnabled: true,
-    brainContextPrompt: "Use stream keyframes for continuity."
+    notePrompt: "Use stream keyframes for continuity."
   };
 
   const session = {
@@ -3271,8 +3270,8 @@ test("smoke: runRealtimeBrainReply passes membership context into generation wit
     streamWatch: {
       active: true,
       targetUserId: "speaker-1",
-      lastBrainContextAt: Date.now() - 1500,
-      brainContextEntries: [
+      lastNoteAt: Date.now() - 1500,
+      noteEntries: [
         {
           text: "scoreboard is visible and timer is low",
           at: Date.now() - 1_500,
@@ -3327,10 +3326,10 @@ test("smoke: runRealtimeBrainReply passes membership context into generation wit
   assert.equal(generationPayloads[0]?.runtimeEventContext?.eventType, "join");
   assert.equal(generationPayloads[0]?.runtimeEventContext?.actorDisplayName, "bob");
   assert.equal(
-    Array.isArray(generationPayloads[0]?.conversationContext?.streamWatchBrainContext?.notes),
+    Array.isArray(generationPayloads[0]?.conversationContext?.streamWatchNotes?.notes),
     true
   );
-  assert.equal(generationPayloads[0]?.conversationContext?.streamWatchBrainContext?.notes?.length, 1);
+  assert.equal(generationPayloads[0]?.conversationContext?.streamWatchNotes?.notes?.length, 1);
 });
 
 test("runRealtimeBrainReply keeps older join events in transcript timeline context after fresh membership prompts expire", async () => {

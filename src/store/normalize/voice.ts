@@ -15,7 +15,6 @@ import {
   normalizeVoiceDefaultInterruptionMode
 } from "./shared.ts";
 import {
-  normalizeStreamWatchBrainContextMode,
   normalizeStreamWatchVisualizerMode,
   resolveVoiceAdmissionModeForSettings
 } from "../../settings/voiceDashboardMappings.ts";
@@ -40,6 +39,21 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
     ).toLowerCase() === "api"
     ? "api"
     : "realtime";
+  const normalizedLegacyMode = String(streamWatch.brainContextMode || "").trim().toLowerCase() === "context_brain"
+    ? "context_brain"
+    : "direct";
+  const legacyCommentaryInterval =
+    normalizedLegacyMode === "direct"
+      ? streamWatch.directMinIntervalSeconds
+      : streamWatch.minCommentaryIntervalSeconds;
+  const legacyNoteInterval =
+    normalizedLegacyMode === "context_brain"
+      ? streamWatch.brainContextMinIntervalSeconds
+      : streamWatch.directMinIntervalSeconds;
+  const legacyMaxNoteEntries =
+    normalizedLegacyMode === "context_brain"
+      ? streamWatch.brainContextMaxEntries
+      : streamWatch.directMaxEntries;
 
   return {
     enabled: normalizeBoolean(section.enabled, DEFAULT_SETTINGS.voice.enabled),
@@ -199,10 +213,10 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         streamWatch.visualizerMode,
         DEFAULT_SETTINGS.voice.streamWatch.visualizerMode
       ),
-      minCommentaryIntervalSeconds: normalizeInt(
-        streamWatch.minCommentaryIntervalSeconds,
-        DEFAULT_SETTINGS.voice.streamWatch.minCommentaryIntervalSeconds,
-        3,
+      commentaryIntervalSeconds: normalizeInt(
+        streamWatch.commentaryIntervalSeconds ?? legacyCommentaryInterval,
+        DEFAULT_SETTINGS.voice.streamWatch.commentaryIntervalSeconds,
+        5,
         120
       ),
       maxFramesPerMinute: normalizeInt(
@@ -227,64 +241,66 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         streamWatch.autonomousCommentaryEnabled,
         DEFAULT_SETTINGS.voice.streamWatch.autonomousCommentaryEnabled
       ),
-      brainContextMode: normalizeStreamWatchBrainContextMode(
-        streamWatch.brainContextMode,
-        DEFAULT_SETTINGS.voice.streamWatch.brainContextMode
-      ),
-      brainContextEnabled: normalizeBoolean(
-        streamWatch.brainContextEnabled,
-        DEFAULT_SETTINGS.voice.streamWatch.brainContextEnabled
-      ),
-      brainContextMinIntervalSeconds: normalizeInt(
-        streamWatch.brainContextMinIntervalSeconds,
-        DEFAULT_SETTINGS.voice.streamWatch.brainContextMinIntervalSeconds,
-        1,
-        60
-      ),
-      brainContextMaxEntries: normalizeInt(
-        streamWatch.brainContextMaxEntries,
-        DEFAULT_SETTINGS.voice.streamWatch.brainContextMaxEntries,
-        1,
-        24
-      ),
-      brainContextProvider: normalizeString(
-        streamWatch.brainContextProvider,
-        DEFAULT_SETTINGS.voice.streamWatch.brainContextProvider,
+      noteProvider: normalizeString(
+        streamWatch.noteProvider ?? streamWatch.brainContextProvider,
+        DEFAULT_SETTINGS.voice.streamWatch.noteProvider,
         40
       ),
-      brainContextModel: normalizeString(
-        streamWatch.brainContextModel,
-        DEFAULT_SETTINGS.voice.streamWatch.brainContextModel,
+      noteModel: normalizeString(
+        streamWatch.noteModel ?? streamWatch.brainContextModel,
+        DEFAULT_SETTINGS.voice.streamWatch.noteModel,
         120
       ),
-      brainContextPrompt: normalizePromptBlock(
-        streamWatch.brainContextPrompt,
-        DEFAULT_SETTINGS.voice.streamWatch.brainContextPrompt,
-        420
-      ),
-      directMinIntervalSeconds: normalizeInt(
-        streamWatch.directMinIntervalSeconds,
-        DEFAULT_SETTINGS.voice.streamWatch.directMinIntervalSeconds,
+      noteIntervalSeconds: normalizeInt(
+        streamWatch.noteIntervalSeconds ?? legacyNoteInterval,
+        DEFAULT_SETTINGS.voice.streamWatch.noteIntervalSeconds,
         3,
         120
       ),
-      directMaxEntries: normalizeInt(
-        streamWatch.directMaxEntries,
-        DEFAULT_SETTINGS.voice.streamWatch.directMaxEntries,
+      noteIdleIntervalSeconds: normalizeInt(
+        streamWatch.noteIdleIntervalSeconds,
+        DEFAULT_SETTINGS.voice.streamWatch.noteIdleIntervalSeconds,
+        10,
+        120
+      ),
+      staticFloor: normalizeNumber(
+        streamWatch.staticFloor,
+        DEFAULT_SETTINGS.voice.streamWatch.staticFloor,
+        0.001,
+        0.05
+      ),
+      maxNoteEntries: normalizeInt(
+        streamWatch.maxNoteEntries ?? legacyMaxNoteEntries,
+        DEFAULT_SETTINGS.voice.streamWatch.maxNoteEntries,
         1,
         24
       ),
-      directChangeThreshold: normalizeNumber(
-        streamWatch.directChangeThreshold,
-        DEFAULT_SETTINGS.voice.streamWatch.directChangeThreshold,
-        0.01,
+      changeThreshold: normalizeNumber(
+        streamWatch.changeThreshold ?? streamWatch.directChangeThreshold,
+        DEFAULT_SETTINGS.voice.streamWatch.changeThreshold,
+        0.005,
         1.0
       ),
-      directChangeMinIntervalSeconds: normalizeInt(
-        streamWatch.directChangeMinIntervalSeconds,
-        DEFAULT_SETTINGS.voice.streamWatch.directChangeMinIntervalSeconds,
+      changeMinIntervalSeconds: normalizeInt(
+        streamWatch.changeMinIntervalSeconds ?? streamWatch.directChangeMinIntervalSeconds,
+        DEFAULT_SETTINGS.voice.streamWatch.changeMinIntervalSeconds,
         1,
-        60
+        30
+      ),
+      notePrompt: normalizePromptBlock(
+        streamWatch.notePrompt ?? streamWatch.brainContextPrompt,
+        DEFAULT_SETTINGS.voice.streamWatch.notePrompt,
+        420
+      ),
+      commentaryProvider: normalizeString(
+        streamWatch.commentaryProvider,
+        DEFAULT_SETTINGS.voice.streamWatch.commentaryProvider,
+        40
+      ),
+      commentaryModel: normalizeString(
+        streamWatch.commentaryModel,
+        DEFAULT_SETTINGS.voice.streamWatch.commentaryModel,
+        120
       ),
       nativeDiscordMaxFramesPerSecond: normalizeInt(
         streamWatch.nativeDiscordMaxFramesPerSecond,

@@ -7,7 +7,6 @@ import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsForm
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
 import {
   normalizeVoiceAdmissionModeForDashboard,
-  STREAM_WATCH_BRAIN_CONTEXT_MODES,
   STREAM_WATCH_VISUALIZER_MODES
 } from "../../../../src/settings/voiceDashboardMappings.ts";
 
@@ -19,64 +18,52 @@ const STREAM_WATCH_VISUALIZER_LABELS = Object.freeze({
   vectorscope: "Stereo vectorscope"
 } satisfies Record<(typeof STREAM_WATCH_VISUALIZER_MODES)[number], string>);
 
-const STREAM_WATCH_BRAIN_CONTEXT_MODE_LABELS = Object.freeze({
-  direct: "Direct — brain sees raw frames",
-  context_brain: "Scanner — triage model builds notes, brain sees summaries"
-} satisfies Record<(typeof STREAM_WATCH_BRAIN_CONTEXT_MODES)[number], string>);
-
 /* ── Screen share mental model ── */
 
 function ScreenShareMentalModel({
-  scannerLabel,
+  noteModelLabel,
+  commentaryModelLabel,
   voiceBrainLabel,
   directVisionSupported,
   autonomousCommentaryEnabled,
-  brainContextEnabled,
-  brainContextMode,
+  commentaryIntervalSeconds,
 }: {
-  scannerLabel: string;
+  noteModelLabel: string;
+  commentaryModelLabel: string;
   voiceBrainLabel: string;
   directVisionSupported: boolean;
   autonomousCommentaryEnabled: boolean;
-  brainContextEnabled: boolean;
-  brainContextMode: string;
+  commentaryIntervalSeconds: number;
 }) {
-  const isDirectMode = brainContextMode === "direct";
   return (
     <div className="ssm-card">
       <div className="ssm-title">How screen watch works</div>
       <div className="ssm-list">
         <div className="ssm-row">
-          <span className="ssm-label">Vision mode</span>
+          <span className="ssm-label">Rolling notes</span>
           <span className="ssm-arrow">&rarr;</span>
           <span className="ssm-detail">
-            {isDirectMode
-              ? "Direct — raw frames sent to the voice brain"
-              : "Scanner — triage model analyzes frames, brain sees summaries"}
+            {`A note model keeps the screen memory fresh — ${noteModelLabel}`}
           </span>
         </div>
         <div className="ssm-row">
-          <span className="ssm-label">{isDirectMode ? "Frame handling" : "Background scanner"}</span>
-          <span className="ssm-arrow">&rarr;</span>
-          <span className="ssm-detail">
-            {isDirectMode
-              ? directVisionSupported
-                ? `Brain sees actual screen on every turn — ${voiceBrainLabel}`
-                : "This voice brain provider does not currently accept direct frame inputs"
-              : brainContextEnabled
-                ? `Builds rolling temporal notes for continuity — ${scannerLabel}`
-                : "Disabled"}
-          </span>
-        </div>
-        <div className="ssm-row">
-          <span className="ssm-label">Proactive turns</span>
+          <span className="ssm-label">Commentary turns</span>
           <span className="ssm-arrow">&rarr;</span>
           <span className="ssm-detail">
             {autonomousCommentaryEnabled
-              ? isDirectMode
-                ? "Quiet moments trigger a brain turn with the latest frame attached"
-                : "Only high-urgency triage results trigger a brain turn"
+              ? directVisionSupported
+                ? `Quiet moments attach the current frame to the voice brain — ${commentaryModelLabel || voiceBrainLabel}`
+                : "Commentary needs a vision-capable voice model"
               : "Disabled"}
+          </span>
+        </div>
+        <div className="ssm-row">
+          <span className="ssm-label">Conversation turns</span>
+          <span className="ssm-arrow">&rarr;</span>
+          <span className="ssm-detail">
+            {autonomousCommentaryEnabled
+              ? `Fresh notes stay available between commentary turns. Commentary waits at least ${commentaryIntervalSeconds}s between proactive replies.`
+              : "Fresh notes still stay available for normal replies."}
           </span>
         </div>
       </div>
@@ -218,10 +205,10 @@ export function VoiceModeSettingsSection({
   openAiRealtimeVoiceOptions,
   openAiTranscriptionModelOptions,
   geminiRealtimeModelOptions,
-  setStreamWatchVisionProvider,
-  selectStreamWatchVisionPresetModel,
-  streamWatchVisionModelOptions,
-  selectedStreamWatchVisionPresetModel,
+  setStreamWatchNoteProvider,
+  selectStreamWatchNotePresetModel,
+  streamWatchNoteModelOptions,
+  selectedStreamWatchNotePresetModel,
   setStreamWatchCommentaryProvider,
   selectStreamWatchCommentaryPresetModel,
   streamWatchCommentaryModelOptions = [],
@@ -289,9 +276,13 @@ export function VoiceModeSettingsSection({
   const voiceGenerationModel = String(form.voiceGenerationLlmModel || "").trim();
   const voiceInterruptProvider = String(form.voiceInterruptLlmProvider || "").trim();
   const voiceInterruptModel = String(form.voiceInterruptLlmModel || "").trim();
-  const streamWatchProvider = String(form.voiceStreamWatchBrainContextProvider || "").trim();
-  const streamWatchModel = String(
-    form.voiceStreamWatchBrainContextModel || selectedStreamWatchVisionPresetModel || ""
+  const streamWatchNoteProvider = String(form.voiceStreamWatchNoteProvider || "").trim();
+  const streamWatchNoteModel = String(
+    form.voiceStreamWatchNoteModel || selectedStreamWatchNotePresetModel || ""
+  ).trim();
+  const streamWatchCommentaryProvider = String(form.voiceStreamWatchCommentaryProvider || "").trim();
+  const streamWatchCommentaryModel = String(
+    form.voiceStreamWatchCommentaryModel || selectedStreamWatchCommentaryPresetModel || ""
   ).trim();
   const directFrameToBrainSupported = [
     "openai",
@@ -302,7 +293,12 @@ export function VoiceModeSettingsSection({
     "codex_cli_session",
     "xai"
   ].includes(voiceGenerationProvider);
-  const streamWatchNotesBindingLabel = formatProviderModelLabel(streamWatchProvider, streamWatchModel, "Default scanner");
+  const streamWatchNotesBindingLabel = formatProviderModelLabel(streamWatchNoteProvider, streamWatchNoteModel, "Default note model");
+  const streamWatchCommentaryBindingLabel = formatProviderModelLabel(
+    streamWatchCommentaryProvider,
+    streamWatchCommentaryModel,
+    "Default voice model"
+  );
 
   /* Pipeline stages for indicator */
   const pipelineStages: PipelineStage[] = isNativePath
@@ -1512,19 +1508,19 @@ export function VoiceModeSettingsSection({
 
           {form.voiceStreamWatchEnabled && (
             <p className="vps-runtime-summary-note">
-              Screen watch is layered context. Native Discord receive is preferred, with browser capture as fallback when needed. The current frame always goes to the normal voice brain on active turns.
-              These controls tune proactive commentary, rolling notes, and fallback capture behavior when a non-native path is used.
+              Screen watch keeps a rolling note buffer from the latest frames and only attaches the raw image when commentary or a screen-specific question needs it.
+              Native Discord receive is preferred, with browser capture as fallback when needed.
             </p>
           )}
 
           {form.voiceStreamWatchEnabled && (
             <ScreenShareMentalModel
-              scannerLabel={streamWatchNotesBindingLabel}
+              noteModelLabel={streamWatchNotesBindingLabel}
+              commentaryModelLabel={streamWatchCommentaryBindingLabel}
               voiceBrainLabel={formatProviderModelLabel(voiceGenerationProvider, voiceGenerationModel, "voice brain")}
               directVisionSupported={directFrameToBrainSupported}
               autonomousCommentaryEnabled={Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled)}
-              brainContextEnabled={Boolean(form.voiceStreamWatchBrainContextEnabled)}
-              brainContextMode={String(form.voiceStreamWatchBrainContextMode || "direct")}
+              commentaryIntervalSeconds={Number(form.voiceStreamWatchCommentaryIntervalSeconds) || 15}
             />
           )}
 
@@ -1564,33 +1560,11 @@ export function VoiceModeSettingsSection({
           )}
 
           {form.voiceStreamWatchEnabled && (
-            <div>
-              <label htmlFor="stream-watch-brain-context-mode">Screen watch vision mode</label>
-              <select
-                id="stream-watch-brain-context-mode"
-                value={String(form.voiceStreamWatchBrainContextMode || "direct")}
-                onChange={set("voiceStreamWatchBrainContextMode")}
-              >
-                {STREAM_WATCH_BRAIN_CONTEXT_MODES.map((mode) => (
-                  <option key={mode} value={mode}>
-                    {STREAM_WATCH_BRAIN_CONTEXT_MODE_LABELS[mode]}
-                  </option>
-                ))}
-              </select>
-              <p className="vps-runtime-summary-note">
-                {String(form.voiceStreamWatchBrainContextMode || "direct") === "direct"
-                  ? "The voice brain sees raw screen frames directly and writes [[NOTE:...]] self-observations for continuity. Richer reactions, higher cost per frame."
-                  : "A separate triage model analyzes each frame and produces notes + urgency. Only high-urgency frames trigger a brain turn. Lower cost, but the brain sees summaries instead of the actual screen."}
-              </p>
-            </div>
-          )}
-
-          {form.voiceStreamWatchEnabled && (
             <details className="vps-advanced-card">
               <summary className="vps-advanced-summary">
                 <span className="vps-advanced-arrow">&#x25B8;</span>
                 <span>Advanced screen watch settings</span>
-                <span className="vps-advanced-summary-copy">Native receive limits, fallback transport, and scanner tuning</span>
+                <span className="vps-advanced-summary-copy">Native receive limits, fallback transport, notes, and commentary tuning</span>
               </summary>
               <div className="vps-advanced-body">
                 <div className="split">
@@ -1621,10 +1595,10 @@ export function VoiceModeSettingsSection({
                     <input
                       id="voice-stream-watch-commentary-interval"
                       type="number"
-                      min="3"
+                      min="5"
                       max="120"
-                      value={form.voiceStreamWatchMinCommentaryIntervalSeconds}
-                      onChange={set("voiceStreamWatchMinCommentaryIntervalSeconds")}
+                      value={form.voiceStreamWatchCommentaryIntervalSeconds}
+                      onChange={set("voiceStreamWatchCommentaryIntervalSeconds")}
                     />
                   </div>
                   <div>
@@ -1730,156 +1704,122 @@ export function VoiceModeSettingsSection({
                   </div>
                 </div>
 
-                {/* ── Direct mode tuning ── */}
-                {String(form.voiceStreamWatchBrainContextMode || "direct") === "direct" && (
-                  <>
-                    <div className="split">
-                      <div>
-                        <label htmlFor="voice-stream-watch-direct-min-interval">
-                          Min seconds between direct brain turns
-                        </label>
-                        <input
-                          id="voice-stream-watch-direct-min-interval"
-                          type="number"
-                          min="3"
-                          max="120"
-                          value={form.voiceStreamWatchDirectMinIntervalSeconds}
-                          onChange={set("voiceStreamWatchDirectMinIntervalSeconds")}
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="voice-stream-watch-direct-max-entries">Rolling self-note buffer size</label>
-                        <input
-                          id="voice-stream-watch-direct-max-entries"
-                          type="number"
-                          min="1"
-                          max="24"
-                          value={form.voiceStreamWatchDirectMaxEntries}
-                          onChange={set("voiceStreamWatchDirectMaxEntries")}
-                        />
-                      </div>
-                    </div>
+                <h4 style={{ marginTop: "1rem" }}>Rolling notes</h4>
+                <p className="hint">These settings control the separate note loop that keeps screen memory fresh even while people are talking.</p>
+                <div className="split">
+                  <div>
+                    <label htmlFor="stream-watch-note-provider">Note provider</label>
+                    <select
+                      id="stream-watch-note-provider"
+                      value={form.voiceStreamWatchNoteProvider}
+                      onChange={setStreamWatchNoteProvider}
+                    >
+                      <LlmProviderOptions options={VISION_LLM_PROVIDER_OPTIONS} />
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="stream-watch-note-model">Note model</label>
+                    <select
+                      id="stream-watch-note-model"
+                      value={selectedStreamWatchNotePresetModel}
+                      onChange={selectStreamWatchNotePresetModel}
+                    >
+                      {streamWatchNoteModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
-                    <div className="split">
-                      <div>
-                        <label htmlFor="voice-stream-watch-direct-change-threshold">
-                          Visual change threshold
-                        </label>
-                        <input
-                          id="voice-stream-watch-direct-change-threshold"
-                          type="number"
-                          min="0.01"
-                          max="1"
-                          step="0.01"
-                          value={form.voiceStreamWatchDirectChangeThreshold}
-                          onChange={set("voiceStreamWatchDirectChangeThreshold")}
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="voice-stream-watch-direct-change-min-interval">
-                          Min seconds between change-triggered turns
-                        </label>
-                        <input
-                          id="voice-stream-watch-direct-change-min-interval"
-                          type="number"
-                          min="1"
-                          max="60"
-                          value={form.voiceStreamWatchDirectChangeMinIntervalSeconds}
-                          onChange={set("voiceStreamWatchDirectChangeMinIntervalSeconds")}
-                        />
-                      </div>
-                    </div>
-                  </>
-                )}
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-stream-watch-note-interval">Busy-screen note interval (seconds)</label>
+                    <input
+                      id="voice-stream-watch-note-interval"
+                      type="number"
+                      min="3"
+                      max="120"
+                      value={form.voiceStreamWatchNoteIntervalSeconds}
+                      onChange={set("voiceStreamWatchNoteIntervalSeconds")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-stream-watch-note-idle-interval">Idle-screen note interval (seconds)</label>
+                    <input
+                      id="voice-stream-watch-note-idle-interval"
+                      type="number"
+                      min="10"
+                      max="120"
+                      value={form.voiceStreamWatchNoteIdleIntervalSeconds}
+                      onChange={set("voiceStreamWatchNoteIdleIntervalSeconds")}
+                    />
+                  </div>
+                </div>
 
-                {/* ── Scanner / context_brain mode tuning ── */}
-                {String(form.voiceStreamWatchBrainContextMode || "direct") === "context_brain" && (() => {
-                  return (
-                    <>
-                      <div className="toggles">
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(form.voiceStreamWatchBrainContextEnabled)}
-                            onChange={set("voiceStreamWatchBrainContextEnabled")}
-                          />
-                          Enable background scanner triage
-                        </label>
-                      </div>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-stream-watch-static-floor">Static-motion floor</label>
+                    <input
+                      id="voice-stream-watch-static-floor"
+                      type="number"
+                      min="0.001"
+                      max="0.05"
+                      step="0.001"
+                      value={form.voiceStreamWatchStaticFloor}
+                      onChange={set("voiceStreamWatchStaticFloor")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-stream-watch-max-note-entries">Rolling note buffer size</label>
+                    <input
+                      id="voice-stream-watch-max-note-entries"
+                      type="number"
+                      min="1"
+                      max="24"
+                      value={form.voiceStreamWatchMaxNoteEntries}
+                      onChange={set("voiceStreamWatchMaxNoteEntries")}
+                    />
+                  </div>
+                </div>
 
-                      {form.voiceStreamWatchBrainContextEnabled && (
-                        <>
-                          <div className="split">
-                            <div>
-                              <label htmlFor="stream-watch-vision-provider">Scanner triage provider</label>
-                              <select
-                                id="stream-watch-vision-provider"
-                                value={form.voiceStreamWatchBrainContextProvider}
-                                onChange={setStreamWatchVisionProvider}
-                              >
-                                <LlmProviderOptions options={VISION_LLM_PROVIDER_OPTIONS} />
-                              </select>
-                            </div>
-                            <div>
-                              <label htmlFor="stream-watch-vision-model">Scanner triage model</label>
-                              <select
-                                id="stream-watch-vision-model"
-                                value={selectedStreamWatchVisionPresetModel}
-                                onChange={selectStreamWatchVisionPresetModel}
-                              >
-                                {streamWatchVisionModelOptions.map((modelId) => (
-                                  <option key={modelId} value={modelId}>
-                                    {modelId}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-stream-watch-change-threshold">Visual change threshold</label>
+                    <input
+                      id="voice-stream-watch-change-threshold"
+                      type="number"
+                      min="0.005"
+                      max="1"
+                      step="0.001"
+                      value={form.voiceStreamWatchChangeThreshold}
+                      onChange={set("voiceStreamWatchChangeThreshold")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-stream-watch-change-min-interval">Min seconds between change-triggered updates</label>
+                    <input
+                      id="voice-stream-watch-change-min-interval"
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={form.voiceStreamWatchChangeMinIntervalSeconds}
+                      onChange={set("voiceStreamWatchChangeMinIntervalSeconds")}
+                    />
+                  </div>
+                </div>
 
-                          <div className="split">
-                            <div>
-                              <label htmlFor="voice-stream-watch-brain-context-interval">
-                                Min seconds between keyframe analyses
-                              </label>
-                              <input
-                                id="voice-stream-watch-brain-context-interval"
-                                type="number"
-                                min="1"
-                                max="120"
-                                value={form.voiceStreamWatchBrainContextMinIntervalSeconds}
-                                onChange={set("voiceStreamWatchBrainContextMinIntervalSeconds")}
-                              />
-                            </div>
-                            <div>
-                              <label htmlFor="voice-stream-watch-brain-context-max-entries">Keyframe history size</label>
-                              <input
-                                id="voice-stream-watch-brain-context-max-entries"
-                                type="number"
-                                min="1"
-                                max="24"
-                                value={form.voiceStreamWatchBrainContextMaxEntries}
-                                onChange={set("voiceStreamWatchBrainContextMaxEntries")}
-                              />
-                            </div>
-                          </div>
+                <label htmlFor="voice-stream-watch-note-prompt">Note instruction</label>
+                <textarea
+                  id="voice-stream-watch-note-prompt"
+                  rows={3}
+                  value={form.voiceStreamWatchNotePrompt}
+                  onChange={set("voiceStreamWatchNotePrompt")}
+                />
 
-                          <label htmlFor="voice-stream-watch-brain-context-prompt">Scanner triage instruction</label>
-                          <textarea
-                            id="voice-stream-watch-brain-context-prompt"
-                            rows={3}
-                            value={form.voiceStreamWatchBrainContextPrompt}
-                            onChange={set("voiceStreamWatchBrainContextPrompt")}
-                          />
-                        </>
-                      )}
-
-                    </>
-                  );
-                })()}
-
-                {/* ── Commentary model override — applies to both direct and scanner modes ── */}
                 <h4 style={{ marginTop: "1rem" }}>Commentary model override</h4>
-                <p className="hint">Optional model for bot-initiated screen watch commentary. When set, ambient commentary uses this model while the first reaction and all conversational turns use the default voice model. Leave empty to use the default voice model for everything.</p>
+                <p className="hint">Optional model for bot-initiated screen watch commentary. Leave empty to use the default voice model.</p>
                 <div className="split">
                   <div>
                     <label htmlFor="stream-watch-commentary-provider">Commentary provider</label>

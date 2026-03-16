@@ -53,7 +53,7 @@ The Voice tab complements these per-event logs with a live SSE snapshot view:
 
 - `promptState.instructions` shows the current realtime/system instructions the VC path is running with.
 - `promptState.classifier`, `promptState.generation`, and `promptState.bridge` show the latest captured classifier, full-brain, and bridge-forward prompt bundles for the active session.
-- Screen-share state in the Voice tab separates keyframe analyses (`streamWatch.visualFeed`) from the accumulated prompt context the VC brain sees (`streamWatch.brainContextPayload`).
+- Screen-share state in the Voice tab separates recent note-loop output (`streamWatch.visualFeed`) from the prompt note buffer the VC brain sees (`streamWatch.notePayload`).
 
 ## Environment settings
 

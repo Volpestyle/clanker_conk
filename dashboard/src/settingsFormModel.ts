@@ -677,38 +677,36 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.streamWatch?.commentaryEagerness ?? defaultVoiceStreamWatch.commentaryEagerness,
     voiceStreamWatchVisualizerMode:
       resolved?.voice?.streamWatch?.visualizerMode ?? defaultVoiceStreamWatch.visualizerMode,
-    voiceStreamWatchMinCommentaryIntervalSeconds:
-      resolved?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? defaultVoiceStreamWatch.minCommentaryIntervalSeconds,
+    voiceStreamWatchCommentaryIntervalSeconds:
+      resolved?.voice?.streamWatch?.commentaryIntervalSeconds ?? defaultVoiceStreamWatch.commentaryIntervalSeconds,
     voiceStreamWatchMaxFramesPerMinute: resolved?.voice?.streamWatch?.maxFramesPerMinute ?? defaultVoiceStreamWatch.maxFramesPerMinute,
     voiceStreamWatchMaxFrameBytes: resolved?.voice?.streamWatch?.maxFrameBytes ?? defaultVoiceStreamWatch.maxFrameBytes,
     voiceStreamWatchKeyframeIntervalMs:
       resolved?.voice?.streamWatch?.keyframeIntervalMs ?? defaultVoiceStreamWatch.keyframeIntervalMs,
     voiceStreamWatchAutonomousCommentaryEnabled:
       resolved?.voice?.streamWatch?.autonomousCommentaryEnabled ?? defaultVoiceStreamWatch.autonomousCommentaryEnabled,
-    voiceStreamWatchBrainContextMode:
-      resolved?.voice?.streamWatch?.brainContextMode ?? defaultVoiceStreamWatch.brainContextMode,
-    voiceStreamWatchBrainContextEnabled:
-      resolved?.voice?.streamWatch?.brainContextEnabled ?? defaultVoiceStreamWatch.brainContextEnabled,
-    voiceStreamWatchBrainContextMinIntervalSeconds:
-      resolved?.voice?.streamWatch?.brainContextMinIntervalSeconds ??
-      defaultVoiceStreamWatch.brainContextMinIntervalSeconds,
-    voiceStreamWatchBrainContextMaxEntries:
-      resolved?.voice?.streamWatch?.brainContextMaxEntries ?? defaultVoiceStreamWatch.brainContextMaxEntries,
-    voiceStreamWatchBrainContextProvider:
-      resolved?.voice?.streamWatch?.brainContextProvider ?? defaultVoiceStreamWatch.brainContextProvider ?? "",
-    voiceStreamWatchBrainContextModel:
-      resolved?.voice?.streamWatch?.brainContextModel ?? defaultVoiceStreamWatch.brainContextModel ?? "",
-    voiceStreamWatchBrainContextPrompt:
-      resolved?.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt,
-    voiceStreamWatchDirectMinIntervalSeconds:
-      resolved?.voice?.streamWatch?.directMinIntervalSeconds ?? defaultVoiceStreamWatch.directMinIntervalSeconds,
-    voiceStreamWatchDirectMaxEntries:
-      resolved?.voice?.streamWatch?.directMaxEntries ?? defaultVoiceStreamWatch.directMaxEntries,
-    voiceStreamWatchDirectChangeThreshold:
-      resolved?.voice?.streamWatch?.directChangeThreshold ?? defaultVoiceStreamWatch.directChangeThreshold,
-    voiceStreamWatchDirectChangeMinIntervalSeconds:
-      resolved?.voice?.streamWatch?.directChangeMinIntervalSeconds ??
-      defaultVoiceStreamWatch.directChangeMinIntervalSeconds,
+    voiceStreamWatchNoteProvider:
+      resolved?.voice?.streamWatch?.noteProvider ?? defaultVoiceStreamWatch.noteProvider ?? "",
+    voiceStreamWatchNoteModel:
+      resolved?.voice?.streamWatch?.noteModel ?? defaultVoiceStreamWatch.noteModel ?? "",
+    voiceStreamWatchNoteIntervalSeconds:
+      resolved?.voice?.streamWatch?.noteIntervalSeconds ?? defaultVoiceStreamWatch.noteIntervalSeconds,
+    voiceStreamWatchNoteIdleIntervalSeconds:
+      resolved?.voice?.streamWatch?.noteIdleIntervalSeconds ?? defaultVoiceStreamWatch.noteIdleIntervalSeconds,
+    voiceStreamWatchStaticFloor:
+      resolved?.voice?.streamWatch?.staticFloor ?? defaultVoiceStreamWatch.staticFloor,
+    voiceStreamWatchMaxNoteEntries:
+      resolved?.voice?.streamWatch?.maxNoteEntries ?? defaultVoiceStreamWatch.maxNoteEntries,
+    voiceStreamWatchChangeThreshold:
+      resolved?.voice?.streamWatch?.changeThreshold ?? defaultVoiceStreamWatch.changeThreshold,
+    voiceStreamWatchChangeMinIntervalSeconds:
+      resolved?.voice?.streamWatch?.changeMinIntervalSeconds ?? defaultVoiceStreamWatch.changeMinIntervalSeconds,
+    voiceStreamWatchNotePrompt:
+      resolved?.voice?.streamWatch?.notePrompt ?? defaultVoiceStreamWatch.notePrompt,
+    voiceStreamWatchCommentaryProvider:
+      resolved?.voice?.streamWatch?.commentaryProvider ?? defaultVoiceStreamWatch.commentaryProvider ?? "",
+    voiceStreamWatchCommentaryModel:
+      resolved?.voice?.streamWatch?.commentaryModel ?? defaultVoiceStreamWatch.commentaryModel ?? "",
     voiceStreamWatchNativeDiscordMaxFramesPerSecond:
       resolved?.voice?.streamWatch?.nativeDiscordMaxFramesPerSecond ??
       defaultVoiceStreamWatch.nativeDiscordMaxFramesPerSecond,
@@ -1665,22 +1663,22 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         visualizerMode: normalizeStreamWatchVisualizerMode(
           form.voiceStreamWatchVisualizerMode
         ),
-        minCommentaryIntervalSeconds: Number(form.voiceStreamWatchMinCommentaryIntervalSeconds),
+        commentaryIntervalSeconds: Number(form.voiceStreamWatchCommentaryIntervalSeconds),
         maxFramesPerMinute: Number(form.voiceStreamWatchMaxFramesPerMinute),
         maxFrameBytes: Number(form.voiceStreamWatchMaxFrameBytes),
         keyframeIntervalMs: Number(form.voiceStreamWatchKeyframeIntervalMs),
         autonomousCommentaryEnabled: Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled),
-        brainContextMode: String(form.voiceStreamWatchBrainContextMode || "direct").trim().toLowerCase(),
-        brainContextEnabled: Boolean(form.voiceStreamWatchBrainContextEnabled),
-        brainContextProvider: String(form.voiceStreamWatchBrainContextProvider || "").trim(),
-        brainContextModel: String(form.voiceStreamWatchBrainContextModel || "").trim(),
-        brainContextMinIntervalSeconds: Number(form.voiceStreamWatchBrainContextMinIntervalSeconds),
-        brainContextMaxEntries: Number(form.voiceStreamWatchBrainContextMaxEntries),
-        brainContextPrompt: String(form.voiceStreamWatchBrainContextPrompt || "").trim(),
-        directMinIntervalSeconds: Number(form.voiceStreamWatchDirectMinIntervalSeconds),
-        directMaxEntries: Number(form.voiceStreamWatchDirectMaxEntries),
-        directChangeThreshold: Number(form.voiceStreamWatchDirectChangeThreshold),
-        directChangeMinIntervalSeconds: Number(form.voiceStreamWatchDirectChangeMinIntervalSeconds),
+        noteProvider: String(form.voiceStreamWatchNoteProvider || "").trim(),
+        noteModel: String(form.voiceStreamWatchNoteModel || "").trim(),
+        noteIntervalSeconds: Number(form.voiceStreamWatchNoteIntervalSeconds),
+        noteIdleIntervalSeconds: Number(form.voiceStreamWatchNoteIdleIntervalSeconds),
+        staticFloor: Number(form.voiceStreamWatchStaticFloor),
+        maxNoteEntries: Number(form.voiceStreamWatchMaxNoteEntries),
+        changeThreshold: Number(form.voiceStreamWatchChangeThreshold),
+        changeMinIntervalSeconds: Number(form.voiceStreamWatchChangeMinIntervalSeconds),
+        notePrompt: String(form.voiceStreamWatchNotePrompt || "").trim(),
+        commentaryProvider: String(form.voiceStreamWatchCommentaryProvider || "").trim(),
+        commentaryModel: String(form.voiceStreamWatchCommentaryModel || "").trim(),
         nativeDiscordMaxFramesPerSecond: Number(form.voiceStreamWatchNativeDiscordMaxFramesPerSecond),
         nativeDiscordPreferredQuality: Number(form.voiceStreamWatchNativeDiscordPreferredQuality),
         nativeDiscordPreferredPixelCount: Number(form.voiceStreamWatchNativeDiscordPreferredPixelCount),

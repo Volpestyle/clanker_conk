@@ -356,14 +356,14 @@ export function buildVoiceTurnPrompt({
         lastQuery: String(musicContext?.lastQuery || "").trim().slice(0, 180) || null
       }
       : null;
-  const normalizedStreamWatchBrainContext =
-    normalizedConversationContext?.streamWatchBrainContext &&
-      typeof normalizedConversationContext.streamWatchBrainContext === "object"
+  const normalizedStreamWatchNotes =
+    normalizedConversationContext?.streamWatchNotes &&
+      typeof normalizedConversationContext.streamWatchNotes === "object"
       ? {
-        prompt: String(normalizedConversationContext.streamWatchBrainContext.prompt || "").trim().slice(0, 420),
+        prompt: String(normalizedConversationContext.streamWatchNotes.prompt || "").trim().slice(0, 420),
         notes: (
-          Array.isArray(normalizedConversationContext.streamWatchBrainContext.notes)
-            ? normalizedConversationContext.streamWatchBrainContext.notes
+          Array.isArray(normalizedConversationContext.streamWatchNotes.notes)
+            ? normalizedConversationContext.streamWatchNotes.notes
             : []
         )
           .map((note) =>
@@ -373,8 +373,7 @@ export function buildVoiceTurnPrompt({
               .slice(0, 240)
           )
           .filter(Boolean)
-          .slice(-12),
-        brainContextMode: String(normalizedConversationContext.streamWatchBrainContext.brainContextMode || "context_brain")
+          .slice(-12)
       }
       : null;
   const webSearchToolAvailable = Boolean(
@@ -571,44 +570,41 @@ export function buildVoiceTurnPrompt({
       ].filter(Boolean).join("\n")
     );
   }
-  if (screenWatchActive && !hasDirectVisionFrame && !normalizedStreamWatchBrainContext?.notes?.length) {
+  if (screenWatchActive && !hasDirectVisionFrame && !normalizedStreamWatchNotes?.notes?.length) {
     parts.push(
       screenWatchFrameReady
         ? "Screen watch: active and receiving frames. You are already watching their screen — do not call start_screen_watch again."
         : "Screen watch: active, waiting for the first frame. Do not call start_screen_watch again — it is already running."
     );
   }
-  const isDirectScreenWatchMode = normalizedStreamWatchBrainContext?.brainContextMode === "direct";
   const normalizedCommentaryEagerness = Math.max(0, Math.min(100, Number(screenWatchCommentaryEagerness) || 60));
   if (hasDirectVisionFrame) {
     const screenContextParts = [
       "Live screen watch: You can see the user's screen directly in the attached image.",
       `Screen watch commentary eagerness: ${normalizedCommentaryEagerness}/100.`,
       getScreenWatchCommentaryTier(normalizedCommentaryEagerness),
-      normalizedStreamWatchBrainContext?.prompt
-        ? `- Guidance: ${normalizedStreamWatchBrainContext.prompt}`
+      normalizedStreamWatchNotes?.prompt
+        ? `- Guidance: ${normalizedStreamWatchNotes.prompt}`
         : null
     ];
-    if (normalizedStreamWatchBrainContext?.notes?.length) {
+    if (normalizedStreamWatchNotes?.notes?.length) {
       screenContextParts.push("Your previous observations:");
-      screenContextParts.push(...normalizedStreamWatchBrainContext.notes.map((note) => `- ${note}`));
+      screenContextParts.push(...normalizedStreamWatchNotes.notes.map((note) => `- ${note}`));
     }
-    if (isDirectScreenWatchMode) {
-      screenContextParts.push(
-        "You may end your reply with [[NOTE:your observation]] to record a private note about what you see. Notes are never spoken aloud. " +
-        "Use notes to track what is on screen so you can notice changes across frames. " +
-        "You can speak and note in the same turn, or skip speech and just note: [SKIP] [[NOTE:...]]."
-      );
-    }
+    screenContextParts.push(
+      "You may end your reply with [[NOTE:your observation]] to record a private note about what you see. Notes are never spoken aloud. " +
+      "Use notes to track the screen across future turns. " +
+      "You can speak and note in the same turn, or skip speech and just note: [SKIP] [[NOTE:...]]."
+    );
     parts.push(screenContextParts.filter(Boolean).join("\n"));
-  } else if (normalizedStreamWatchBrainContext?.notes?.length) {
+  } else if (normalizedStreamWatchNotes?.notes?.length) {
     parts.push(
       [
         "Recent screen-watch keyframe context:",
-        normalizedStreamWatchBrainContext.prompt
-          ? `- Guidance: ${normalizedStreamWatchBrainContext.prompt}`
+        normalizedStreamWatchNotes.prompt
+          ? `- Guidance: ${normalizedStreamWatchNotes.prompt}`
           : null,
-        ...normalizedStreamWatchBrainContext.notes.map((note) => `- ${note}`),
+        ...normalizedStreamWatchNotes.notes.map((note) => `- ${note}`),
         "- These are sampled frame snapshots. Avoid overclaiming continuity between samples."
       ]
         .filter(Boolean)
@@ -758,7 +754,7 @@ export function buildVoiceTurnPrompt({
   );
 
   // Per-turn inline markup allowances (soundboard, screen watch notes)
-  const noteDirectiveAllowed = isDirectScreenWatchMode && hasDirectVisionFrame;
+  const noteDirectiveAllowed = hasDirectVisionFrame;
   const inlineMarkupSuffix = [
     allowInlineSoundboardDirectives ? "[[SOUNDBOARD:<ref>]]" : null,
     noteDirectiveAllowed ? "[[NOTE:<observation>]]" : null

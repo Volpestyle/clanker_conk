@@ -1,15 +1,15 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  appendStreamWatchBrainContextEntry,
+  appendStreamWatchNoteEntry,
   enableWatchStreamForUser,
-  getStreamWatchBrainContextForPrompt,
+  getStreamWatchNotesForPrompt,
   handleDiscoveredStreamCredentialsReceived,
   handleDiscoveredStreamDeleted,
   ingestStreamFrame,
   initializeStreamWatchState,
   maybeTriggerStreamWatchCommentary,
-  resolveStreamWatchVisionProviderSettings,
+  resolveStreamWatchNoteModelSettings,
   stopWatchStreamForUser
 } from "./voiceStreamWatch.ts";
 import { createStreamDiscoveryState } from "../selfbot/streamDiscovery.ts";
@@ -25,17 +25,16 @@ function createSettings(overrides = {}) {
     voice: {
       streamWatch: {
         enabled: true,
-        minCommentaryIntervalSeconds: 8,
+        commentaryIntervalSeconds: 8,
         maxFramesPerMinute: 180,
         maxFrameBytes: 350000,
         keyframeIntervalMs: 1200,
         autonomousCommentaryEnabled: true,
-        brainContextEnabled: true,
-        brainContextMinIntervalSeconds: 4,
-        brainContextMaxEntries: 8,
-        brainContextProvider: "anthropic",
-        brainContextModel: "claude-haiku-4-5",
-        brainContextPrompt:
+        noteIntervalSeconds: 4,
+        maxNoteEntries: 8,
+        noteProvider: "anthropic",
+        noteModel: "claude-haiku-4-5",
+        notePrompt:
           "Write one short factual private note about the most salient visible state or change in this frame. Prioritize gameplay actions, objectives, outcomes, menus, or unusual/funny moments that could support a natural later comment. If the frame is mostly idle UI, lobby, desktop, or other non-gameplay context, say that plainly. Prefer what is newly different from the previous frame."
       }
     }
@@ -74,10 +73,10 @@ function createSession(overrides = {}) {
       lastFrameAt: 0,
       lastCommentaryAt: 0,
       lastCommentaryNote: null,
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: null,
-      lastBrainContextModel: null,
-      brainContextEntries: [],
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
       ingestedFrameCount: 0,
       acceptedFrameCountInWindow: 0,
       frameWindowStartedAt: 0,
@@ -300,10 +299,10 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
       lastFrameAt: 100,
       lastCommentaryAt: 100,
       lastCommentaryNote: "old note",
-      lastBrainContextAt: 100,
-      lastBrainContextProvider: "anthropic",
-      lastBrainContextModel: "claude-haiku-4-5",
-      brainContextEntries: [{ text: "old", at: 10 }],
+      lastNoteAt: 100,
+      lastNoteProvider: "anthropic",
+      lastNoteModel: "claude-haiku-4-5",
+      noteEntries: [{ text: "old", at: 10 }],
       ingestedFrameCount: 12,
       acceptedFrameCountInWindow: 8,
       frameWindowStartedAt: 123,
@@ -325,10 +324,10 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
   assert.equal(session.streamWatch.lastFrameAt, 0);
   assert.equal(session.streamWatch.lastCommentaryAt, 0);
   assert.equal(session.streamWatch.lastCommentaryNote, null);
-  assert.equal(session.streamWatch.lastBrainContextAt, 0);
-  assert.equal(session.streamWatch.lastBrainContextProvider, null);
-  assert.equal(session.streamWatch.lastBrainContextModel, null);
-  assert.deepEqual(session.streamWatch.brainContextEntries, []);
+  assert.equal(session.streamWatch.lastNoteAt, 0);
+  assert.equal(session.streamWatch.lastNoteProvider, null);
+  assert.equal(session.streamWatch.lastNoteModel, null);
+  assert.deepEqual(session.streamWatch.noteEntries, []);
   assert.equal(session.streamWatch.ingestedFrameCount, 0);
   assert.equal(session.streamWatch.acceptedFrameCountInWindow, 0);
   assert.equal(session.streamWatch.frameWindowStartedAt, 0);
@@ -346,7 +345,7 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
   assert.deepEqual([...nativeScreenShare.sharers.keys()], []);
 });
 
-test("getStreamWatchBrainContextForPrompt retains recent notes after screen share stops", () => {
+test("getStreamWatchNotesForPrompt retains recent notes after screen share stops", () => {
   const now = Date.now();
   const session = createSession({
     streamWatch: {
@@ -356,10 +355,10 @@ test("getStreamWatchBrainContextForPrompt retains recent notes after screen shar
       lastFrameAt: now - 5_000,
       lastCommentaryAt: now - 4_000,
       lastCommentaryNote: "boss fight HUD visible",
-      lastBrainContextAt: now - 3_000,
-      lastBrainContextProvider: "anthropic",
-      lastBrainContextModel: "claude-haiku-4-5",
-      brainContextEntries: [
+      lastNoteAt: now - 3_000,
+      lastNoteProvider: "anthropic",
+      lastNoteModel: "claude-haiku-4-5",
+      noteEntries: [
         {
           text: "boss fight HUD visible",
           at: now - 3_000,
@@ -377,14 +376,14 @@ test("getStreamWatchBrainContextForPrompt retains recent notes after screen shar
     }
   });
 
-  const context = getStreamWatchBrainContextForPrompt(session, createSettings());
+  const context = getStreamWatchNotesForPrompt(session, createSettings());
   assert.equal(Boolean(context), true);
   assert.equal(context?.active, false);
   assert.equal(context?.notes.length, 1);
   assert.equal(String(context?.notes[0] || "").includes("boss fight HUD visible"), true);
 });
 
-test("resolveStreamWatchVisionProviderSettings uses configured provider/model from settings", () => {
+test("resolveStreamWatchNoteModelSettings uses configured provider/model from settings", () => {
   const { manager } = createManager({
     llm: {
       isProviderConfigured(provider) {
@@ -392,15 +391,15 @@ test("resolveStreamWatchVisionProviderSettings uses configured provider/model fr
       }
     }
   });
-  const resolved = resolveStreamWatchVisionProviderSettings(manager, createSettings({
+  const resolved = resolveStreamWatchNoteModelSettings(manager, createSettings({
     llm: {
       maxOutputTokens: 999,
       temperature: 0.9
     },
     voice: {
       streamWatch: {
-        brainContextProvider: "xai",
-        brainContextModel: "grok-2-vision-latest"
+        noteProvider: "xai",
+        noteModel: "grok-2-vision-latest"
       }
     }
   }));
@@ -411,7 +410,7 @@ test("resolveStreamWatchVisionProviderSettings uses configured provider/model fr
   assert.equal(resolved.maxOutputTokens, 72);
 });
 
-test("resolveStreamWatchVisionProviderSettings returns null when provider not configured", () => {
+test("resolveStreamWatchNoteModelSettings returns null when provider not configured", () => {
   const { manager } = createManager({
     llm: {
       isProviderConfigured() {
@@ -419,11 +418,11 @@ test("resolveStreamWatchVisionProviderSettings returns null when provider not co
       }
     }
   });
-  const resolved = resolveStreamWatchVisionProviderSettings(manager, createSettings({
+  const resolved = resolveStreamWatchNoteModelSettings(manager, createSettings({
     voice: {
       streamWatch: {
-        brainContextProvider: "anthropic",
-        brainContextModel: "claude-haiku-4-5"
+        noteProvider: "anthropic",
+        noteModel: "claude-haiku-4-5"
       }
     }
   }));
@@ -486,10 +485,10 @@ test("enableWatchStreamForUser subscribes native Discord video and stopWatchStre
       lastFrameAt: 0,
       lastCommentaryAt: 0,
       lastCommentaryNote: null,
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: null,
-      lastBrainContextModel: null,
-      brainContextEntries: [],
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
       ingestedFrameCount: 0,
       acceptedFrameCountInWindow: 0,
       frameWindowStartedAt: 0,
@@ -544,7 +543,6 @@ test("enableWatchStreamForUser subscribes native Discord video and stopWatchStre
     settings: createSettings({
       voice: {
         streamWatch: {
-          brainContextEnabled: false
         }
       }
     }),
@@ -593,10 +591,10 @@ test("enableWatchStreamForUser requests stream watch and connects later when cre
       lastFrameAt: 0,
       lastCommentaryAt: 0,
       lastCommentaryNote: null,
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: null,
-      lastBrainContextModel: null,
-      brainContextEntries: [],
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
       ingestedFrameCount: 0,
       acceptedFrameCountInWindow: 0,
       frameWindowStartedAt: 0,
@@ -671,10 +669,10 @@ test("enableWatchStreamForUser reuses an active native watch for the same target
       lastFrameAt: now,
       lastCommentaryAt: now - 500,
       lastCommentaryNote: "scoreboard visible",
-      lastBrainContextAt: now - 400,
-      lastBrainContextProvider: "anthropic",
-      lastBrainContextModel: "claude-haiku-4-5",
-      brainContextEntries: [
+      lastNoteAt: now - 400,
+      lastNoteProvider: "anthropic",
+      lastNoteModel: "claude-haiku-4-5",
+      noteEntries: [
         {
           text: "scoreboard visible",
           at: now - 400,
@@ -768,7 +766,7 @@ test("enableWatchStreamForUser reuses an active native watch for the same target
   assert.equal(transportCalls.length, 0);
   assert.equal(session.streamWatch.latestFrameDataBase64, "AAAA");
   assert.equal(session.streamWatch.latestFrameMimeType, "image/jpeg");
-  assert.equal(session.streamWatch.brainContextEntries.length, 1);
+  assert.equal(session.streamWatch.noteEntries.length, 1);
   assert.equal(session.streamWatch.targetUserId, "user-2");
   const reuseLog = actions.find((entry) => entry.content === "stream_watch_reused_programmatic");
   assert.equal(Boolean(reuseLog), true);
@@ -873,7 +871,6 @@ test("handleDiscoveredStreamDeleted stops an active native watch", async () => {
     settings: createSettings({
       voice: {
         streamWatch: {
-          brainContextEnabled: false
         }
       }
     })
@@ -997,10 +994,10 @@ test("maybeTriggerStreamWatchCommentary fires a normal brain turn on the first f
       lastFrameAt: Date.now(),
       lastCommentaryAt: 0,
       lastCommentaryNote: null,
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: null,
-      lastBrainContextModel: null,
-      brainContextEntries: [],
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
       ingestedFrameCount: 1,
       acceptedFrameCountInWindow: 1,
       frameWindowStartedAt: Date.now(),
@@ -1036,7 +1033,7 @@ test("maybeTriggerStreamWatchCommentary fires a normal brain turn on the first f
   assert.equal(logged?.metadata?.triggerReason, "share_start");
 });
 
-test("maybeTriggerStreamWatchCommentary keeps direct frame-to-brain active even with a scanner provider configured", async () => {
+test("maybeTriggerStreamWatchCommentary still uses the voice brain even when a note model is configured", async () => {
   const session = createSession({
     mode: "voice_agent",
     streamWatch: {
@@ -1046,10 +1043,10 @@ test("maybeTriggerStreamWatchCommentary keeps direct frame-to-brain active even 
       lastFrameAt: Date.now(),
       lastCommentaryAt: 0,
       lastCommentaryNote: null,
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: null,
-      lastBrainContextModel: null,
-      brainContextEntries: [],
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
       ingestedFrameCount: 2,
       acceptedFrameCountInWindow: 2,
       frameWindowStartedAt: Date.now(),
@@ -1061,8 +1058,8 @@ test("maybeTriggerStreamWatchCommentary keeps direct frame-to-brain active even 
   const settings = createSettings({
     voice: {
       streamWatch: {
-        brainContextProvider: "anthropic",
-        brainContextModel: "claude-haiku-4-5"
+        noteProvider: "anthropic",
+        noteModel: "claude-haiku-4-5"
       }
     }
   });
@@ -1094,15 +1091,15 @@ test("maybeTriggerStreamWatchCommentary keeps direct frame-to-brain active even 
   });
 
   assert.equal(brainReplyCalls.length, 1);
-  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:urgent");
+  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:interval");
   assert.equal(createdResponses.length, 0);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
   assert.equal(Boolean(logged), true);
   assert.equal(logged?.metadata?.commentaryMode, "brain_turn");
-  assert.equal(logged?.metadata?.triggerReason, "urgent");
+  assert.equal(logged?.metadata?.triggerReason, "interval");
 });
 
-test("maybeTriggerStreamWatchCommentary can update brain context without speaking commentary", async () => {
+test("ingestStreamFrame captures a note even when autonomous commentary is disabled", async () => {
   const session = createSession({
     mode: "openai_realtime",
     botTurnOpen: false,
@@ -1115,10 +1112,10 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
       requestedByUserId: "user-1",
       lastFrameAt: Date.now(),
       lastCommentaryAt: 0,
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: null,
-      lastBrainContextModel: null,
-      brainContextEntries: [],
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
       ingestedFrameCount: 0,
       acceptedFrameCountInWindow: 0,
       frameWindowStartedAt: 0,
@@ -1131,10 +1128,9 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
     voice: {
       streamWatch: {
         autonomousCommentaryEnabled: false,
-        brainContextEnabled: true,
-        brainContextMinIntervalSeconds: 1,
-        brainContextMaxEntries: 6,
-        brainContextPrompt: "Summarize this frame for downstream brain replies."
+        noteIntervalSeconds: 1,
+        maxNoteEntries: 6,
+        notePrompt: "Summarize this frame for downstream brain replies."
       }
     }
   });
@@ -1155,19 +1151,22 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
     }
   });
 
-  await maybeTriggerStreamWatchCommentary(manager, {
-    session,
-    settings,
+  await ingestStreamFrame(manager, {
+    guildId: "guild-1",
     streamerUserId: "user-1",
+    mimeType: "image/png",
+    dataBase64: "AAAA",
+    settings,
     source: "unit_test"
   });
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(createdResponses.length, 0);
   assert.equal(brainReplyCalls.length, 0);
-  assert.equal(Array.isArray(session.streamWatch.brainContextEntries), true);
-  assert.equal(session.streamWatch.brainContextEntries.length, 1);
+  assert.equal(Array.isArray(session.streamWatch.noteEntries), true);
+  assert.equal(session.streamWatch.noteEntries.length, 1);
   assert.equal(
-    actions.some((entry) => entry.content === "stream_watch_brain_context_updated"),
+    actions.some((entry) => entry.content === "stream_watch_note_updated"),
     true
   );
   assert.equal(
@@ -1176,7 +1175,7 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
   );
 });
 
-test("maybeTriggerStreamWatchCommentary does not let scanner shouldComment disable a brain turn", async () => {
+test("maybeTriggerStreamWatchCommentary triggers early on visual change", async () => {
   const now = Date.now();
   const session = createSession({
     mode: "openai_realtime",
@@ -1191,43 +1190,23 @@ test("maybeTriggerStreamWatchCommentary does not let scanner shouldComment disab
       lastFrameAt: now,
       lastCommentaryAt: 0,
       lastCommentaryNote: null,
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: null,
-      lastBrainContextModel: null,
-      brainContextEntries: [],
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
       ingestedFrameCount: 2,
       acceptedFrameCountInWindow: 2,
       frameWindowStartedAt: 0,
       latestFrameMimeType: "image/png",
       latestFrameDataBase64: "AAAA",
-      latestFrameAt: now
+      latestFrameAt: now,
+      latestChangeScore: 0.02,
+      latestEmaChangeScore: 0.02,
+      latestIsSceneCut: false
     }
   });
-  const { manager, actions, brainReplyCalls, createdResponses } = createManager({
-    session,
-    llm: {
-      isProviderConfigured(provider) {
-        return provider === "anthropic";
-      },
-      async generate({ trace }) {
-        if (trace?.source === "voice_stream_watch_brain_context") {
-          return {
-            text: JSON.stringify({
-              note: "inventory menu still open",
-              urgency: "high"
-            }),
-            provider: "anthropic",
-            model: "claude-haiku-4-5"
-          };
-        }
-        return {
-          text: "inventory menu still open",
-          provider: "anthropic",
-          model: "claude-haiku-4-5"
-        };
-      }
-    }
-  });
+  session.streamWatch.lastCommentaryAt = now - 3_000;
+  const { manager, actions, brainReplyCalls, createdResponses } = createManager({ session });
 
   await maybeTriggerStreamWatchCommentary(manager, {
     session,
@@ -1237,13 +1216,11 @@ test("maybeTriggerStreamWatchCommentary does not let scanner shouldComment disab
   });
 
   assert.equal(brainReplyCalls.length, 1);
-  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:urgent");
+  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:change_detected");
   assert.equal(createdResponses.length, 0);
-  assert.equal(
-    actions.some((entry) => entry.content === "stream_watch_brain_context_updated"),
-    true
-  );
   assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), true);
+  const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
+  assert.equal(logged?.metadata?.triggerReason, "change_detected");
 });
 
 test("maybeTriggerStreamWatchCommentary skips autonomous commentary when no trigger is active", async () => {
@@ -1261,10 +1238,10 @@ test("maybeTriggerStreamWatchCommentary skips autonomous commentary when no trig
       lastFrameAt: now,
       lastCommentaryAt: 0,
       lastCommentaryNote: "same HUD and minimap visible",
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: "anthropic",
-      lastBrainContextModel: "claude-haiku-4-5",
-      brainContextEntries: [
+      lastNoteAt: 0,
+      lastNoteProvider: "anthropic",
+      lastNoteModel: "claude-haiku-4-5",
+      noteEntries: [
         {
           text: "same HUD and minimap visible",
           at: now - 5_000,
@@ -1278,24 +1255,14 @@ test("maybeTriggerStreamWatchCommentary skips autonomous commentary when no trig
       frameWindowStartedAt: 0,
       latestFrameMimeType: "image/png",
       latestFrameDataBase64: "AAAA",
-      latestFrameAt: now
+      latestFrameAt: now,
+      latestChangeScore: 0.001,
+      latestEmaChangeScore: 0.001,
+      latestIsSceneCut: false
     }
   });
-  const { manager, actions, brainReplyCalls, createdResponses } = createManager({
-    session,
-    llm: {
-      isProviderConfigured(provider) {
-        return provider === "anthropic";
-      },
-      async generate() {
-        return {
-          text: "same HUD and minimap visible",
-          provider: "anthropic",
-          model: "claude-haiku-4-5"
-        };
-      }
-    }
-  });
+  session.streamWatch.lastCommentaryAt = now;
+  const { manager, actions, brainReplyCalls, createdResponses } = createManager({ session });
 
   await maybeTriggerStreamWatchCommentary(manager, {
     session,
@@ -1307,10 +1274,6 @@ test("maybeTriggerStreamWatchCommentary skips autonomous commentary when no trig
   assert.equal(brainReplyCalls.length, 0);
   assert.equal(createdResponses.length, 0);
   assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
-  assert.equal(
-    actions.some((entry) => entry.content === "stream_watch_brain_context_updated"),
-    true
-  );
 });
 
 test("stopWatchStreamForUser persists a screen-share recap to memory and preserves prompt notes", async () => {
@@ -1323,10 +1286,10 @@ test("stopWatchStreamForUser persists a screen-share recap to memory and preserv
       lastFrameAt: now,
       lastCommentaryAt: now - 5_000,
       lastCommentaryNote: "boss fight HUD visible",
-      lastBrainContextAt: now - 3_000,
-      lastBrainContextProvider: "anthropic",
-      lastBrainContextModel: "claude-haiku-4-5",
-      brainContextEntries: [
+      lastNoteAt: now - 3_000,
+      lastNoteProvider: "anthropic",
+      lastNoteModel: "claude-haiku-4-5",
+      noteEntries: [
         {
           text: "boss fight HUD visible",
           at: now - 4_000,
@@ -1393,7 +1356,7 @@ test("stopWatchStreamForUser persists a screen-share recap to memory and preserv
   assert.equal(String(memoryIngests[0]?.content || "").includes("Screen share recap:"), true);
   assert.equal(memoryWrites.length, 1);
   assert.equal(memoryWrites[0]?.line, "Alice recently screen-shared a boss fight HUD with a flashing health bar.");
-  const context = getStreamWatchBrainContextForPrompt(session, settings);
+  const context = getStreamWatchNotesForPrompt(session, settings);
   assert.equal(Boolean(context), true);
   assert.equal(context?.active, false);
   assert.equal(context?.notes.length, 2);
@@ -1533,7 +1496,7 @@ test("maybeTriggerStreamWatchCommentary skips while deferred turns are queued", 
   assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
 });
 
-test("appendStreamWatchBrainContextEntry queues evicted notes for compaction", () => {
+test("appendStreamWatchNoteEntry queues evicted notes for compaction", () => {
   const session = createSession({
     pendingCompactionNotes: [],
     streamWatch: {
@@ -1543,10 +1506,10 @@ test("appendStreamWatchBrainContextEntry queues evicted notes for compaction", (
       lastFrameAt: 0,
       lastCommentaryAt: 0,
       lastCommentaryNote: null,
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: "anthropic",
-      lastBrainContextModel: "claude-haiku-4-5",
-      brainContextEntries: [
+      lastNoteAt: 0,
+      lastNoteProvider: "anthropic",
+      lastNoteModel: "claude-haiku-4-5",
+      noteEntries: [
         { text: "menu open", at: 1000, provider: "anthropic", model: "claude-haiku-4-5", speakerName: "alice" },
         { text: "queue popped", at: 2000, provider: "anthropic", model: "claude-haiku-4-5", speakerName: "alice" }
       ],
@@ -1559,7 +1522,7 @@ test("appendStreamWatchBrainContextEntry queues evicted notes for compaction", (
     }
   });
 
-  appendStreamWatchBrainContextEntry({
+  appendStreamWatchNoteEntry({
     session,
     text: "match started",
     at: 3000,
@@ -1570,7 +1533,7 @@ test("appendStreamWatchBrainContextEntry queues evicted notes for compaction", (
   });
 
   assert.deepEqual(
-    session.streamWatch.brainContextEntries.map((entry) => entry.text),
+    session.streamWatch.noteEntries.map((entry) => entry.text),
     ["queue popped", "match started"]
   );
   assert.deepEqual(session.pendingCompactionNotes, ["alice: menu open"]);
