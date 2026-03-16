@@ -9,6 +9,7 @@ import {
   START_SCREEN_WATCH_SCHEMA,
   STOP_VIDEO_SHARE_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,
+  VIDEO_CONTEXT_SCHEMA,
   VOICE_TOOL_SCHEMAS,
   WEB_SCRAPE_SCHEMA,
   WEB_SEARCH_SCHEMA,
@@ -16,6 +17,7 @@ import {
 } from "./sharedToolSchemas.ts";
 import {
   getMemorySettings,
+  getVideoContextSettings,
   isBrowserEnabled,
   isDevTaskEnabled,
   isResearchEnabled
@@ -30,6 +32,7 @@ export type ReplyToolAvailability = {
   memoryAvailable?: boolean;
   conversationSearchAvailable?: boolean;
   imageLookupAvailable?: boolean;
+  videoContextAvailable?: boolean;
   screenShareAvailable?: boolean;
   soundboardAvailable?: boolean;
   codeAgentAvailable?: boolean;
@@ -70,6 +73,7 @@ const TOOL_SCHEMA_BY_NAME = new Map(
     MEMORY_WRITE_SCHEMA,
     CONVERSATION_SEARCH_SCHEMA,
     IMAGE_LOOKUP_SCHEMA,
+    VIDEO_CONTEXT_SCHEMA,
     CODE_TASK_SCHEMA,
     START_SCREEN_WATCH_SCHEMA,
     SHARE_BROWSER_SESSION_SCHEMA,
@@ -138,6 +142,13 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     name: "image_lookup",
     surfaces: ["reply"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.imageLookupAvailable)
+  },
+  {
+    name: "video_context",
+    surfaces: ["reply", "voice_realtime"],
+    isReplyAvailable: ({ settings, capabilities }) =>
+      capabilities.videoContextAvailable !== false && Boolean(getVideoContextSettings(settings).enabled),
+    isVoiceRealtimeAvailable: () => true
   },
   {
     name: "start_screen_watch",

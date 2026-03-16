@@ -175,6 +175,20 @@ export const IMAGE_LOOKUP_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const VIDEO_CONTEXT_SCHEMA: SharedToolSchema = {
+  name: "video_context",
+  description: "Extract metadata, transcript, and keyframes from a video URL (YouTube, TikTok, X/Twitter, Reddit, Twitch, Streamable, or any yt-dlp-supported source). Returns structured data including title, channel, duration, transcript text, and optional keyframe images. Prefer this over web_scrape or browser_browse when you want video-specific content like transcripts.",
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "The full URL of the video to extract context from." }
+    },
+    required: ["url"],
+    additionalProperties: false
+  }
+};
+
 export const CODE_TASK_SCHEMA: SharedToolSchema = {
   name: "code_task",
   description: "Run the configured coding worker on a coding task. Supports optional role routing and session continuation.",

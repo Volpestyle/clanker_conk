@@ -8,7 +8,6 @@ import {
   buildBrowserBrowseContext as buildBrowserBrowseContextForBudgetTracking,
   buildImageLookupContext as buildImageLookupContextForBudgetTracking,
   buildMemoryLookupContext as buildMemoryLookupContextForBudgetTracking,
-  buildVideoReplyContext as buildVideoReplyContextForBudgetTracking,
   buildWebSearchContext as buildWebSearchContextForBudgetTracking,
   getGifBudgetState as getGifBudgetStateForBudgetTracking,
   getImageBudgetState as getImageBudgetStateForBudgetTracking,
@@ -429,6 +428,7 @@ export function buildReplyPipelineRuntime(
   return {
     ...botContext,
     activeReplies: bot.activeReplies,
+    video: bot.video,
     gifs: bot.gifs,
     search: bot.search,
     voiceSessionManager: bot.voiceSessionManager,
@@ -477,7 +477,6 @@ export function buildReplyPipelineRuntime(
     buildBrowserBrowseContext: (settings) =>
       buildBrowserBrowseContextForBudgetTracking(budgetContext, settings),
     buildMemoryLookupContext: (payload) => buildMemoryLookupContextForBudgetTracking(budgetContext, payload),
-    buildVideoReplyContext: (payload) => buildVideoReplyContextForBudgetTracking(budgetContext, payload),
     buildImageLookupContext: (payload) => buildImageLookupContextForBudgetTracking(budgetContext, payload),
     captionRecentHistoryImages: (payload = {}) =>
       captionRecentHistoryImagesForImageAnalysis(botContext, {

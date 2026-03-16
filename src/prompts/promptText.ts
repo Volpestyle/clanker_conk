@@ -15,7 +15,6 @@ import {
   formatConversationParticipantMemory,
   formatEmojiChoices,
   formatDiscoveryFindings,
-  formatVideoFindings,
   formatMemoryFacts,
   formatImageLookupCandidates
 } from "./promptFormatters.ts";
@@ -139,7 +138,6 @@ export function buildReplyPrompt({
   automationTimeZoneLabel = "",
   voiceMode = null,
   screenShare = null,
-  videoContext = null,
   channelMode = "other_channel" as "reply_channel" | "discovery_channel" | "other_channel",
   maxMediaPromptChars = 900,
   mediaPromptCraftGuidance = null
@@ -424,22 +422,6 @@ export function buildReplyPrompt({
   if (imageLookup?.enabled && imageLookup?.candidates?.length) {
     parts.push("Recent image references from message history:");
     parts.push(formatImageLookupCandidates(imageLookup.candidates));
-  }
-
-  if (videoContext?.requested && !videoContext.used) {
-    const videoReason = !videoContext.enabled
-      ? "disabled in settings"
-      : videoContext.blockedByBudget || !videoContext.budget?.canLookup
-        ? "hourly budget exhausted"
-        : videoContext.error
-          ? `fetch failed: ${videoContext.error}`
-          : "no usable metadata extracted";
-    parts.push(`Video context: unavailable (${videoReason}).`);
-  }
-
-  if (videoContext?.used && videoContext.videos?.length) {
-    parts.push("Video context from linked or embedded videos:");
-    parts.push(formatVideoFindings(videoContext));
   }
 
   const remainingImages = Math.max(0, Math.floor(Number(remainingReplyImages) || 0));

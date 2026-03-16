@@ -484,7 +484,7 @@ export function createClaudeCliStreamSession({
 }
 
 export function buildAnthropicImageParts(imageInputs) {
-  return (Array.isArray(imageInputs) ? imageInputs : [])
+  const parts = (Array.isArray(imageInputs) ? imageInputs : [])
     .map((image) => {
       const mediaType = String(image?.mediaType || image?.contentType || "").trim().toLowerCase();
       const base64 = String(image?.dataBase64 || "").trim();
@@ -509,6 +509,13 @@ export function buildAnthropicImageParts(imageInputs) {
       };
     })
     .filter(Boolean);
+  if (parts.length) {
+    const urlParts = parts.filter((p) => p.source?.type === "url");
+    if (urlParts.length) {
+      console.log(`[buildAnthropicImageParts] url_image_inputs  count=${urlParts.length}  urls=${urlParts.map((p) => p.source.url).join(", ")}`);
+    }
+  }
+  return parts;
 }
 
 export function buildClaudeCodeStreamInput({

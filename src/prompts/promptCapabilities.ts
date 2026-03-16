@@ -248,11 +248,12 @@ export function buildScreenWatchDocs(): string[] {
 
 export function buildVideoContextDocs(): string[] {
   return [
-    "=== VIDEO CONTEXT ===",
-    "When video links or attachments are present, metadata and transcripts may be extracted automatically.",
-    "If you reference video details, cite source IDs inline like [V1] or [V2].",
+    "=== VIDEO CONTEXT (video_context tool) ===",
+    "Use the video_context tool to extract metadata, transcripts, and keyframe images from video URLs.",
+    "Supports YouTube, TikTok, X/Twitter, Reddit, Twitch, Streamable, and other video hosts.",
+    "Prefer video_context over web_scrape or browser_browse when you want video-specific content like transcripts.",
     "Treat transcripts and keyframes as partial context. Avoid overclaiming what happened in the full video.",
-    "Do not claim you watched or fully understood the video when context is missing."
+    "For pages that need JS rendering or interaction, fall back to browser_browse."
   ];
 }
 
@@ -332,6 +333,7 @@ export function buildTextCapabilitiesDocs(
   }
 
   if (flags.videoContextEnabled) {
+    availableToolNames.push("video_context");
     sections.push(...buildVideoContextDocs());
   }
 

@@ -51,6 +51,7 @@ import {
   getDiscoverySettings,
   getMemorySettings,
   getReplyPermissions,
+  getVideoContextSettings,
   getVisionSettings,
   getVoiceSettings,
   isDevTaskEnabled
@@ -247,7 +248,6 @@ type ReplyPipelineContext = {
   browserBrowse: ReturnType<ReplyPipelineRuntime["buildBrowserBrowseContext"]>;
   recentConversationHistory: ReplyContinuityContext["recentConversationHistory"];
   memoryLookup: ReturnType<ReplyPipelineRuntime["buildMemoryLookupContext"]>;
-  videoContext: Awaited<ReturnType<ReplyPipelineRuntime["buildVideoReplyContext"]>>;
   modelImageInputs: ReplyImageInput[];
   imageLookup: ReturnType<ReplyPipelineRuntime["buildImageLookupContext"]>;
   replyTrace: ReplyTrace;
@@ -464,12 +464,16 @@ function buildReplyToolAvailabilityState(
   const codeTaskReason = codeAgentEnabled ? "available" : "settings_disabled";
   const voiceToolReason = voiceEnabled ? "available" : "settings_disabled";
 
+  const videoContextEnabled = Boolean(getVideoContextSettings(settings).enabled);
+  const videoContextReason = videoContextEnabled ? "available" : "settings_disabled";
+
   const capabilities = {
     webSearchAvailable: webSearchReason === "available",
     webScrapeAvailable: webSearchReason === "available",
     browserBrowseAvailable: browserBrowseReason === "available",
     memoryAvailable: memoryReason === "available",
     imageLookupAvailable: imageLookupReason === "available",
+    videoContextAvailable: videoContextReason === "available",
     codeAgentAvailable: codeTaskReason === "available",
     voiceToolsAvailable: voiceToolReason === "available"
   };
@@ -706,20 +710,8 @@ async function buildReplyContext(
   const browserBrowse = bot.buildBrowserBrowseContext(settings);
   const recentConversationHistory = continuity.recentConversationHistory;
   const memoryLookup = bot.buildMemoryLookupContext({ settings });
-  const videoContext = await bot.buildVideoReplyContext({
-    settings,
-    message,
-    recentMessages,
-    trace: {
-      guildId: message.guildId,
-      channelId: message.channelId,
-      userId: message.author.id,
-      source
-    }
-  });
   const modelImageInputs: ReplyImageInput[] = [
-    ...attachmentImageInputs,
-    ...(videoContext.frameImages || [])
+    ...attachmentImageInputs
   ].slice(0, MAX_MODEL_IMAGE_INPUTS);
   const imageLookup = bot.buildImageLookupContext({
     recentMessages,
@@ -841,7 +833,6 @@ async function buildReplyContext(
     },
     recentConversationHistory,
     screenShare: screenShareCapability,
-    videoContext,
     channelMode: isReplyChannel
       ? "reply_channel"
       : bot.isDiscoveryChannel(settings, message.channelId)
@@ -872,7 +863,7 @@ async function buildReplyContext(
     memorySlice, replyMediaMemoryFacts, attachmentImageInputs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, memoryLookup,
-    videoContext, modelImageInputs, imageLookup, replyTrace, screenShareCapability,
+    modelImageInputs, imageLookup, replyTrace, screenShareCapability,
     activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture, replyPrompts
   };
@@ -913,6 +904,62 @@ async function executeReplyLlm(
 
   const replyToolRuntime: ReplyToolRuntime = {
     search: bot.search,
+    video: bot.video ? {
+      fetchContext: async ({ url, settings: toolSettings, trace }) => {
+        const videoContextSettings = getVideoContextSettings(toolSettings);
+        const targets = bot.video.extractVideoTargets(url, 1);
+        if (!targets.length) {
+          // URL didn't match a known video host — fall through with a generic target
+          targets.push({
+            key: `generic:${url}`,
+            url,
+            kind: "generic",
+            provider: "generic",
+            videoId: null
+          });
+        }
+        const result = await bot.video.fetchContexts({
+          targets,
+          maxTranscriptChars: Number(videoContextSettings.maxTranscriptChars) || 1200,
+          keyframeIntervalSeconds: Number(videoContextSettings.keyframeIntervalSeconds) || 0,
+          maxKeyframesPerVideo: Number(videoContextSettings.maxKeyframesPerVideo) || 0,
+          allowAsrFallback: Boolean(videoContextSettings.allowAsrFallback),
+          maxAsrSeconds: Number(videoContextSettings.maxAsrSeconds) || 120,
+          trace
+        });
+        if (result.errors?.length && !result.videos?.length) {
+          return {
+            text: `Video context extraction failed for ${url}: ${result.errors[0]?.error || "unknown error"}. Try web_scrape or browser_browse as fallback.`,
+            isError: true
+          };
+        }
+        const video = result.videos?.[0];
+        if (!video) {
+          return {
+            text: `No video metadata could be extracted from ${url}. Try web_scrape or browser_browse instead.`,
+            isError: true
+          };
+        }
+        const lines: string[] = [];
+        lines.push(`Provider: ${video.provider || "unknown"}`);
+        lines.push(`Title: ${video.title || "untitled"}`);
+        lines.push(`Channel: ${video.channel || "unknown"}`);
+        if (video.url) lines.push(`URL: ${video.url}`);
+        if (video.publishedAt) lines.push(`Published: ${video.publishedAt}`);
+        if (video.durationSeconds) lines.push(`Duration: ${video.durationSeconds}s`);
+        if (video.viewCount) lines.push(`Views: ${video.viewCount}`);
+        if (video.description) lines.push(`Description: ${video.description}`);
+        if (video.transcript) lines.push(`Transcript (${video.transcriptSource || "unknown source"}): ${video.transcript}`);
+        if (video.transcriptError) lines.push(`Transcript error: ${video.transcriptError}`);
+        if (video.keyframeError) lines.push(`Keyframe error: ${video.keyframeError}`);
+        const frameImages = video.frameImages || [];
+        if (frameImages.length) lines.push(`Keyframes: ${frameImages.length} frame(s) attached`);
+        return {
+          text: lines.join("\n"),
+          imageInputs: frameImages.length ? frameImages : undefined
+        };
+      }
+    } : undefined,
     browser: {
       browse: async ({ settings: toolSettings, query, guildId, channelId, userId, source }) => {
         browserBrowse = await bot.runModelRequestedBrowserBrowse({
@@ -1519,8 +1566,7 @@ async function sendReplyMessage(
     isReplyChannel, source, performance,
     imageBudget, videoBudget,
     simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
-    videoCapabilityReady, gifBudget,
-    videoContext
+    videoCapabilityReady, gifBudget
   } = ctx;
   const {
     generation, typingDelayMs, usedWebSearchFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
@@ -1695,23 +1741,7 @@ async function sendReplyMessage(
         error: webSearch.error || null
       },
       video: {
-        requested: videoContext.requested,
-        used: videoContext.used,
-        detectedVideos: videoContext.detectedVideos,
-        detectedFromRecentMessages: videoContext.detectedFromRecentMessages,
-        fetchedVideos: videoContext.videos?.length || 0,
-        extractedKeyframes: videoContext.frameImages?.length || 0,
-        blockedByHourlyCap: videoContext.blockedByBudget,
-        maxPerHour: videoContext.budget?.maxPerHour ?? null,
-        remainingAtPromptTime: videoContext.budget?.remaining ?? null,
-        enabled: videoContext.enabled,
-        errorCount: videoContext.errors?.length || 0,
-        videos: (videoContext.videos || []).map((v: Record<string, unknown>) => ({
-          title: v.title,
-          url: v.url,
-          provider: v.provider,
-          channel: v.channel
-        }))
+        mode: "agent_tool"
       },
       llm: {
         provider: generation.provider,

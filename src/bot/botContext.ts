@@ -116,7 +116,6 @@ type GetMediaGenerationCapabilitiesFn = typeof import("./budgetTracking.ts").get
 type BuildWebSearchContextFn = typeof import("./budgetTracking.ts").buildWebSearchContext;
 type BuildBrowserBrowseContextFn = typeof import("./budgetTracking.ts").buildBrowserBrowseContext;
 type BuildMemoryLookupContextFn = typeof import("./budgetTracking.ts").buildMemoryLookupContext;
-type BuildVideoReplyContextFn = typeof import("./budgetTracking.ts").buildVideoReplyContext;
 type BuildImageLookupContextFn = typeof import("./budgetTracking.ts").buildImageLookupContext;
 type RunModelRequestedImageLookupFn = typeof import("./imageAnalysis.ts").runModelRequestedImageLookup;
 type MergeImageInputsFn = typeof import("./imageAnalysis.ts").mergeImageInputs;
@@ -213,6 +212,7 @@ type ReplyPipelineRuntimeMember =
 
 export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, ReplyPipelineRuntimeMember> {
   activeReplies: ActiveReplyRegistry;
+  video: VideoContextService;
   getReplyAddressSignal: GetReplyAddressSignalRuntimeFn;
   isReplyChannel: IsReplyChannelRuntimeFn;
   isDiscoveryChannel: IsDiscoveryChannelRuntimeFn;
@@ -228,7 +228,6 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   buildWebSearchContext: StripFirstArg<BuildWebSearchContextFn>;
   buildBrowserBrowseContext: StripFirstArg<BuildBrowserBrowseContextFn>;
   buildMemoryLookupContext: StripFirstArg<BuildMemoryLookupContextFn>;
-  buildVideoReplyContext: StripFirstArg<BuildVideoReplyContextFn>;
   buildImageLookupContext: StripFirstArg<BuildImageLookupContextFn>;
   captionRecentHistoryImages: CaptionRecentHistoryImagesRuntimeFn;
   getVoiceScreenWatchCapability: StripFirstArg<GetVoiceScreenWatchCapabilityFn>;

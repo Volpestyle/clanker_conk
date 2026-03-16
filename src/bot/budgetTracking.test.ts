@@ -16,7 +16,6 @@ import type { BudgetContext } from "./botContext.ts";
 import {
   buildBrowserBrowseContext,
   buildImageLookupContext,
-  buildVideoReplyContext,
   buildWebSearchContext,
   getImageBudgetState,
   getWebSearchBudgetState
@@ -231,34 +230,6 @@ test("buildBrowserBrowseContext accepts openai computer use through OpenAI OAuth
       assert.equal(browserBrowse.budget.canBrowse, true);
     }
   );
-});
-
-test("buildVideoReplyContext reports budget blocking before fetching video context", async () => {
-  await withTempBudgetContext(async (ctx) => {
-    const settings = createTestSettings({
-      media: {
-        videoContext: {
-          enabled: true,
-          maxLookupsPerHour: 1,
-          maxVideosPerMessage: 1
-        }
-      }
-    });
-    ctx.store.logAction({ kind: "video_context_call" });
-
-    const videoContext = await buildVideoReplyContext(ctx, {
-      settings,
-      message: {
-        content: "can you summarize https://youtu.be/dQw4w9WgXcQ"
-      }
-    });
-
-    assert.equal(videoContext.requested, true);
-    assert.equal(videoContext.used, false);
-    assert.equal(videoContext.blockedByBudget, true);
-    assert.equal(videoContext.detectedVideos, 1);
-    assert.equal(videoContext.budget.remaining, 0);
-  });
 });
 
 test("buildImageLookupContext filters excluded URLs and includes cached caption context", async () => {

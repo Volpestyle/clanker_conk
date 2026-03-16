@@ -50,12 +50,14 @@ export class VideoContextService {
   llm;
   cache;
   toolAvailabilityPromise;
+  toolAvailabilityCheckedAt;
 
   constructor({ store, llm }) {
     this.store = store;
     this.llm = llm;
     this.cache = new Map();
     this.toolAvailabilityPromise = null;
+    this.toolAvailabilityCheckedAt = 0;
   }
 
   logCleanupError(scope: string, error: unknown, metadata: Record<string, unknown> | null = null) {
@@ -764,18 +766,26 @@ export class VideoContextService {
   }
 
   async getToolAvailability() {
-    if (!this.toolAvailabilityPromise) {
-      this.toolAvailabilityPromise = Promise.all([
-        this.commandAvailable("ffmpeg", ["-version"]),
-        this.commandAvailable("yt-dlp", ["--version"])
-      ])
-        .then(([ffmpeg, ytDlp]) => ({ ffmpeg, ytDlp }))
-        .catch((error) => {
-          this.toolAvailabilityPromise = null;
-          this.logCleanupError("video_context_tool_availability_failed", error);
-          return { ffmpeg: false, ytDlp: false };
-        });
+    const TOOL_CHECK_TTL_MS = 5 * 60 * 1000;
+    const now = Date.now();
+    if (this.toolAvailabilityPromise && now - this.toolAvailabilityCheckedAt < TOOL_CHECK_TTL_MS) {
+      return this.toolAvailabilityPromise;
     }
+    this.toolAvailabilityCheckedAt = now;
+    this.toolAvailabilityPromise = Promise.all([
+      this.commandAvailable("ffmpeg", ["-version"]),
+      this.commandAvailable("yt-dlp", ["--version"])
+    ])
+      .then(([ffmpeg, ytDlp]) => {
+        console.log(`[VideoContextService] tool_availability  ffmpeg=${ffmpeg}  ytDlp=${ytDlp}`);
+        return { ffmpeg, ytDlp };
+      })
+      .catch((error) => {
+        this.toolAvailabilityPromise = null;
+        this.toolAvailabilityCheckedAt = 0;
+        this.logCleanupError("video_context_tool_availability_failed", error);
+        return { ffmpeg: false, ytDlp: false };
+      });
     return this.toolAvailabilityPromise;
   }
 
@@ -794,10 +804,12 @@ export class VideoContextService {
       await runCommand({
         command,
         args,
-        timeoutMs: 4_000
+        timeoutMs: 4_000,
+        useShell: true
       });
       return true;
-    } catch {
+    } catch (error) {
+      console.warn(`[VideoContextService] command_not_available  command=${command}  error=${error?.message || error}`);
       return false;
     }
   }
@@ -1099,10 +1111,11 @@ async function fetchPublicResponseWithRedirects({ url, accept, maxRedirects = MA
   throw new Error(`too many redirects for video URL: ${url}`);
 }
 
-async function runCommand({ command, args, timeoutMs = 30_000 }) {
+async function runCommand({ command, args, timeoutMs = 30_000, useShell = false }: { command: string; args: string[]; timeoutMs?: number; useShell?: boolean }) {
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(command, args, {
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["ignore", "pipe", "pipe"],
+      ...(useShell ? { shell: true } : {})
     });
 
     let stdout = "";

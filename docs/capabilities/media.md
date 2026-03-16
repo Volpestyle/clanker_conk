@@ -62,6 +62,25 @@ Deep dives:
 - [`../voice/music.md`](../voice/music.md)
 - [`../voice/discord-streaming.md`](../voice/discord-streaming.md)
 
+### Video context extraction
+
+Core tool:
+
+- `video_context`
+
+Agent-initiated tool for extracting metadata, transcripts, and keyframe images
+from video URLs. Supports YouTube (custom scraper, no external deps), plus
+TikTok, X/Twitter, Reddit, Twitch, Streamable, and any other yt-dlp-supported
+source when yt-dlp and ffmpeg are available on the host.
+
+The agent decides when to call this tool. It is preferred over `web_scrape` or
+`browser_browse` when the goal is video-specific content like transcripts or
+metadata. For pages requiring JS rendering or interaction, the agent falls back
+to `browser_browse`.
+
+Settings: `media.videoContext` controls enablement and extraction parameters
+(transcript length, keyframe interval, ASR fallback).
+
 ### Screen watch
 
 Core tool:
@@ -110,8 +129,10 @@ The brain should not follow a rigid ladder like:
 
 Instead:
 
-- use `music_play` / `video_play` for ordinary “play this now” requests
+- use `music_play` / `video_play` for ordinary "play this now" requests
 - use `music_search` / `video_search` when the user explicitly wants options
+- use `video_context` when a shared link is a video and you want transcript/metadata
+- use `web_scrape` for lightweight page text extraction
 - use `browser_browse` when page appearance, thumbnails, or navigation matter
 - use `share_browser_session` when the user should see the live browser itself
 - use `start_screen_watch` when live visual context would materially help

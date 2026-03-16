@@ -264,6 +264,17 @@ export type ReplyToolRuntime = {
     playSoundboard: (refs: string[], transcript: string) => Promise<Record<string, unknown>>;
     leaveVoiceChannel: () => Promise<Record<string, unknown>>;
   };
+  video?: {
+    fetchContext: (opts: {
+      url: string;
+      settings: Record<string, unknown>;
+      trace: Record<string, unknown>;
+    }) => Promise<{
+      text: string;
+      imageInputs?: ImageInput[];
+      isError?: boolean;
+    }>;
+  };
   voiceJoin?: () => Promise<{
     ok: boolean;
     reason?: string;
@@ -300,6 +311,7 @@ const REPLY_TOOL_HANDLERS: Record<
 > = {
   web_search: executeWebSearch,
   web_scrape: executeWebScrape,
+  video_context: executeVideoContext,
   browser_browse: executeBrowserBrowse,
   memory_search: executeMemorySearch,
   memory_write: executeMemoryWrite,
@@ -498,6 +510,49 @@ async function executeWebScrape(
     const message = String((error as Error)?.message || error);
     return {
       content: `Web scrape failed for ${url}: ${message}. If the page requires JavaScript or interaction, try browser_browse instead.`,
+      isError: true
+    };
+  }
+}
+
+const MAX_VIDEO_CONTEXT_URL_LEN = 2000;
+
+async function executeVideoContext(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  const url = String(input?.url || "").trim().slice(0, MAX_VIDEO_CONTEXT_URL_LEN);
+  if (!url) {
+    return { content: "Missing or empty URL.", isError: true };
+  }
+  if (!runtime.video?.fetchContext) {
+    return { content: "Video context extraction is not available.", isError: true };
+  }
+
+  try {
+    const result = await runtime.video.fetchContext({
+      url,
+      settings: context.settings,
+      trace: {
+        guildId: context.guildId,
+        channelId: context.channelId,
+        userId: context.userId,
+        source: "video_context_tool"
+      }
+    });
+    if (result.isError) {
+      return { content: result.text, isError: true };
+    }
+    return {
+      content: result.text,
+      imageInputs: result.imageInputs
+    };
+  } catch (error) {
+    const message = String((error as Error)?.message || error);
+    return {
+      content: `Video context extraction failed for ${url}: ${message}. Try web_scrape or browser_browse as fallback.`,
       isError: true
     };
   }

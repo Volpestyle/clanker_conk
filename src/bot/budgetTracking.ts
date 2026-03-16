@@ -1,17 +1,12 @@
 import {
-  MAX_VIDEO_FALLBACK_MESSAGES,
-  MAX_VIDEO_TARGET_SCAN,
-  extractRecentVideoTargets,
-  isWebSearchOptOutText,
-  looksLikeVideoFollowupMessage
+  isWebSearchOptOutText
 } from "./botHelpers.ts";
 import {
   getBrowserRuntimeConfig,
   getDiscoverySettings,
   getMemorySettings,
   getResearchRuntimeConfig,
-  getResolvedBrowserTaskConfig,
-  getVideoContextSettings
+  getResolvedBrowserTaskConfig
 } from "../settings/agentStack.ts";
 import type { Settings } from "../settings/settingsSchema.ts";
 import { clamp } from "../utils.ts";
@@ -64,15 +59,6 @@ export type BrowserBudgetState = {
   canBrowse: boolean;
 };
 
-type VideoContextBudgetState = {
-  maxPerHour: number;
-  used: number;
-  successCount: number;
-  errorCount: number;
-  remaining: number;
-  canLookup: boolean;
-};
-
 type TraceContext = {
   guildId?: string | null;
   channelId?: string | null;
@@ -90,23 +76,7 @@ type SelectedImageInput = {
   dataBase64?: string;
 };
 
-type VideoReplyMessageLike = {
-  content?: string | null;
-  attachments?: {
-    size?: number;
-    values?: () => IterableIterator<unknown>;
-  } | null;
-  embeds?: unknown[] | null;
-};
-
 type HistoryImageCandidate = ReturnType<typeof extractHistoryImageCandidates>[number];
-
-type BuildVideoReplyContextOptions = {
-  settings: Settings;
-  message: VideoReplyMessageLike;
-  recentMessages?: RecentHistoryMessage[];
-  trace?: TraceContext;
-};
 
 type BuildMemoryLookupContextOptions = {
   settings: Settings;
@@ -115,20 +85,6 @@ type BuildMemoryLookupContextOptions = {
 type BuildImageLookupContextOptions = {
   recentMessages?: RecentHistoryMessage[];
   excludedUrls?: string[];
-};
-
-type VideoReplyContextState = {
-  requested: boolean;
-  enabled: boolean;
-  used: boolean;
-  blockedByBudget: boolean;
-  error: string | null;
-  errors: GenericLookupResult[];
-  detectedVideos: number;
-  detectedFromRecentMessages: boolean;
-  videos: GenericLookupResult[];
-  frameImages: GenericLookupResult[];
-  budget: VideoContextBudgetState;
 };
 
 type WebSearchContextState = {
@@ -315,185 +271,6 @@ function getBrowserBudgetState(
     remaining,
     canBrowse: maxPerHour > 0 && remaining > 0
   };
-}
-
-function getVideoContextBudgetState(
-  ctx: BudgetContext,
-  settings: Settings
-): VideoContextBudgetState {
-  const videoContext = getVideoContextSettings(settings);
-  const maxPerHour = clamp(Number(videoContext.maxLookupsPerHour) || 0, 0, 120);
-  const since1h = buildWindowStart(1);
-  const successCount = ctx.store.countActionsSince("video_context_call", since1h);
-  const errorCount = ctx.store.countActionsSince("video_context_error", since1h);
-  const used = successCount + errorCount;
-  const remaining = Math.max(0, maxPerHour - used);
-
-  return {
-    maxPerHour,
-    used,
-    successCount,
-    errorCount,
-    remaining,
-    canLookup: maxPerHour > 0 && remaining > 0
-  };
-}
-
-export async function buildVideoReplyContext(
-  ctx: BudgetContext,
-  {
-    settings,
-    message,
-    recentMessages = [],
-    trace = {}
-  }: BuildVideoReplyContextOptions
-): Promise<VideoReplyContextState> {
-  const videoContextSettings = getVideoContextSettings(settings);
-  const messageText = String(message?.content || "");
-  const enabled = Boolean(videoContextSettings.enabled);
-  const budget = getVideoContextBudgetState(ctx, settings);
-  const maxVideosPerMessage = clamp(Number(videoContextSettings.maxVideosPerMessage) || 0, 0, 6);
-  const maxTranscriptChars = clamp(Number(videoContextSettings.maxTranscriptChars) || 1200, 200, 4000);
-  const keyframeIntervalSeconds = clamp(Number(videoContextSettings.keyframeIntervalSeconds) || 0, 0, 120);
-  const maxKeyframesPerVideo = clamp(Number(videoContextSettings.maxKeyframesPerVideo) || 0, 0, 8);
-  const allowAsrFallback = Boolean(videoContextSettings.allowAsrFallback);
-  const maxAsrSeconds = clamp(Number(videoContextSettings.maxAsrSeconds) || 120, 15, 600);
-
-  const base: VideoReplyContextState = {
-    requested: false,
-    enabled,
-    used: false,
-    blockedByBudget: false,
-    error: null,
-    errors: [],
-    detectedVideos: 0,
-    detectedFromRecentMessages: false,
-    videos: [],
-    frameImages: [],
-    budget
-  };
-
-  const videoService = ctx.video;
-  if (
-    !videoService ||
-    typeof videoService.extractMessageTargets !== "function" ||
-    typeof videoService.fetchContexts !== "function"
-  ) {
-    return base;
-  }
-
-  const directTargets = videoService.extractMessageTargets(message, MAX_VIDEO_TARGET_SCAN);
-  const fallbackTargets =
-    !directTargets.length && looksLikeVideoFollowupMessage(messageText)
-      ? extractRecentVideoTargets({
-          videoService,
-          recentMessages,
-          maxMessages: MAX_VIDEO_FALLBACK_MESSAGES,
-          maxTargets: MAX_VIDEO_TARGET_SCAN
-        })
-      : [];
-  const detectedTargets = directTargets.length ? directTargets : fallbackTargets;
-  if (!detectedTargets.length) return base;
-  const detectedFromRecentMessages = directTargets.length === 0 && fallbackTargets.length > 0;
-
-  if (maxVideosPerMessage <= 0) {
-    return {
-      ...base,
-      requested: true,
-      detectedVideos: detectedTargets.length,
-      detectedFromRecentMessages
-    };
-  }
-
-  const targets = detectedTargets.slice(0, maxVideosPerMessage);
-  if (!targets.length) {
-    return {
-      ...base,
-      requested: true,
-      detectedVideos: detectedTargets.length,
-      detectedFromRecentMessages
-    };
-  }
-
-  if (!enabled) {
-    return {
-      ...base,
-      requested: true,
-      detectedVideos: detectedTargets.length,
-      detectedFromRecentMessages
-    };
-  }
-
-  if (!budget.canLookup) {
-    return {
-      ...base,
-      requested: true,
-      detectedVideos: detectedTargets.length,
-      detectedFromRecentMessages,
-      blockedByBudget: true
-    };
-  }
-
-  const allowedCount = Math.min(targets.length, budget.remaining);
-  if (allowedCount <= 0) {
-    return {
-      ...base,
-      requested: true,
-      detectedVideos: detectedTargets.length,
-      detectedFromRecentMessages,
-      blockedByBudget: true
-    };
-  }
-
-  const selectedTargets = targets.slice(0, allowedCount);
-  const blockedByBudget = selectedTargets.length < targets.length;
-
-  try {
-    const result = await videoService.fetchContexts({
-      targets: selectedTargets,
-      maxTranscriptChars,
-      keyframeIntervalSeconds,
-      maxKeyframesPerVideo,
-      allowAsrFallback,
-      maxAsrSeconds,
-      trace
-    });
-    const firstError = String(result.errors?.[0]?.error || "").trim() || null;
-    const videos = (result.videos || []).map((item) => {
-      const { frameImages: _frameImages, ...rest } = item || {};
-      return rest;
-    });
-    const frameImages = (result.videos || []).flatMap((item) => item?.frameImages || []);
-
-    return {
-      ...base,
-      requested: true,
-      used: Boolean(videos.length),
-      blockedByBudget,
-      error: firstError,
-      errors: result.errors || [],
-      detectedVideos: detectedTargets.length,
-      detectedFromRecentMessages,
-      videos,
-      frameImages
-    };
-  } catch (error) {
-    return {
-      ...base,
-      requested: true,
-      detectedVideos: detectedTargets.length,
-      detectedFromRecentMessages,
-      blockedByBudget,
-      error: String(error instanceof Error ? error.message : error),
-      errors: [
-        {
-          videoId: null,
-          url: null,
-          error: String(error instanceof Error ? error.message : error)
-        }
-      ]
-    };
-  }
 }
 
 export function buildWebSearchContext(
