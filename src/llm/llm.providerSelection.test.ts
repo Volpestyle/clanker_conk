@@ -372,6 +372,54 @@ test("callOpenAI omits empty text multimodal blocks", async () => {
   assert.equal(seenPayload.input?.[0]?.content?.[0]?.type, "input_image");
 });
 
+test("callOpenAI appends the JSON schema contract to instructions when tools are enabled", async () => {
+  const service = createService({
+    openaiApiKey: "test-openai-key"
+  });
+  let seenPayload = null;
+  service.openai = {
+    responses: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          output_text: '{"text":"ok"}',
+          usage: {
+            input_tokens: 5,
+            output_tokens: 1,
+            input_tokens_details: {
+              cached_tokens: 0
+            }
+          }
+        };
+      }
+    }
+  };
+
+  await service.callOpenAI({
+    model: "gpt-5.4",
+    systemPrompt: "system prompt",
+    userPrompt: "say hi",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64,
+    jsonSchema: '{"type":"object","properties":{"text":{"type":"string"}}}',
+    tools: [
+      {
+        name: "web_search",
+        description: "Searches the web",
+        input_schema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false
+        }
+      }
+    ]
+  });
+
+  assert.match(String(seenPayload.instructions || ""), /Return strict JSON only\./);
+  assert.match(String(seenPayload.instructions || ""), /JSON schema:/);
+});
+
 test("callAnthropic omits empty text multimodal blocks", async () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key" });
   let seenPayload = null;
@@ -423,6 +471,52 @@ test("callAnthropic omits empty text multimodal blocks", async () => {
     seenPayload.messages?.[0]?.content?.some((item) => item?.type === "text" && !String(item?.text || "").trim()),
     false
   );
+});
+
+test("callAnthropic appends the JSON schema contract to the system prompt when tools are enabled", async () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  let seenPayload = null;
+  service.anthropic = {
+    messages: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 5,
+            output_tokens: 1,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0
+          }
+        };
+      }
+    }
+  };
+
+  await service.callAnthropic({
+    model: "claude-haiku-4-5",
+    systemPrompt: "system prompt",
+    userPrompt: "say hi",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64,
+    jsonSchema: '{"type":"object","properties":{"text":{"type":"string"}}}',
+    tools: [
+      {
+        name: "web_search",
+        description: "Searches the web",
+        input_schema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false
+        }
+      }
+    ]
+  });
+
+  assert.match(String(seenPayload.system?.[0]?.text || ""), /Return strict JSON only\./);
+  assert.match(String(seenPayload.system?.[0]?.text || ""), /JSON schema:/);
 });
 
 test("callAnthropicStreaming forwards streamed text deltas and returns the final response", async () => {

@@ -14,6 +14,7 @@ import {
 } from "./llmHelpers.ts";
 import {
   addAnthropicCacheBreakpointToLastItem,
+  appendJsonSchemaInstruction,
   buildAnthropicCachedSystemPrompt,
   buildContextContentBlocks,
   buildOpenAiJsonSchemaTextFormat,
@@ -95,6 +96,7 @@ function buildAnthropicMessagesRequest({
   maxOutputTokens,
   thinking,
   thinkingBudgetTokens,
+  jsonSchema = "",
   tools = []
 }: ChatModelRequest) {
   const imageParts = buildAnthropicImageParts(imageInputs);
@@ -121,7 +123,8 @@ function buildAnthropicMessagesRequest({
 
   const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
   const normalizedTools = Array.isArray(tools) ? tools : [];
-  const cachedSystemPrompt = buildAnthropicCachedSystemPrompt(systemPrompt);
+  const effectiveSystemPrompt = appendJsonSchemaInstruction(systemPrompt, jsonSchema);
+  const cachedSystemPrompt = buildAnthropicCachedSystemPrompt(effectiveSystemPrompt);
   // Strict tools are only supported by Claude models from Sonnet 4.5 onward.
   // Older models (Sonnet 4.0, 3.x, etc.) reject the parameter with a 400 error.
   const modelSupportsStrictTools = (() => {
@@ -375,6 +378,7 @@ function buildOpenAiResponsesRequestBody({
   jsonSchema = "",
   tools = []
 }: ChatModelRequest) {
+  const effectiveSystemPrompt = appendJsonSchemaInstruction(systemPrompt, jsonSchema);
   const normalizedTools = Array.isArray(tools) ? tools : [];
   const openAiTools = normalizedTools.length
     ? normalizedTools.map((tool) => ({
@@ -389,7 +393,7 @@ function buildOpenAiResponsesRequestBody({
 
   return {
     model,
-    instructions: systemPrompt,
+    instructions: effectiveSystemPrompt,
     ...buildOpenAiTemperatureParam(model, temperature),
     ...buildOpenAiReasoningParam(model, reasoningEffort),
     max_output_tokens: maxOutputTokens,
@@ -547,6 +551,7 @@ export async function callXaiChatCompletions(
     contextMessages = [],
     temperature,
     maxOutputTokens,
+    jsonSchema = "",
     tools = [],
     signal
   }: ChatModelRequest
@@ -555,6 +560,7 @@ export async function callXaiChatCompletions(
     throw new Error("xAI LLM calls require XAI_API_KEY.");
   }
 
+  const effectiveSystemPrompt = appendJsonSchemaInstruction(systemPrompt, jsonSchema);
   const imageParts = imageInputs
     .map((image) => {
       const mediaType = String(image?.mediaType || image?.contentType || "").trim().toLowerCase();
@@ -582,7 +588,7 @@ export async function callXaiChatCompletions(
     : normalizedUserPrompt;
 
   const messages = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: effectiveSystemPrompt },
     ...contextMessages.map((msg) => ({
       role: msg.role === "assistant" ? "assistant" : "user",
       content: msg.content
