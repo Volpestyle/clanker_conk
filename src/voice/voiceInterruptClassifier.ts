@@ -113,8 +113,13 @@ function isObviousInterruptTakeoverText(text: string) {
     .replace(/\s+/gu, " ")
     .trim();
   if (!normalized) return false;
+  // Cancel intent covers "stop", "cancel", "nevermind", "abort", etc.
   if (isCancelIntent(normalized)) return true;
-  return /\b(?:wait|hold on|hang on|stop|pause|one sec|one second|let me talk|lemme talk|can i talk|can i say something|listen)\b/u.test(normalized);
+  // Only match phrases that are unambiguously about taking the conversational
+  // floor. Bare words like "wait", "stop", "hold on" fire constantly in
+  // gaming sessions (e.g. "oh wait, I don't have teleportation potions") and
+  // cause false-positive interruptions.
+  return /\b(?:let me talk|lemme talk|can i talk|can i say something|let me finish|shut up|be quiet|shush|hush)\b/u.test(normalized);
 }
 
 export function hasObviousInterruptTakeoverBurst(entries: VoiceInterruptOverlapBurstEntry[]) {

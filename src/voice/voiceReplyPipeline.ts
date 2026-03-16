@@ -381,6 +381,13 @@ export async function runVoiceReplyPipeline(
 
   const normalizedTranscript = normalizeVoiceText(params.transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
+
+  // Determine early whether this is a stream_watch commentary turn so we
+  // can tag the ActiveReply and conditionally skip the image attachment.
+  const isStreamWatchCommentaryTurn =
+    params.inputKind === "event" &&
+    Boolean(params.runtimeEventContext && (params.runtimeEventContext as unknown as { category?: string }).category === "screen_share");
+
   const currentMusicPhase = host.getMusicPhase(session);
   const musicWakeFollowupState = getMusicWakeFollowupState(session, params.userId || null);
   const shouldRefreshMusicWakeAfterSpeech =
@@ -584,15 +591,21 @@ export async function runVoiceReplyPipeline(
     return displayName ? [{ displayName }] : [];
   })();
   const streamWatchBrainContext = host.getStreamWatchBrainContextForPrompt(session, params.settings);
-  const streamWatchLatestFrame =
-    params.frozenFrameSnapshot?.dataBase64
-      ? params.frozenFrameSnapshot
-      : session.streamWatch?.active && session.streamWatch?.latestFrameDataBase64
-        ? {
-            mimeType: String(session.streamWatch.latestFrameMimeType || "image/jpeg"),
-            dataBase64: String(session.streamWatch.latestFrameDataBase64)
-          }
-        : null;
+
+  // Only attach the raw image frame for stream_watch commentary turns.
+  // User-speech voice replies still get the rolling [[NOTE:...]] context
+  // (via streamWatchBrainContext above) but skip the image to cut ~1500-2000
+  // tokens and halve generation latency.
+  const streamWatchLatestFrame = isStreamWatchCommentaryTurn
+    ? (params.frozenFrameSnapshot?.dataBase64
+        ? params.frozenFrameSnapshot
+        : session.streamWatch?.active && session.streamWatch?.latestFrameDataBase64
+          ? {
+              mimeType: String(session.streamWatch.latestFrameMimeType || "image/jpeg"),
+              dataBase64: String(session.streamWatch.latestFrameDataBase64)
+            }
+          : null)
+    : null;
   const generationConversationContext = {
     ...(resolvedConversationContext || {}),
     sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
@@ -650,6 +663,7 @@ export async function runVoiceReplyPipeline(
       transcript: normalizedTranscript,
       inputKind: params.inputKind || "transcript",
       directAddressed: Boolean(params.directAddressed),
+      source,
       contextMessages,
       sessionId: session.id,
       isEagerTurn:
