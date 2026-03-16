@@ -12,7 +12,7 @@
  * when a tool is temporarily unavailable (budget, runtime, etc.).
  */
 
-import { getPromptBotName, REPLY_JSON_SCHEMA, getMediaPromptCraftGuidance } from "./promptCore.ts";
+import { REPLY_JSON_SCHEMA, getMediaPromptCraftGuidance } from "./promptCore.ts";
 import {
   CONVERSATION_SEARCH_POLICY_LINE,
   WEB_SCRAPE_POLICY_LINE,
@@ -25,6 +25,68 @@ import {
   MUSIC_ACTIVE_AUTONOMY_POLICY_LINE,
   MUSIC_REPLY_HANDOFF_POLICY_LINE
 } from "./voiceLivePolicy.ts";
+
+// ---------------------------------------------------------------------------
+// Tool summary block — compact quick-reference for the model
+// ---------------------------------------------------------------------------
+
+/**
+ * One-line routing hints keyed by tool name. These complement the structured
+ * tool schemas (which say *what* a tool does) with behavioral guidance
+ * (*when* to reach for it).  Only tools present in the capability flags are
+ * included, giving the model a scannable index before the detailed sections.
+ */
+
+const TEXT_TOOL_SUMMARIES: Record<string, string> = {
+  conversation_search: "Recall earlier text or voice exchanges when someone asks what was said before.",
+  web_search: "Fresh discovery or current facts when accuracy depends on live web info.",
+  web_scrape: "Read a known URL's text, including one you just got from web_search.",
+  browser_browse: "JS rendering, visual layout, screenshots, navigation, or interaction.",
+  memory_search: "Look up durable memory facts (speaker, guild, self, lore).",
+  memory_write: "Store long-lived useful facts or standing guidance, never secrets or chatter.",
+  image_lookup: "Find a previously shared image from message history by ref or description.",
+  code_task: "Run the configured coding worker on a coding task.",
+  join_voice_channel: "Join the requesting user's current voice channel.",
+  leave_voice_channel: "Leave the voice channel.",
+  music_search: "Browse track candidates without starting playback.",
+  music_play: "Start audio playback from a query or prior selection_id.",
+  video_search: "Browse YouTube video candidates without starting playback.",
+  video_play: "Start YouTube video playback via Discord Go Live.",
+  music_queue_add: "Append tracks to the end of the queue.",
+  music_queue_next: "Insert tracks immediately after the current track.",
+  media_stop: "Stop playback and clear the queue.",
+  media_pause: "Pause current playback.",
+  media_resume: "Resume paused playback.",
+  media_reply_handoff: "Temporarily pause/duck playback while you speak.",
+  media_skip: "Skip to the next queued item.",
+  media_now_playing: "Read current playback and queue status.",
+  start_screen_watch: "Watch the most relevant active stream for live visual context.",
+  share_browser_session: "Share a persistent browser session into Discord Go Live.",
+  stop_video_share: "Stop the current outbound video share.",
+  stream_visualizer: "Start a Go Live audio visualizer for currently playing music.",
+  play_soundboard: "Play one or more soundboard clips in the current voice session.",
+  note_context: "Pin important session-scoped context for later in the conversation."
+};
+
+const VOICE_TOOL_SUMMARIES: Record<string, string> = {
+  ...TEXT_TOOL_SUMMARIES,
+  // voice-surface overrides / additions (none currently differ)
+};
+
+export function buildToolSummaryBlock(
+  toolNames: string[],
+  summaryMap: Record<string, string> = TEXT_TOOL_SUMMARIES
+): string[] {
+  const lines = toolNames
+    .map((name) => {
+      const hint = summaryMap[name];
+      return hint ? `- ${name}: ${hint}` : null;
+    })
+    .filter(Boolean) as string[];
+
+  if (!lines.length) return [];
+  return ["Available tools:", ...lines];
+}
 
 // ---------------------------------------------------------------------------
 // Text output format (fully static)
@@ -114,20 +176,15 @@ export function buildGifDocs(): string[] {
 
 export function buildWebSearchDocs({ includeBrowserBrowse = false }: { includeBrowserBrowse?: boolean } = {}): string[] {
   return [
-    "=== WEB SEARCH ===",
-    "Live web search and direct page reading are available via the web_search and web_scrape tools.",
     buildWebToolRoutingPolicyLine({ includeBrowserBrowse }),
     buildWebSearchPolicyLine(),
     WEB_SCRAPE_POLICY_LINE,
-    "Use the web tools only when they materially help.",
-    "If something you can do is currently disabled or budget-blocked, say it is currently unavailable with the reason. Do not claim a supported feature can never work."
+    "Use the web tools only when they materially help."
   ];
 }
 
 export function buildBrowserDocs(): string[] {
   return [
-    "=== BROWSER ===",
-    "Interactive browser browsing is available via the browser_browse tool.",
     BROWSER_BROWSE_POLICY_LINE,
     BROWSER_SCREENSHOT_POLICY_LINE
   ];
@@ -139,8 +196,6 @@ export function buildBrowserDocs(): string[] {
 
 export function buildMemoryLookupDocs(): string[] {
   return [
-    "=== MEMORY LOOKUP ===",
-    "Durable memory lookup is available via the memory_search tool.",
     "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, call memory_search with a concise query.",
     "If the user asks for a broad dump of stored memory or everything you remember, use query \"__ALL__\".",
     "`__ALL__` requests a capped stored-memory dump, not a ranked topical lookup."
@@ -149,7 +204,6 @@ export function buildMemoryLookupDocs(): string[] {
 
 export function buildImageLookupDocs(): string[] {
   return [
-    "History image lookup is available via the image_lookup tool.",
     "If the user refers to an earlier image/photo and current message attachments are insufficient, call image_lookup with a short query or a specific image ref like IMG 3.",
     "The [IMG n] markers in recent chat are historical images, not fresh attachments on the latest user message.",
     "Do not claim you cannot review earlier shared images when history lookup is available."
@@ -169,11 +223,8 @@ export function buildConversationSearchDocs(): string[] {
 // ---------------------------------------------------------------------------
 
 export function buildVoiceControlDocs(settings: unknown): string[] {
-  const botName = getPromptBotName(settings);
   return [
-    "=== VOICE CONTROL ===",
-    `${botName} has voice channel capability. Use join_voice_channel / leave_voice_channel tools to manage VC presence.`,
-    "Music commands (play, queue, stop, pause, skip, search) are available as tool calls. If not in a voice channel, call join_voice_channel first, then call the music tool.",
+    "If not in a voice channel, call join_voice_channel first, then call the music tool.",
     "If the user asks what is playing, what was stopped, or what is queued, answer from the current music state directly.",
     "If there is a pending music disambiguation request, and the user picks one of the options (by number or by naming it), call the pending action with the selection_id set to that exact id."
   ];
@@ -185,8 +236,6 @@ export function buildVoiceControlDocs(settings: unknown): string[] {
 
 export function buildScreenWatchDocs(): string[] {
   return [
-    "=== SCREEN WATCH ===",
-    "You can start screen watch when useful. The runtime will use native Discord screen watch when available and fall back automatically if needed.",
     "If the user asks you to see/watch their screen or stream, set screenWatchIntent.action to start_watch.",
     "If visual context would materially improve troubleshooting/help, you may proactively set screenWatchIntent.action to start_watch.",
     "Set screenWatchIntent.confidence from 0 to 1. Use high confidence only when live visual context is clearly useful."
@@ -230,6 +279,28 @@ export function buildTextCapabilitiesDocs(
 ): string[] {
   const sections: string[] = [];
 
+  // -- Compact tool quick-reference ------------------------------------
+  const availableToolNames: string[] = ["conversation_search"];
+  if (flags.webSearchEnabled) availableToolNames.push("web_search", "web_scrape");
+  if (flags.browserEnabled) availableToolNames.push("browser_browse");
+  if (flags.memoryEnabled) availableToolNames.push("memory_search", "memory_write");
+  availableToolNames.push("image_lookup");
+  if (flags.voiceEnabled) {
+    availableToolNames.push(
+      "join_voice_channel", "leave_voice_channel",
+      "music_play", "music_search", "music_queue_add", "music_queue_next",
+      "video_play", "video_search",
+      "media_stop", "media_pause", "media_resume", "media_skip", "media_now_playing",
+      "media_reply_handoff", "play_soundboard", "note_context"
+    );
+  }
+  if (flags.voiceEnabled && flags.browserEnabled) availableToolNames.push("share_browser_session");
+  if (flags.voiceEnabled) availableToolNames.push("stop_video_share");
+  if (flags.screenShareEnabled) availableToolNames.push("start_screen_watch");
+
+  sections.push(...buildToolSummaryBlock(availableToolNames));
+
+  // -- Detailed behavioral guidance per capability ---------------------
   // Conversation search is always available (no settings gate)
   sections.push(...buildConversationSearchDocs());
 
@@ -392,6 +463,23 @@ export function buildVoiceCapabilitiesDocs(
 ): string[] {
   const sections: string[] = [];
 
+  // -- Compact tool quick-reference ------------------------------------
+  const availableToolNames: string[] = ["conversation_search"];
+  if (flags.memoryEnabled) availableToolNames.push("memory_write", "note_context");
+  availableToolNames.push(
+    "music_play", "music_search", "music_queue_add", "music_queue_next",
+    "video_play", "video_search",
+    "media_stop", "media_pause", "media_resume", "media_skip", "media_now_playing",
+    "media_reply_handoff", "stream_visualizer", "play_soundboard",
+    "leave_voice_channel"
+  );
+  if (flags.webSearchEnabled) availableToolNames.push("web_search", "web_scrape");
+  if (flags.browserEnabled) availableToolNames.push("browser_browse");
+  if (flags.screenShareEnabled) availableToolNames.push("start_screen_watch");
+
+  sections.push(...buildToolSummaryBlock(availableToolNames, VOICE_TOOL_SUMMARIES));
+
+  // -- Detailed behavioral guidance per capability ---------------------
   // Tool usage philosophy (always present in voice)
   sections.push(...buildVoiceToolUsageDocs());
 
