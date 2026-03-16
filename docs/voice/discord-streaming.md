@@ -51,7 +51,7 @@ The native Discord screen watch pipeline is built end to end in clankvox and Bun
 - DAVE MLS E2EE session completes successfully on the stream watch transport. DAVE video decrypt works at near 100% on the main voice connection (after the RTP padding strip fix), but per-frame video decrypt still fails for Go Live streams — the `davey` crate classifies Go Live video as `UnencryptedWhenPassthroughDisabled`. Screen watch frames arrive during the post-commit unencrypted window instead.
 - H264 frames are decoded in-process by clankvox's persistent OpenH264 decoder and emitted as pre-encoded JPEG via `DecodedVideoFrame` IPC
 - VP8 keyframes are decoded by Bun via per-frame ffmpeg
-- stream-watch brain context pipeline ingests frames and produces accurate visual commentary
+- stream-watch note/commentary pipeline ingests frames and produces accurate visual commentary
 - DAVE channel ID derivation (`BigInt(rtcServerId) - 1`) confirmed working
 - two-checkpoint link fallback suppression prevents duplicate transports when native watch is active
 
@@ -500,19 +500,16 @@ Native subscription tuning and music Go Live visualizer settings live under `voi
 
 There is no separate standalone settings block for outbound native publish. Music playback reuses `voice.streamWatch.visualizerMode` to choose between the shared audio-visualizer path and the legacy source-video relay path.
 
-### Brain Context Mode
+### Screen Watch Note Pipeline
 
-`voice.streamWatch.brainContextMode` controls how the bot processes screen share frames:
+`voice.streamWatch` now uses one screen-watch pipeline:
 
-- **`direct`** (default): No vision triage model. Frames are sent directly to the main voice brain as image attachments. The brain sees the screen itself and decides whether to speak. The brain can write `[[NOTE:your observation]]` directives to maintain private self-notes about what it has seen — these persist as rolling context for future turns, but the images themselves are ephemeral (fire and forget). A `[SKIP] [[NOTE:...]]` output means "I see this, I'm noting it, but I have nothing to say right now."
+- Every admitted frame updates the latest-frame buffer.
+- A separate note loop keeps rolling screen notes fresh with `noteProvider`, `noteModel`, `noteIntervalSeconds`, `noteIdleIntervalSeconds`, `staticFloor`, `changeThreshold`, and `changeMinIntervalSeconds`.
+- Proactive commentary uses `commentaryIntervalSeconds` plus the normal voice quiet-window gates, and can optionally override the voice model with `commentaryProvider` / `commentaryModel`.
+- Raw frames are attached only for commentary turns and direct screen questions. Normal conversation turns rely on the rolling notes.
 
-Direct mode settings:
-- `directMinIntervalSeconds` (default: 8, range: 3–120): minimum gap between direct brain turns
-- `directMaxEntries` (default: 12): maximum rolling self-note buffer size
-
-- **`context_brain`**: A separate vision triage model analyzes each frame and produces a short note + urgency classification (`high` / `low` / `none`). Only `high` urgency frames trigger a main brain turn. Notes accumulate as rolling context injected into all subsequent voice brain replies. Lower cost per frame, but the brain only sees triage summaries rather than the actual screen.
-
-Direct mode is the default because it is more aligned with agent autonomy — the bot decides what is interesting, not a separate triage model. It is more expensive per frame since the main brain processes the full conversation context plus an image on each turn, but produces richer, more contextual reactions. Operators who need to optimize cost can switch to `context_brain`.
+The full product-level behavior and settings contract live in [`screen-share-system.md`](screen-share-system.md).
 
 ## Observability
 

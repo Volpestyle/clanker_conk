@@ -49,7 +49,7 @@ import {
 } from "./voiceMusicPlayback.ts";
 import {
   enableWatchStreamForUser,
-  getStreamWatchBrainContextForPrompt,
+  getStreamWatchNotesForPrompt,
   handleDiscoveredStreamCredentialsReceived,
   handleDiscoveredStreamDeleted,
   ingestStreamFrame,
@@ -59,10 +59,10 @@ import {
   requestStopWatchingStream,
   requestStreamWatchStatus,
   requestWatchStream,
-  resolveStreamWatchVisionProviderSettings,
+  resolveStreamWatchNoteModelSettings,
   stopWatchStreamForUser,
   supportsStreamWatchCommentary,
-  supportsStreamWatchBrainContext
+  supportsStreamWatchNotes
 } from "./voiceStreamWatch.ts";
 import {
   handleDiscoveredSelfStreamCredentialsReceived,
@@ -865,7 +865,7 @@ export class VoiceSessionManager {
       getRecentVoiceMembershipEvents: (session, args) => this.getRecentVoiceMembershipEvents(session, args),
       buildVoiceConversationContext: (args) => this.buildVoiceConversationContext(args),
       buildVoiceAddressingState: (args) => this.buildVoiceAddressingState(args),
-      getStreamWatchBrainContextForPrompt: (session, settings) => this.getStreamWatchBrainContextForPrompt(session, settings),
+      getStreamWatchNotesForPrompt: (session, settings) => this.getStreamWatchNotesForPrompt(session, settings),
       snapshotMusicRuntimeState: (session) => this.snapshotMusicRuntimeState(session)
     });
   }
@@ -1460,16 +1460,16 @@ export class VoiceSessionManager {
     return supportsStreamWatchCommentary(this, session, settings);
   }
 
-  supportsStreamWatchBrainContext({ session = null, settings = null } = {}) {
-    return supportsStreamWatchBrainContext(this, { session, settings });
+  supportsStreamWatchNotes({ session = null, settings = null } = {}) {
+    return supportsStreamWatchNotes(this, { session, settings });
   }
 
-  resolveStreamWatchVisionProviderSettings(settings = null) {
-    return resolveStreamWatchVisionProviderSettings(this, settings);
+  resolveStreamWatchNoteModelSettings(settings = null) {
+    return resolveStreamWatchNoteModelSettings(this, settings);
   }
 
-  getStreamWatchBrainContextForPrompt(session, settings = null) {
-    return getStreamWatchBrainContextForPrompt(session, settings);
+  getStreamWatchNotesForPrompt(session, settings = null) {
+    return getStreamWatchNotesForPrompt(session, settings);
   }
 
   isUserInSessionVoiceChannel({ session, userId }) {

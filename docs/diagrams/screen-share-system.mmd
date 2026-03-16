@@ -6,19 +6,17 @@ flowchart TD
     E --> F["Share page /share/:token<br/>capture loop every keyframeIntervalMs"]
     F --> G["POST /api/voice/share-session/:token/frame"]
 
-    D --> H["Latest frame buffer"]
+    D --> H["Frame ingest / latest frame buffer"]
     G --> H
-    H --> I{"brainContextEnabled?"}
-    I -->|yes| J["Background scanner<br/>note + sceneChanged"]
-    J --> K["Rolling temporal notes"]
 
-    H --> L["Normal voice brain turn"]
-    K --> L
-    L --> M["Speak or [SKIP]"]
+    H --> I["Background note loop<br/>adaptive interval + change cooldown"]
+    I --> J["Rolling note buffer<br/>streamWatch.noteEntries"]
+    J --> K["Prompt note payload<br/>streamWatch.notePayload"]
 
-    H --> N{"Autonomous commentary enabled?"}
-    J --> N
-    N -->|first frame / silence /\nscene change when scanner runs| L
+    H --> L["Commentary trigger check<br/>share start / interval / change"]
+    K --> M["Voice brain turn"]
+    H -->|commentary or screen question| M
+    L -->|quiet-window gates pass| M
 
-    K --> O["Session recap on watch end"]
-    O --> P["One-line memory fact"]
+    J --> N["Context compaction<br/>pendingCompactionNotes"]
+    N --> O["Running session summary<br/>compactedContextSummary"]

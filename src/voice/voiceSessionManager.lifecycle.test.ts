@@ -527,10 +527,10 @@ test("getRuntimeState summarizes file ASR backlog alongside realtime sessions", 
         latestFrameDataBase64: "AAAAAA==",
         frameWindowStartedAt: now - 15_000,
         acceptedFrameCountInWindow: 5,
-        lastBrainContextAt: now - 3_000,
-        lastBrainContextProvider: "anthropic",
-        lastBrainContextModel: "claude-vision",
-        brainContextEntries: [
+        lastNoteAt: now - 3_000,
+        lastNoteProvider: "anthropic",
+        lastNoteModel: "claude-vision",
+        noteEntries: [
           {
             text: "enemy near top left minimap",
             at: now - 3_000,
@@ -567,14 +567,14 @@ test("getRuntimeState summarizes file ASR backlog alongside realtime sessions", 
   assert.deepEqual(realtime?.realtime?.state, { connected: true });
   assert.equal(realtime?.streamWatch?.latestFrameMimeType, "image/png");
   assert.equal(realtime?.streamWatch?.acceptedFrameCountInWindow, 5);
-  assert.equal(realtime?.streamWatch?.brainContextCount, 1);
+  assert.equal(realtime?.streamWatch?.noteCount, 1);
   assert.equal(realtime?.streamWatch?.lastCommentaryNote, "wild clutch moment on screen");
   assert.equal(realtime?.streamWatch?.lastMemoryRecapText, "Streamer recently screen-shared a combat HUD and minimap pressure.");
   assert.equal(realtime?.streamWatch?.lastMemoryRecapDurableSaved, true);
   assert.equal(realtime?.streamWatch?.lastMemoryRecapReason, "share_page_stop");
   assert.equal(realtime?.streamWatch?.visualFeed?.length, 1);
   assert.equal(realtime?.streamWatch?.visualFeed?.[0]?.text, "enemy near top left minimap");
-  assert.equal(realtime?.streamWatch?.brainContextPayload?.notes?.length, 1);
+  assert.equal(realtime?.streamWatch?.notePayload?.notes?.length, 1);
 });
 
 test("resolveSpeakingEndFinalizeDelayMs preserves baseline delays in low-load rooms", () => {

@@ -152,10 +152,10 @@ function createSession(overrides: Partial<BargeInTestSession> = {}): BargeInTest
       latestFrameDataBase64: null,
       acceptedFrameCountInWindow: 0,
       frameWindowStartedAt: 0,
-      lastBrainContextAt: 0,
-      lastBrainContextProvider: null,
-      lastBrainContextModel: null,
-      brainContextEntries: [],
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
       ingestedFrameCount: 0
     },
     music: {

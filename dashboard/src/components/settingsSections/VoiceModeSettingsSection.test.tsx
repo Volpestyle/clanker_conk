@@ -49,13 +49,16 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
       voiceThoughtEngineEnabled: false,
       voiceStreamWatchEnabled: false,
       voiceStreamWatchVisualizerMode: "cqt",
+      voiceStreamWatchCommentaryIntervalSeconds: 15,
       voiceSoundboardEagerness: 40,
       voiceSoundboardEnabled: false,
       voiceSoundboardAllowExternalSounds: false,
       voiceSoundboardPreferredSoundIds: "",
       reactivity: 35,
-      voiceStreamWatchBrainContextProvider: "",
-      voiceStreamWatchBrainContextModel: "",
+      voiceStreamWatchNoteProvider: "",
+      voiceStreamWatchNoteModel: "",
+      voiceStreamWatchCommentaryProvider: "",
+      voiceStreamWatchCommentaryModel: "",
       provider: "claude-oauth",
       model: "claude-opus-4-6",
       visionProvider: "openai",
@@ -93,10 +96,10 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
     openAiRealtimeVoiceOptions: ["alloy"],
     openAiTranscriptionModelOptions: ["gpt-4o-mini-transcribe"],
     geminiRealtimeModelOptions: ["gemini-2.5-flash"],
-    setStreamWatchVisionProvider: noop,
-    selectStreamWatchVisionPresetModel: noop,
-    streamWatchVisionModelOptions: ["gpt-5-mini"],
-    selectedStreamWatchVisionPresetModel: "gpt-5-mini",
+    setStreamWatchNoteProvider: noop,
+    selectStreamWatchNotePresetModel: noop,
+    streamWatchNoteModelOptions: ["gpt-5-mini"],
+    selectedStreamWatchNotePresetModel: "gpt-5-mini",
     setStreamWatchCommentaryProvider: noop,
     selectStreamWatchCommentaryPresetModel: noop,
     streamWatchCommentaryModelOptions: ["claude-opus-4-6"],
@@ -215,9 +218,8 @@ test("stream watch renders a compact mental model and hides advanced tuning behi
       buildProps("generation_decides", {
         voiceStreamWatchEnabled: true,
         voiceStreamWatchAutonomousCommentaryEnabled: true,
-        voiceStreamWatchBrainContextEnabled: true,
-        voiceStreamWatchBrainContextProvider: "claude-oauth",
-        voiceStreamWatchBrainContextModel: "claude-opus-4-6"
+        voiceStreamWatchNoteProvider: "claude-oauth",
+        voiceStreamWatchNoteModel: "claude-opus-4-6"
       })
     )
   );

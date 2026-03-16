@@ -161,10 +161,10 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
         latestFrameDataBase64: "abcdefgh",
         acceptedFrameCountInWindow: 4,
         frameWindowStartedAt: now - 20_000,
-        lastBrainContextAt: now - 650,
-        lastBrainContextProvider: "openai",
-        lastBrainContextModel: "gpt-4o",
-        brainContextEntries: [
+        lastNoteAt: now - 650,
+        lastNoteProvider: "openai",
+        lastNoteModel: "gpt-4o",
+        noteEntries: [
           {
             text: "enemy spotted left side",
             at: now - 600,
@@ -474,7 +474,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
           ]
         };
       },
-      getStreamWatchBrainContextForPrompt(session) {
+      getStreamWatchNotesForPrompt(session) {
         if (session.id !== "session-1") return null;
         return {
           prompt: "watch the left side",
@@ -553,7 +553,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       }
     ]);
     assert.equal(realtime?.streamWatch.latestFrameApproxBytes, 6);
-    assert.deepEqual(realtime?.streamWatch.brainContextPayload, {
+    assert.deepEqual(realtime?.streamWatch.notePayload, {
       prompt: "watch the left side",
       notes: ["enemy nearby", "watching doorway"],
       lastAt: "2026-03-06T17:59:59.350Z",
@@ -801,7 +801,7 @@ test("buildVoiceRuntimeSnapshot hides native tool registry in transport-only ses
       buildVoiceAddressingState() {
         return null;
       },
-      getStreamWatchBrainContextForPrompt() {
+      getStreamWatchNotesForPrompt() {
         return null;
       },
       snapshotMusicRuntimeState() {

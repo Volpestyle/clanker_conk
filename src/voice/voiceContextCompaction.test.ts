@@ -29,7 +29,7 @@ function createSession(turnCount = 0) {
     compactedContextInFlight: false,
     pendingCompactionNotes: [],
     streamWatch: {
-      brainContextEntries: []
+      noteEntries: []
     }
   };
 }

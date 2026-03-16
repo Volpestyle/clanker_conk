@@ -205,10 +205,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceStreamWatchVisualizerMode = "VECTORSCOPE";
   form.voiceStreamWatchKeyframeIntervalMs = 1750;
   form.voiceStreamWatchAutonomousCommentaryEnabled = false;
-  form.voiceStreamWatchBrainContextEnabled = true;
-  form.voiceStreamWatchBrainContextMinIntervalSeconds = 6;
-  form.voiceStreamWatchBrainContextMaxEntries = 5;
-  form.voiceStreamWatchBrainContextPrompt = "Use stream snapshots as context for replies.";
+  form.voiceStreamWatchNoteIntervalSeconds = 6;
+  form.voiceStreamWatchMaxNoteEntries = 5;
+  form.voiceStreamWatchNotePrompt = "Use stream snapshots as context for replies.";
   form.voiceStreamWatchNativeDiscordMaxFramesPerSecond = 4;
   form.voiceStreamWatchNativeDiscordPreferredQuality = 88;
   form.voiceStreamWatchNativeDiscordPreferredPixelCount = 1920 * 1080;
@@ -261,7 +260,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(effectivePatch.initiative.text.maxToolSteps, 2);
   assert.equal(effectivePatch.initiative.text.maxToolCalls, 3);
   assert.equal(effectivePatch.voice.streamWatch.visualizerMode, "vectorscope");
-  assert.equal(effectivePatch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
+  assert.equal(effectivePatch.voice.streamWatch.notePrompt, "Use stream snapshots as context for replies.");
   assert.equal(effectivePatch.voice.conversationPolicy.streaming.enabled, false);
   assert.equal(effectivePatch.voice.conversationPolicy.defaultInterruptionMode, "speaker");
   assert.equal(effectivePatch.voice.conversationPolicy.commandOnlyMode, true);

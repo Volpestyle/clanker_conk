@@ -164,15 +164,14 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
       },
       streamWatch: {
         visualizerMode: "SPECTRUM",
-        minCommentaryIntervalSeconds: 1,
+        commentaryIntervalSeconds: 1,
         maxFramesPerMinute: 9999,
         maxFrameBytes: 10,
         keyframeIntervalMs: 20,
         autonomousCommentaryEnabled: 0,
-        brainContextEnabled: "yes",
-        brainContextMinIntervalSeconds: -4,
-        brainContextMaxEntries: 999,
-        brainContextPrompt: `${"x".repeat(520)}   `,
+        noteIntervalSeconds: -4,
+        maxNoteEntries: 999,
+        notePrompt: `${"x".repeat(520)}   `,
         nativeDiscordMaxFramesPerSecond: 999,
         nativeDiscordPreferredQuality: -20,
         nativeDiscordPreferredPixelCount: 99999999,
@@ -279,11 +278,12 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
     normalized.agentStack.runtimeConfig.voice.geminiRealtime.apiBaseUrl,
     "https://generativelanguage.googleapis.com"
   );
-  assert.equal(normalized.voice.streamWatch.minCommentaryIntervalSeconds, 3);
+  assert.equal(normalized.voice.streamWatch.commentaryIntervalSeconds, 5);
   assert.equal(normalized.voice.streamWatch.visualizerMode, "spectrum");
   assert.equal(normalized.voice.streamWatch.autonomousCommentaryEnabled, false);
-  assert.equal(normalized.voice.streamWatch.brainContextEnabled, true);
-  assert.equal(normalized.voice.streamWatch.brainContextPrompt.length, 420);
+  assert.equal(normalized.voice.streamWatch.noteIntervalSeconds, 3);
+  assert.equal(normalized.voice.streamWatch.notePrompt.length, 420);
+  assert.equal(normalized.voice.streamWatch.maxNoteEntries, 24);
   assert.equal(
     normalized.voice.streamWatch.nativeDiscordPreferredStreamType,
     "CAMERA_FEED_WITH_EXTRA_TEXT"

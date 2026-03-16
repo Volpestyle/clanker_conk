@@ -1008,11 +1008,11 @@ function McpPanel({ session }: { session: VoiceSession }) {
 function StreamWatchDetail({ session }: { session: VoiceSession }) {
   const sw = session.streamWatch;
   const visualFeed = Array.isArray(sw.visualFeed) ? sw.visualFeed : [];
-  const brainContextPayload = sw.brainContextPayload;
+  const notePayload = sw.notePayload;
   const hasBrainPayloadNotes = Boolean(
-    brainContextPayload &&
-      Array.isArray(brainContextPayload.notes) &&
-      brainContextPayload.notes.length > 0
+    notePayload &&
+      Array.isArray(notePayload.notes) &&
+      notePayload.notes.length > 0
   );
   const hasAnyStreamWatchData =
     Boolean(sw.active) ||
@@ -1039,15 +1039,15 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
         )}
         {sw.lastCommentaryAt && <Stat label="Last Commentary" value={relativeTime(sw.lastCommentaryAt)} />}
         {sw.lastMemoryRecapAt && <Stat label="Last Recap" value={relativeTime(sw.lastMemoryRecapAt)} />}
-        {sw.lastBrainContextAt && <Stat label="Last Brain Note" value={relativeTime(sw.lastBrainContextAt)} />}
-        <Stat label="Brain Notes" value={Number(sw.brainContextCount || visualFeed.length)} />
+        {sw.lastNoteAt && <Stat label="Last Screen Note" value={relativeTime(sw.lastNoteAt)} />}
+        <Stat label="Screen Notes" value={Number(sw.noteCount || visualFeed.length)} />
         {(sw.lastMemoryRecapText || sw.lastMemoryRecapAt) && (
           <Stat label="Recap Saved" value={sw.lastMemoryRecapDurableSaved ? "durable" : "journal only"} />
         )}
-        {(sw.lastBrainContextProvider || sw.lastBrainContextModel) && (
+        {(sw.lastNoteProvider || sw.lastNoteModel) && (
           <Stat
-            label="Brain Model"
-            value={[sw.lastBrainContextProvider, sw.lastBrainContextModel].filter(Boolean).join(" / ")}
+            label="Note Model"
+            value={[sw.lastNoteProvider, sw.lastNoteModel].filter(Boolean).join(" / ")}
           />
         )}
       </div>
@@ -1084,13 +1084,13 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
 
       {visualFeed.length > 0 && (
         <>
-          <span className="vm-mini-label">Keyframe Analyses</span>
+          <span className="vm-mini-label">Screen Note Feed</span>
           <div className="vm-convo-feed">
             {visualFeed.slice(-10).reverse().map((entry, index) => (
               <div key={`${entry.at || "na"}-${index}`} className="vm-convo-msg vm-convo-user">
                 <div className="vm-convo-meta">
                   <span className="vm-convo-role vm-convo-role-user">
-                    {entry.speakerName || "scanner"}
+                    {entry.speakerName || "note loop"}
                   </span>
                   {(entry.provider || entry.model) && (
                     <span className="vm-convo-time">
@@ -1106,32 +1106,32 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
         </>
       )}
 
-      {brainContextPayload?.prompt && (
+      {notePayload?.prompt && (
         <>
-          <span className="vm-mini-label">Voice Context Builder</span>
+          <span className="vm-mini-label">Prompt Note Context</span>
           <div className="vm-prompt-card">
             <div className="vm-prompt-card-header">
               <div className="vm-prompt-card-title">
-                <span className="vm-prompt-title">Keyframe Guidance Prompt</span>
+                <span className="vm-prompt-title">Note Instruction</span>
                 <span className="vm-prompt-meta">
-                  {brainContextPayload.lastAt ? relativeTime(brainContextPayload.lastAt) : "no updates yet"}
-                  {(brainContextPayload.provider || brainContextPayload.model)
-                    ? ` · ${[brainContextPayload.provider, brainContextPayload.model].filter(Boolean).join(" / ")}`
+                  {notePayload.lastAt ? relativeTime(notePayload.lastAt) : "no updates yet"}
+                  {(notePayload.provider || notePayload.model)
+                    ? ` · ${[notePayload.provider, notePayload.model].filter(Boolean).join(" / ")}`
                     : ""}
                 </span>
               </div>
-              <CopyButton text={brainContextPayload.prompt || "(none)"} label />
+              <CopyButton text={notePayload.prompt || "(none)"} label />
             </div>
-            <pre className="vm-prompt-pre">{brainContextPayload.prompt || "(none)"}</pre>
+            <pre className="vm-prompt-pre">{notePayload.prompt || "(none)"}</pre>
           </div>
         </>
       )}
 
-      {brainContextPayload && Array.isArray(brainContextPayload.notes) && brainContextPayload.notes.length > 0 && (
+      {notePayload && Array.isArray(notePayload.notes) && notePayload.notes.length > 0 && (
         <>
-          <span className="vm-mini-label">Accumulated Voice Context</span>
+          <span className="vm-mini-label">Injected Prompt Notes</span>
           <div className="vm-convo-feed">
-            {brainContextPayload.notes.map((note, index) => (
+            {notePayload.notes.map((note, index) => (
               <div key={`${index}-${note.slice(0, 18)}`} className="vm-convo-msg vm-convo-assistant">
                 <div className="vm-convo-meta">
                   <span className="vm-convo-role vm-convo-role-assistant">context</span>

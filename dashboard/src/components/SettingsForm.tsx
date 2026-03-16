@@ -364,9 +364,13 @@ export default function SettingsForm({
     selectedPresetModel: selectedVoiceInterruptPresetModel
   } = resolvePresetSelection("voiceInterruptLlmProvider", "voiceInterruptLlmModel");
   const {
-    options: streamWatchVisionModelOptions,
-    selectedPresetModel: selectedStreamWatchVisionPresetModel
-  } = resolvePresetSelection("voiceStreamWatchBrainContextProvider", "voiceStreamWatchBrainContextModel");
+    options: streamWatchNoteModelOptions,
+    selectedPresetModel: selectedStreamWatchNotePresetModel
+  } = resolvePresetSelection("voiceStreamWatchNoteProvider", "voiceStreamWatchNoteModel");
+  const {
+    options: streamWatchCommentaryModelOptions,
+    selectedPresetModel: selectedStreamWatchCommentaryPresetModel
+  } = resolvePresetSelection("voiceStreamWatchCommentaryProvider", "voiceStreamWatchCommentaryModel");
   const openAiRealtimeModelOptions = resolveModelOptions(
     OPENAI_REALTIME_MODEL_OPTIONS,
     effectiveForm.voiceOpenAiRealtimeModel
@@ -426,7 +430,8 @@ export default function SettingsForm({
       syncModel("voiceReplyDecisionLlmModel", selectedVoiceReplyDecisionPresetModel);
       syncModel("voiceInterruptLlmModel", selectedVoiceInterruptPresetModel);
       syncModel("voiceMusicBrainLlmModel", selectedVoiceMusicBrainPresetModel);
-      syncModel("voiceStreamWatchBrainContextModel", selectedStreamWatchVisionPresetModel);
+      syncModel("voiceStreamWatchNoteModel", selectedStreamWatchNotePresetModel);
+      syncModel("voiceStreamWatchCommentaryModel", selectedStreamWatchCommentaryPresetModel);
       if (next.voiceGenerationLlmUseTextModel) {
         syncModel("voiceGenerationLlmProvider", next.provider);
         syncModel("voiceGenerationLlmModel", selectedPresetModel);
@@ -452,7 +457,8 @@ export default function SettingsForm({
     selectedVoiceInterruptPresetModel,
     selectedVoiceMusicBrainPresetModel,
     selectedVisionPresetModel,
-    selectedStreamWatchVisionPresetModel
+    selectedStreamWatchNotePresetModel,
+    selectedStreamWatchCommentaryPresetModel
   ]);
 
   if (!form) return null;
@@ -529,7 +535,8 @@ export default function SettingsForm({
   const setVoiceInterruptProvider = createProviderSetter("voiceInterruptLlmProvider", "voiceInterruptLlmModel");
   const setVoiceMusicBrainProvider = createProviderSetter("voiceMusicBrainLlmProvider", "voiceMusicBrainLlmModel");
   const setVisionProvider = createProviderSetter("visionProvider", "visionModel");
-  const setStreamWatchVisionProvider = createProviderSetter("voiceStreamWatchBrainContextProvider", "voiceStreamWatchBrainContextModel");
+  const setStreamWatchNoteProvider = createProviderSetter("voiceStreamWatchNoteProvider", "voiceStreamWatchNoteModel");
+  const setStreamWatchCommentaryProvider = createProviderSetter("voiceStreamWatchCommentaryProvider", "voiceStreamWatchCommentaryModel");
 
   function selectModelFieldPreset(modelField, selected) {
     updateForm((current) => ({ ...current, [modelField]: selected }));
@@ -551,7 +558,8 @@ export default function SettingsForm({
   const selectVoiceInterruptPresetModel = createPresetSelector("voiceInterruptLlmModel");
   const selectVoiceMusicBrainPresetModel = createPresetSelector("voiceMusicBrainLlmModel");
   const selectVisionPresetModel = createPresetSelector("visionModel");
-  const selectStreamWatchVisionPresetModel = createPresetSelector("voiceStreamWatchBrainContextModel");
+  const selectStreamWatchNotePresetModel = createPresetSelector("voiceStreamWatchNoteModel");
+  const selectStreamWatchCommentaryPresetModel = createPresetSelector("voiceStreamWatchCommentaryModel");
 
   function resetPromptGuidanceFields() {
     clearPresetWarning();
@@ -694,10 +702,14 @@ export default function SettingsForm({
             openAiRealtimeVoiceOptions={openAiRealtimeVoiceOptions}
             openAiTranscriptionModelOptions={openAiTranscriptionModelOptions}
             geminiRealtimeModelOptions={geminiRealtimeModelOptions}
-            setStreamWatchVisionProvider={setStreamWatchVisionProvider}
-            selectStreamWatchVisionPresetModel={selectStreamWatchVisionPresetModel}
-            streamWatchVisionModelOptions={streamWatchVisionModelOptions}
-            selectedStreamWatchVisionPresetModel={selectedStreamWatchVisionPresetModel}
+            setStreamWatchNoteProvider={setStreamWatchNoteProvider}
+            selectStreamWatchNotePresetModel={selectStreamWatchNotePresetModel}
+            streamWatchNoteModelOptions={streamWatchNoteModelOptions}
+            selectedStreamWatchNotePresetModel={selectedStreamWatchNotePresetModel}
+            setStreamWatchCommentaryProvider={setStreamWatchCommentaryProvider}
+            selectStreamWatchCommentaryPresetModel={selectStreamWatchCommentaryPresetModel}
+            streamWatchCommentaryModelOptions={streamWatchCommentaryModelOptions}
+            selectedStreamWatchCommentaryPresetModel={selectedStreamWatchCommentaryPresetModel}
           />
 
           {/* ── Research & Browsing ── */}

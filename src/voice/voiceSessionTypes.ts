@@ -327,7 +327,7 @@ export type MusicTextRequestPayload = {
     settings?: Record<string, unknown> | null;
 };
 
-export interface StreamWatchBrainContextEntry {
+export interface StreamWatchNoteEntry {
     text: string;
     at: number;
     provider: string | null;
@@ -740,10 +740,10 @@ export interface VoiceSessionStreamWatchState {
     lastMemoryRecapText: string | null;
     lastMemoryRecapDurableSaved: boolean;
     lastMemoryRecapReason: string | null;
-    lastBrainContextAt: number;
-    lastBrainContextProvider: string | null;
-    lastBrainContextModel: string | null;
-    brainContextEntries: StreamWatchBrainContextEntry[];
+    lastNoteAt: number;
+    lastNoteProvider: string | null;
+    lastNoteModel: string | null;
+    noteEntries: StreamWatchNoteEntry[];
     ingestedFrameCount: number;
     acceptedFrameCountInWindow: number;
     frameWindowStartedAt: number;

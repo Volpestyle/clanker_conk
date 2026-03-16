@@ -33,7 +33,7 @@ import {
 import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
 
 import { normalizeVoiceOutputLeaseMode } from "./voiceOutputLease.ts";
-import { appendStreamWatchBrainContextEntry } from "./voiceStreamWatch.ts";
+import { appendStreamWatchNoteEntry } from "./voiceStreamWatch.ts";
 import {
   getCompactedSessionSummaryContext,
   getCompactionCursor,
@@ -102,7 +102,7 @@ type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "generateVoiceTurn"
   | "getRecentVoiceChannelEffectEvents"
   | "getRecentVoiceMembershipEvents"
-  | "getStreamWatchBrainContextForPrompt"
+  | "getStreamWatchNotesForPrompt"
   | "getVoiceChannelParticipants"
   | "logVoiceLatencyStage"
   | "maybeSupersedeRealtimeReplyBeforePlayback"
@@ -248,6 +248,17 @@ function normalizeAssistantReplyOutputLeaseMode(rawOutputLeaseMode: unknown) {
       : rawOutputLeaseMode;
   const normalizedMode = normalizeVoiceOutputLeaseMode(normalizedRaw);
   return normalizedMode === "ambient" ? null : normalizedMode;
+}
+
+function isScreenWatchQuestion(transcript: string, directAddressed: boolean) {
+  const normalized = String(transcript || "").trim().toLowerCase();
+  if (!normalized) return false;
+  const explicitScreenQuestion =
+    /\b(what(?:'s| is)? (?:on|in) (?:the )?(?:screen|stream|share)|what do you see|what can you see|can you see (?:my|the) (?:screen|stream|share)|look at (?:my|the) (?:screen|stream|share)|what(?:'s| is) happening on (?:my|the) (?:screen|stream|share))\b/i
+      .test(normalized);
+  if (explicitScreenQuestion) return true;
+  if (!directAddressed) return false;
+  return /\b(do you see|can you tell what|what am i looking at)\b/i.test(normalized);
 }
 
 function buildContextMessages(session: VoiceSession, normalizedTranscript: string) {
@@ -590,13 +601,16 @@ export async function runVoiceReplyPipeline(
     ).trim();
     return displayName ? [{ displayName }] : [];
   })();
-  const streamWatchBrainContext = host.getStreamWatchBrainContextForPrompt(session, params.settings);
+  const streamWatchNotes = host.getStreamWatchNotesForPrompt(session, params.settings);
 
   // Only attach the raw image frame for stream_watch commentary turns.
   // User-speech voice replies still get the rolling [[NOTE:...]] context
-  // (via streamWatchBrainContext above) but skip the image to cut ~1500-2000
+  // (via streamWatchNotes above) but skip the image to cut ~1500-2000
   // tokens and halve generation latency.
-  const streamWatchLatestFrame = isStreamWatchCommentaryTurn
+  const shouldAttachStreamWatchFrame =
+    isStreamWatchCommentaryTurn ||
+    (session.streamWatch?.active && isScreenWatchQuestion(normalizedTranscript, Boolean(params.directAddressed)));
+  const streamWatchLatestFrame = shouldAttachStreamWatchFrame
     ? (params.frozenFrameSnapshot?.dataBase64
         ? params.frozenFrameSnapshot
         : session.streamWatch?.active && session.streamWatch?.latestFrameDataBase64
@@ -610,7 +624,7 @@ export async function runVoiceReplyPipeline(
     ...(resolvedConversationContext || {}),
     sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
     sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none"),
-    streamWatchBrainContext,
+    streamWatchNotes,
     compactedSessionSummary: getCompactedSessionSummaryContext(session)
   };
 
@@ -937,15 +951,15 @@ export async function runVoiceReplyPipeline(
   }
 
   // Store any [[NOTE:...]] directives the brain wrote as private self-notes.
-  // These persist as brainContextEntries and are injected into future turns
+  // These persist as noteEntries and are injected into future turns
   // so the brain can maintain its own visual memory without a separate triage model.
   const storeExtractedNotes = () => {
     if (noteExtraction.notes.length === 0) return;
     if (!session.streamWatch?.active) return;
     const settingsObj = params.settings as Record<string, Record<string, Record<string, unknown>>> | null;
-    const maxEntries = Number(settingsObj?.voice?.streamWatch?.directMaxEntries) || 12;
+    const maxEntries = Number(settingsObj?.voice?.streamWatch?.maxNoteEntries) || 12;
     for (const note of noteExtraction.notes) {
-      appendStreamWatchBrainContextEntry({
+      appendStreamWatchNoteEntry({
         session,
         text: note,
         at: Date.now(),
