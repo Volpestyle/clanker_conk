@@ -1209,13 +1209,17 @@ export class SessionLifecycle {
                 content: `${runtimeLabel}_idle_timeout_reconnect_failed: ${String((reconnectError as Error)?.message || reconnectError)}`,
                 metadata: { sessionId: session.id }
               });
-              // Reconnect failed — end session as fallback
-              this.fireAndForgetEndSession(session, {
+              this.host.store.logAction({
+                kind: "voice_runtime",
                 guildId: session.guildId,
-                reason: "realtime_reconnect_failed",
-                announcement: "lost voice connection, leaving vc.",
-                settings
-              }, "realtime_reconnect_failed");
+                channelId: session.textChannelId,
+                userId: this.host.client.user?.id || null,
+                content: `${runtimeLabel}_idle_timeout_reconnect_degraded`,
+                metadata: {
+                  sessionId: session.id,
+                  sessionKeptAlive: true
+                }
+              });
             }
           })();
         }

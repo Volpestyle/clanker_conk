@@ -105,8 +105,11 @@ export class ElevenLabsRealtimeClient extends EventEmitter {
     const wsUrl = new URL(`/v1/text-to-speech/${encodeURIComponent(resolvedVoiceId)}/stream-input`, wsBaseUrl);
     wsUrl.searchParams.set("model_id", String(model || "eleven_multilingual_v2").trim());
     wsUrl.searchParams.set("output_format", String(outputFormat || "pcm_24000").trim());
-    // Keep inactivity timeout generous — we may pause between utterances
-    wsUrl.searchParams.set("inactivity_timeout", "120");
+    // Keep the connection alive for the entire voice session.  ElevenLabs
+    // bills per character, not per connection time, so an idle WS is free.
+    // 3600s (1 hour) prevents the idle-timeout disconnect that previously
+    // caused jarring audio cutouts during screen-watch and listen-only periods.
+    wsUrl.searchParams.set("inactivity_timeout", "3600");
 
     const ws = await openRealtimeSocket({
       url: wsUrl.toString(),
