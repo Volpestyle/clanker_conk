@@ -221,6 +221,30 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
       args: opts.args
     });
   },
+  see_screenshare_snapshot: async (_manager, opts) => {
+    throwIfAborted(opts.signal, "Voice tool cancelled");
+    const sw = (opts.session as { streamWatch?: {
+      active?: boolean;
+      latestFrameDataBase64?: string;
+      latestFrameMimeType?: string;
+      latestFrameAt?: number;
+      targetUserId?: string;
+    } } | null)?.streamWatch;
+    if (!sw?.active) {
+      return { ok: false, error: "No active screen watch." };
+    }
+    const dataBase64 = String(sw.latestFrameDataBase64 || "").trim();
+    if (!dataBase64) {
+      return { ok: false, error: "No recent frame available." };
+    }
+    return {
+      ok: true,
+      streamerName: sw.targetUserId || null,
+      frameAgeMs: Math.max(0, Date.now() - Number(sw.latestFrameAt || 0)),
+      mimeType: String(sw.latestFrameMimeType || "image/jpeg"),
+      dataBase64
+    };
+  },
   web_search: async (manager, opts) =>
     await executeVoiceWebSearchTool(manager, {
       session: opts.session,

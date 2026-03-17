@@ -114,7 +114,7 @@ export type ReplyToolRuntime = {
     }>;
   };
   screenShare?: {
-    startWatch: (opts: {
+    startWatch?: (opts: {
       settings: Record<string, unknown>;
       guildId: string;
       channelId: string | null;
@@ -133,6 +133,12 @@ export type ReplyToolRuntime = {
       linkUrl?: string | null;
       expiresInMinutes?: number | null;
     }>;
+    getSnapshot?: () => {
+      mimeType: string;
+      dataBase64: string;
+      streamerName: string | null;
+      frameAgeMs: number;
+    } | null;
   };
   voiceSessionControl?: {
     requestLeaveVoiceChannel?: () => Promise<{ ok: boolean }>;
@@ -318,6 +324,7 @@ const REPLY_TOOL_HANDLERS: Record<
   conversation_search: executeConversationSearch,
   image_lookup: async (input, runtime, context) => await executeImageLookup(input, runtime, context),
   start_screen_watch: async (input, runtime, context) => await executeStartScreenWatch(input, runtime, context),
+  see_screenshare_snapshot: async (_input, runtime, context) => await executeSeeScreenshareSnapshot(runtime, context),
   share_browser_session: async (input, runtime, context) => await executeShareBrowserSession(input, runtime, context),
   play_soundboard: executePlaySoundboard,
 
@@ -890,6 +897,33 @@ async function executeStartScreenWatch(
       isError: true
     };
   }
+}
+
+async function executeSeeScreenshareSnapshot(
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!runtime.screenShare?.getSnapshot) {
+    return { content: "Screen share snapshot is not available.", isError: true };
+  }
+  const snapshot = runtime.screenShare.getSnapshot();
+  if (!snapshot || !snapshot.dataBase64) {
+    return { content: "No recent frame available from the active screen share.", isError: true };
+  }
+  return {
+    content: JSON.stringify({
+      ok: true,
+      streamerName: snapshot.streamerName || null,
+      frameAgeMs: snapshot.frameAgeMs
+    }),
+    imageInputs: [
+      {
+        mediaType: snapshot.mimeType || "image/jpeg",
+        dataBase64: snapshot.dataBase64
+      }
+    ]
+  };
 }
 
 async function executeShareBrowserSession(

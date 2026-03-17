@@ -167,11 +167,17 @@ function getRecentTranscriptSnippet(session: StreamWatchSession): string {
     ? joined.slice(0, NOTE_RECENT_TRANSCRIPT_MAX_CHARS - 1) + "…"
     : joined;
 }
-const STREAM_WATCH_NOTE_PROMPT_MAX_CHARS = 420;
-const STREAM_WATCH_NOTE_LINE_MAX_CHARS = 220;
-const STREAM_WATCH_NOTE_MAX_OUTPUT_TOKENS = 72;
+const STREAM_WATCH_NOTE_PROMPT_MAX_CHARS = 600;
+const STREAM_WATCH_NOTE_LINE_MAX_CHARS = 400;
+const STREAM_WATCH_NOTE_MAX_OUTPUT_TOKENS = 256;
 const DEFAULT_STREAM_WATCH_NOTE_PROMPT =
-  "Write one short factual private note about the most salient visible state or change in this frame. Prioritize gameplay actions, objectives, outcomes, menus, or unusual/funny moments that could support a natural later comment. If the frame is mostly idle UI, lobby, desktop, or other non-gameplay context, say that plainly. Prefer what is newly different from the previous frame.";
+  "Write a concise private note (max ~40 words) capturing the most decision-useful information from this frame. " +
+  "Prioritize: (1) readable on-screen text, names, labels, or UI elements worth remembering; " +
+  "(2) what changed from the previous frame; " +
+  "(3) salient entities, actions, or state (gameplay, app context, browser content, etc.); " +
+  "(4) if the frame is ambiguous or unclear, note that briefly. " +
+  "If the frame is mostly idle UI, lobby, desktop, or loading screen, say that plainly. " +
+  "Prefer concrete specifics over vague descriptions.";
 const STREAM_WATCH_NOTE_JSON_SCHEMA = JSON.stringify({
   type: "object",
   properties: {
@@ -1089,7 +1095,7 @@ export function supportsStreamWatchNotes(manager: StreamWatchManager, { session 
 export function resolveStreamWatchNoteModelSettings(manager: StreamWatchManager, settings = null) {
   const llmSettings = getResolvedOrchestratorBinding(settings);
   const noteSettings = resolveStreamWatchNoteSettings(settings);
-  const provider = noteSettings.provider;
+  const provider = String(noteSettings.provider || llmSettings.provider || "").trim();
   const model = noteSettings.model;
 
   if (!provider || !model) return null;
@@ -1179,7 +1185,8 @@ async function generateStreamWatchNote(manager: StreamWatchManager, {
     "You are looking at one still frame from a live stream.",
     "Never claim you cannot see the stream.",
     "Return strict JSON only.",
-    "The note must be one short factual private note, max 16 words.",
+    "Write a concise factual note, max ~40 words.",
+    "Capture readable text, names, salient entities, and what changed from prior observations.",
     "Use your observation history to notice what changed or stayed important.",
     "Do not write dialogue or commands."
   ].join(" ");
@@ -1195,7 +1202,7 @@ async function generateStreamWatchNote(manager: StreamWatchManager, {
   }
   userPromptParts.push(
     String(noteSettings.prompt || DEFAULT_STREAM_WATCH_NOTE_PROMPT),
-    "Focus only on what is visible now. Mention uncertainty briefly if needed."
+    "Focus on what is visible now. Note uncertainty briefly if the frame is ambiguous."
   );
   const userPrompt = userPromptParts.join(" ");
 
@@ -1338,7 +1345,7 @@ async function captureStreamWatchNote(
       session,
       settings,
       streamerUserId,
-      frameMimeType: session.streamWatch?.latestFrameMimeType || "image/jpeg",
+      frameMimeType: String(session.streamWatch?.latestFrameMimeType || "image/jpeg"),
       frameDataBase64: bufferedFrame
     });
     const note = normalizeVoiceText(generated?.text || "", STREAM_WATCH_NOTE_LINE_MAX_CHARS);

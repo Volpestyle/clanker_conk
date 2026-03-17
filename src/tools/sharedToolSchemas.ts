@@ -535,6 +535,18 @@ export const START_SCREEN_WATCH_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const SEE_SCREENSHARE_SNAPSHOT_SCHEMA: SharedToolSchema = {
+  name: "see_screenshare_snapshot",
+  description: "Retrieve the latest frame from the active screen share so you can see what is on screen right now. Use this when your screen-watch notes are insufficient to answer a question or when you want to inspect the current visual state directly.",
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {},
+    required: [],
+    additionalProperties: false
+  }
+};
+
 export const SHARE_BROWSER_SESSION_SCHEMA: SharedToolSchema = {
   name: "share_browser_session",
   description: "Share an existing persistent browser session into Discord Go Live. Pass the session_id returned from browser_browse when you want to show the page while deciding or demonstrating.",
@@ -645,7 +657,12 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
 
 const LOCAL_VOICE_CONTINUATION_SCHEMAS: SharedToolSchema[] = [
   ...SHARED_TOOL_SCHEMAS,
-  ...VOICE_TOOL_SCHEMAS
+  ...VOICE_TOOL_SCHEMAS,
+  START_SCREEN_WATCH_SCHEMA,
+  SEE_SCREENSHARE_SNAPSHOT_SCHEMA,
+  SHARE_BROWSER_SESSION_SCHEMA,
+  STOP_VIDEO_SHARE_SCHEMA,
+  STREAM_VISUALIZER_SCHEMA
 ];
 
 const LOCAL_VOICE_CONTINUATION_SCHEMA_BY_NAME = new Map(

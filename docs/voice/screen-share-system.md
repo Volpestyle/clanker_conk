@@ -97,8 +97,12 @@ Discord VC user says "share my screen" / turns on webcam
 │                    VOICE BRAIN                       │
 │                                                      │
 │  Normal turns: rolling notes only                    │
+│    + see_screenshare_snapshot tool (on-demand frame) │
 │  Commentary turns: rolling notes + current frame     │
 │  Screen questions: rolling notes + current frame     │
+│                                                      │
+│  Persistent context: "Screen watch active —          │
+│    viewing {streamerName}'s screen."                 │
 │                                                      │
 │  Output: spoken reply / [SKIP] / [[NOTE:...]]        │
 └─────────────────────────────────────────────────────┘
@@ -128,7 +132,7 @@ It is throttled only by natural backpressure and its own cooldowns:
 - `changeMinIntervalSeconds` prevents rapid-fire note runs on sustained motion
 - `maxFramesPerMinute` still limits frame admission at ingest time
 
-Every successful note run appends one short note into the rolling note buffer. Notes are private model context, not spoken output.
+Every successful note run appends one note (~40 words max, 256 output tokens) into the rolling note buffer. Notes are private model context, not spoken output. The note prompt biases toward: readable on-screen text, salient entities, change from the previous frame, and explicit uncertainty when the frame is ambiguous.
 
 ### Commentary turns
 
@@ -152,9 +156,13 @@ The model still decides whether to speak or `[SKIP]`. Commentary can also emit `
 
 ### Normal voice turns
 
-Normal user-driven voice turns do not carry a frame by default. They see the rolling notes and the rest of the conversation context.
+Normal user-driven voice turns do not carry a frame by default. They see the rolling notes, persistent streamer identity ("Screen watch active — viewing alice's screen"), and the rest of the conversation context.
 
-If the turn is directly about the screen, the current frame is re-attached for that reply. This keeps screen answers grounded without paying image cost on every unrelated turn.
+If the turn is directly about the screen (heuristic match via `isScreenWatchQuestion`), the current frame is re-attached for that reply. This keeps screen answers grounded without paying image cost on every unrelated turn.
+
+For cases where the heuristic doesn't match but the agent still needs visual context, the `see_screenshare_snapshot` tool is available. This tool returns the latest buffered frame as an image input, letting the agent inspect the screen on demand. It uses `voiceContinuationPolicy: "always"`, meaning the model calls the tool and then gets a second LLM call to speak about what it saw (one extra round trip, ~500ms-3s). The tool is only registered when screen watch is active and a recent frame exists.
+
+This follows the standard design pattern: thin heuristic for the fast/cheap common case, agentic tool fallback for everything else.
 
 ## Note Lifecycle And Compaction
 

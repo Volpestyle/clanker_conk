@@ -797,6 +797,13 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     guild?.members?.cache?.get(String(userId || ""))?.user?.username ||
     runtime.client.users?.cache?.get(String(userId || ""))?.username ||
     "unknown";
+  const screenWatchStreamerUserId = String(activeVoiceSession?.streamWatch?.targetUserId || "").trim();
+  const screenWatchStreamerName = screenWatchStreamerUserId
+    ? (guild?.members?.cache?.get(screenWatchStreamerUserId)?.displayName ||
+       guild?.members?.cache?.get(screenWatchStreamerUserId)?.user?.username ||
+       runtime.client.users?.cache?.get(screenWatchStreamerUserId)?.username ||
+       "")
+    : "";
   const normalizedParticipantRoster = (Array.isArray(participantRoster) ? participantRoster : [])
     .map((entry) => {
       if (typeof entry === "string") {
@@ -1300,7 +1307,12 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       screenShare,
       allowScreenShareToolCall,
       screenWatchActive: Boolean(activeVoiceSession?.streamWatch?.active),
+      screenWatchStreamerName,
       screenWatchFrameReady: isStreamWatchFrameReady(activeVoiceSession),
+      screenShareSnapshotAvailable: Boolean(
+        activeVoiceSession?.streamWatch?.active &&
+        String(activeVoiceSession?.streamWatch?.latestFrameDataBase64 || "").trim()
+      ),
       activeDiscordStreams: Array.isArray(activeDiscordStreams) ? activeDiscordStreams : [],
       allowMemoryToolCalls,
       allowSoundboardToolCall,
@@ -1399,6 +1411,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       memoryAvailable: allowMemoryToolCalls,
       imageLookupAvailable: false,
       screenShareAvailable: allowScreenShareToolCall,
+      screenShareSnapshotAvailable: Boolean(
+        activeVoiceSession?.streamWatch?.active &&
+        String(activeVoiceSession?.streamWatch?.latestFrameDataBase64 || "").trim()
+      ),
       soundboardAvailable: allowSoundboardToolCall,
       codeAgentAvailable: codeAgentRuntimeAvailable,
       voiceToolsAvailable: Boolean(voiceToolCallbacks)
@@ -1440,8 +1456,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             signal: toolSignal
           })
       },
-      screenShare:
-        typeof runtime.startVoiceScreenWatch === "function"
+      screenShare: {
+        ...(typeof runtime.startVoiceScreenWatch === "function"
           ? {
               startWatch: async ({
                 settings: toolSettings,
@@ -1464,7 +1480,21 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
                   signal: toolSignal
                 })
             }
-          : undefined,
+          : {}),
+        getSnapshot: () => {
+          const sw = activeVoiceSession?.streamWatch;
+          if (!sw?.active) return null;
+          const dataBase64 = String(sw.latestFrameDataBase64 || "").trim();
+          if (!dataBase64) return null;
+          const frameAgeMs = Math.max(0, Date.now() - Number(sw.latestFrameAt || 0));
+          return {
+            mimeType: String(sw.latestFrameMimeType || "image/jpeg"),
+            dataBase64,
+            streamerName: screenWatchStreamerName || null,
+            frameAgeMs
+          };
+        }
+      },
       voiceSessionControl: {
         requestLeaveVoiceChannel: async () => ({ ok: true })
       },

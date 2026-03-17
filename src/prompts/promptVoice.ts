@@ -175,7 +175,9 @@ export function buildVoiceTurnPrompt({
   screenShare: _screenShare = null,
   allowScreenShareToolCall = false,
   screenWatchActive = false,
+  screenWatchStreamerName = "",
   screenWatchFrameReady = false,
+  screenShareSnapshotAvailable = false,
   activeDiscordStreams = [],
   allowMemoryToolCalls = false,
   allowSoundboardToolCall = false,
@@ -210,6 +212,8 @@ export function buildVoiceTurnPrompt({
       botName: normalizedBotName
     });
   const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
+  const isScreenShareEvent =
+    normalizedInputKind === "event" && normalizedRuntimeEventContext?.category === "screen_share";
   const normalizedConversationContext =
     conversationContext && typeof conversationContext === "object" ? conversationContext : null;
   const normalizedCompactedSessionSummary =
@@ -432,7 +436,9 @@ export function buildVoiceTurnPrompt({
       `Interpret second-person references like "you"/"your" as likely referring to ${normalizedBotName}.`
     );
   } else if (normalizedParticipantRoster.length > 1) {
-    parts.push("This turn was not directly addressed to you.");
+    if (!isScreenShareEvent) {
+      parts.push("This turn was not directly addressed to you.");
+    }
     parts.push(
       `In multi-user voice chat, treat second-person references like "you"/"your" as ambiguous by default; do not assume they refer to ${normalizedBotName} unless context is strong.`
     );
@@ -500,14 +506,13 @@ export function buildVoiceTurnPrompt({
     }
 
     const normalizedAttentionMode = String(normalizedConversationContext.attentionMode || "").trim().toUpperCase();
-    if (normalizedConversationContext.currentSpeakerActive) {
-      recencyLines.push("This speaker is part of your current live thread.");
-    } else if (normalizedAttentionMode === "ACTIVE") {
-      recencyLines.push("You are generally engaged in the room, but this speaker is not clearly part of your current thread.");
-    } else {
-      recencyLines.push("You do not currently have an active thread with this speaker.");
+    if (!isScreenShareEvent) {
+      if (normalizedConversationContext.currentSpeakerActive) {
+        recencyLines.push("This speaker is part of your current live thread.");
+      } else if (normalizedAttentionMode !== "ACTIVE") {
+        recencyLines.push("You do not currently have an active thread with this speaker.");
+      }
     }
-    recencyLines.push("Use room continuity as context, not as a reason to force yourself into the turn.");
 
     if (
       normalizedConversationContext.activeCommandSpeaker &&
@@ -570,17 +575,29 @@ export function buildVoiceTurnPrompt({
       ].filter(Boolean).join("\n")
     );
   }
-  if (screenWatchActive && !hasDirectVisionFrame && !normalizedStreamWatchNotes?.notes?.length) {
+  const normalizedScreenWatchStreamerName = String(screenWatchStreamerName || "").trim();
+  if (screenWatchActive) {
     parts.push(
-      screenWatchFrameReady
-        ? "Screen watch: active and receiving frames. You are already watching their screen — do not call start_screen_watch again."
-        : "Screen watch: active, waiting for the first frame. Do not call start_screen_watch again — it is already running."
+      normalizedScreenWatchStreamerName
+        ? `Screen watch active — viewing ${normalizedScreenWatchStreamerName}'s screen.`
+        : "Screen watch active."
     );
+  }
+  if (screenWatchActive && !hasDirectVisionFrame && !normalizedStreamWatchNotes?.notes?.length) {
+    const frameParts = [
+      screenWatchFrameReady
+        ? "Receiving frames. You are already watching — do not call start_screen_watch again."
+        : "Waiting for the first frame. Do not call start_screen_watch again — it is already running.",
+      screenShareSnapshotAvailable
+        ? "Use see_screenshare_snapshot to inspect the current frame directly."
+        : null
+    ].filter(Boolean);
+    parts.push(frameParts.join(" "));
   }
   const normalizedCommentaryEagerness = Math.max(0, Math.min(100, Number(screenWatchCommentaryEagerness) || 60));
   if (hasDirectVisionFrame) {
     const screenContextParts = [
-      "Live screen watch: You can see the user's screen directly in the attached image.",
+      `Live screen watch: You can see ${normalizedScreenWatchStreamerName ? normalizedScreenWatchStreamerName + "'s" : "the user's"} screen directly in the attached image.`,
       `Screen watch commentary eagerness: ${normalizedCommentaryEagerness}/100.`,
       getScreenWatchCommentaryTier(normalizedCommentaryEagerness),
       normalizedStreamWatchNotes?.prompt
@@ -591,6 +608,9 @@ export function buildVoiceTurnPrompt({
       screenContextParts.push("Your previous observations:");
       screenContextParts.push(...normalizedStreamWatchNotes.notes.map((note) => `- ${note}`));
     }
+    screenContextParts.push(
+      "If you notice a fresh, notable visual beat, a short natural reaction is welcome."
+    );
     screenContextParts.push(
       "You may end your reply with [[NOTE:your observation]] to record a private note about what you see. Notes are never spoken aloud. " +
       "Use notes to track the screen across future turns. " +
@@ -605,7 +625,10 @@ export function buildVoiceTurnPrompt({
           ? `- Guidance: ${normalizedStreamWatchNotes.prompt}`
           : null,
         ...normalizedStreamWatchNotes.notes.map((note) => `- ${note}`),
-        "- These are sampled frame snapshots. Avoid overclaiming continuity between samples."
+        "- These are sampled frame snapshots. Avoid overclaiming continuity between samples.",
+        screenShareSnapshotAvailable
+          ? "- If these notes are insufficient or you need to inspect the screen directly, use see_screenshare_snapshot."
+          : null
       ]
         .filter(Boolean)
         .join("\n")

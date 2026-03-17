@@ -5,6 +5,7 @@ import {
   IMAGE_LOOKUP_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
+  SEE_SCREENSHARE_SNAPSHOT_SCHEMA,
   SHARE_BROWSER_SESSION_SCHEMA,
   START_SCREEN_WATCH_SCHEMA,
   STOP_VIDEO_SHARE_SCHEMA,
@@ -34,6 +35,7 @@ export type ReplyToolAvailability = {
   imageLookupAvailable?: boolean;
   videoContextAvailable?: boolean;
   screenShareAvailable?: boolean;
+  screenShareSnapshotAvailable?: boolean;
   soundboardAvailable?: boolean;
   codeAgentAvailable?: boolean;
   voiceToolsAvailable?: boolean;
@@ -44,6 +46,7 @@ export type VoiceRealtimeLocalToolAvailability = {
   codeAgentAvailable: boolean;
   memoryAvailable: boolean;
   screenShareAvailable: boolean;
+  screenShareSnapshotAvailable: boolean;
   soundboardAvailable: boolean;
   webSearchAvailable: boolean;
 };
@@ -76,6 +79,7 @@ const TOOL_SCHEMA_BY_NAME = new Map(
     VIDEO_CONTEXT_SCHEMA,
     CODE_TASK_SCHEMA,
     START_SCREEN_WATCH_SCHEMA,
+    SEE_SCREENSHARE_SNAPSHOT_SCHEMA,
     SHARE_BROWSER_SESSION_SCHEMA,
     STOP_VIDEO_SHARE_SCHEMA,
     PLAY_SOUNDBOARD_SCHEMA,
@@ -155,6 +159,12 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.screenShareAvailable),
     isVoiceRealtimeAvailable: ({ capabilities }) => capabilities.screenShareAvailable
+  },
+  {
+    name: "see_screenshare_snapshot",
+    surfaces: ["reply", "voice_realtime"],
+    isReplyAvailable: ({ capabilities }) => Boolean(capabilities.screenShareSnapshotAvailable),
+    isVoiceRealtimeAvailable: ({ capabilities }) => Boolean(capabilities.screenShareSnapshotAvailable)
   },
   {
     name: "share_browser_session",

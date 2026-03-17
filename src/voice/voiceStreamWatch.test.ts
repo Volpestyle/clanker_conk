@@ -407,7 +407,7 @@ test("resolveStreamWatchNoteModelSettings uses configured provider/model from se
   assert.equal(resolved.provider, "xai");
   assert.equal(resolved.model, "grok-2-vision-latest");
   assert.equal(resolved.temperature, 0.3);
-  assert.equal(resolved.maxOutputTokens, 72);
+  assert.equal(resolved.maxOutputTokens, 256);
 });
 
 test("resolveStreamWatchNoteModelSettings returns null when provider not configured", () => {
@@ -428,6 +428,33 @@ test("resolveStreamWatchNoteModelSettings returns null when provider not configu
   }));
 
   assert.equal(resolved, null);
+});
+
+test("resolveStreamWatchNoteModelSettings inherits orchestrator provider when note provider is blank", () => {
+  const { manager } = createManager({
+    llm: {
+      isProviderConfigured(provider) {
+        return provider === "claude-oauth";
+      }
+    }
+  });
+  const resolved = resolveStreamWatchNoteModelSettings(manager, createSettings({
+    llm: {
+      provider: "claude-oauth",
+      model: "claude-opus-4-6"
+    },
+    voice: {
+      streamWatch: {
+        noteProvider: "",
+        noteModel: "claude-sonnet-4-6"
+      }
+    }
+  }));
+
+  assert.equal(resolved?.provider, "claude-oauth");
+  assert.equal(resolved?.model, "claude-sonnet-4-6");
+  assert.equal(resolved?.temperature, 0.3);
+  assert.equal(resolved?.maxOutputTokens, 256);
 });
 
 test("enableWatchStreamForUser enforces same-voice-channel requirement and supports success", async () => {

@@ -228,11 +228,17 @@ export function resolveVoiceRealtimeToolDescriptors(
       session?.guildId &&
       (screenShareCapability?.nativeAvailable || session?.textChannelId)
   );
+  const sessionStreamWatch = (session as { streamWatch?: { active?: boolean; latestFrameDataBase64?: string } } | null)?.streamWatch;
+  const includeScreenShareSnapshot = Boolean(
+    sessionStreamWatch?.active &&
+    String(sessionStreamWatch?.latestFrameDataBase64 || "").trim()
+  );
   const localTools = buildVoiceRealtimeLocalToolSchemas({
     browserAvailable: includeBrowser,
     codeAgentAvailable: includeCodeAgent,
     memoryAvailable: includeMemory,
     screenShareAvailable: includeScreenShare,
+    screenShareSnapshotAvailable: includeScreenShareSnapshot,
     soundboardAvailable: includeSoundboard,
     webSearchAvailable: includeWebSearch
   }).map((schema) => adaptRealtimeToolDescriptorForTarget(toRealtimeTool(schema), exportTarget));
