@@ -49,12 +49,6 @@ export interface SubAgentSession {
   close(): void;
 }
 
-type SubAgentSessionFactory = (opts: {
-  type: "code" | "browser";
-  scopeKey: string;
-  config: Record<string, unknown>;
-}) => SubAgentSession;
-
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_MAX_SESSIONS = 20;
 const SWEEP_INTERVAL_MS = 60_000; // 1 minute

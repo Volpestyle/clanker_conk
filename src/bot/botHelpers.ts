@@ -6,9 +6,6 @@ import { extractJsonObjectFromText } from "../normalization/jsonExtraction.ts";
 import { getDiscoverySettings } from "../settings/agentStack.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
-const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
-const COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE = /\[\[COMPLEX_IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
-const VIDEO_PROMPT_DIRECTIVE_RE = /\[\[VIDEO_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
 const STRUCTURED_REPLY_CODE_FENCE_OPEN_RE = /^```(?:json)?\s*/i;
 const STRUCTURED_REPLY_TEXT_FIELD_RE = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/s;
 const STRUCTURED_REPLY_SKIP_TRUE_RE = /"skip"\s*:\s*true\b/i;
@@ -21,7 +18,6 @@ const MAX_MEDIA_PROMPT_FLOOR = 120;
 const MAX_MEDIA_PROMPT_CEILING = 2000;
 export const MAX_WEB_QUERY_LEN = 220;
 export const MAX_GIF_QUERY_LEN = 120;
-const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 export const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
 export const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_REPLY_TEXT_LEN = 3600;
@@ -38,7 +34,6 @@ export function resolveMaxMediaPromptLen(settings) {
   return clamp(Math.floor(raw), MAX_MEDIA_PROMPT_FLOOR, MAX_MEDIA_PROMPT_CEILING);
 }
 const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gif", "tool_images"]);
-const INITIATIVE_MEDIA_TYPES = new Set(["none", "image", "video", "gif"]);
 const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
 const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["start_watch", "none"]);
 const MAX_SCREEN_SHARE_REASON_LEN = 180;
@@ -543,61 +538,6 @@ export function composeReplyVideoPrompt(
     .join("\n");
 }
 
-function parseDiscoveryMediaDirective(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
-  const parsed = {
-    text: String(rawText || "").trim(),
-    imagePrompt: null,
-    complexImagePrompt: null,
-    videoPrompt: null,
-    mediaDirective: null
-  };
-
-  while (parsed.text) {
-    const complexImageMatch = parsed.text.match(COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE);
-    if (complexImageMatch) {
-      const prompt = normalizeDirectiveText(complexImageMatch[1], maxLen) || null;
-      if (!parsed.complexImagePrompt) {
-        parsed.complexImagePrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "image_complex", prompt };
-      }
-      parsed.text = parsed.text.slice(0, complexImageMatch.index).trim();
-      continue;
-    }
-
-    const imageMatch = parsed.text.match(IMAGE_PROMPT_DIRECTIVE_RE);
-    if (imageMatch) {
-      const prompt = normalizeDirectiveText(imageMatch[1], maxLen) || null;
-      if (!parsed.imagePrompt) {
-        parsed.imagePrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "image_simple", prompt };
-      }
-      parsed.text = parsed.text.slice(0, imageMatch.index).trim();
-      continue;
-    }
-
-    const videoMatch = parsed.text.match(VIDEO_PROMPT_DIRECTIVE_RE);
-    if (videoMatch) {
-      const prompt = normalizeDirectiveText(videoMatch[1], maxLen) || null;
-      if (!parsed.videoPrompt) {
-        parsed.videoPrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "video", prompt };
-      }
-      parsed.text = parsed.text.slice(0, videoMatch.index).trim();
-      continue;
-    }
-
-    break;
-  }
-
-  return parsed;
-}
-
 export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   const fallbackText = String(rawText || "").trim();
   const parsed = extractJsonObjectFromText(fallbackText);
@@ -894,10 +834,6 @@ function normalizeAutomationOperation(rawValue) {
 }
 
 export function pickReplyMediaDirective(parsed) {
-  return parsed?.mediaDirective || null;
-}
-
-function pickDiscoveryMediaDirective(parsed) {
   return parsed?.mediaDirective || null;
 }
 
