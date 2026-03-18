@@ -613,6 +613,7 @@ export class VoiceSessionManager {
   // is available on the voice_realtime surface.
   createCodeAgentSession: VoiceToolCallManager["createCodeAgentSession"];
   runModelRequestedCodeTask: VoiceToolCallManager["runModelRequestedCodeTask"];
+  dispatchBackgroundCodeTask: VoiceToolCallManager["dispatchBackgroundCodeTask"];
   subAgentSessions: VoiceToolCallManager["subAgentSessions"];
 
   constructor({
@@ -648,6 +649,7 @@ export class VoiceSessionManager {
     this.streamDiscovery = streamDiscovery || null;
     this.createCodeAgentSession = null;
     this.runModelRequestedCodeTask = null;
+    this.dispatchBackgroundCodeTask = null;
     this.subAgentSessions = null;
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
@@ -2943,6 +2945,7 @@ export class VoiceSessionManager {
       prompt: next.prompt,
       userId: next.userId,
       source: next.source,
+      transport: next.transport || "auto",
       interruptionPolicy: next.interruptionPolicy,
       outputLeaseMode: next.outputLeaseMode || null,
       latencyContext: next.latencyContext,
@@ -3041,18 +3044,27 @@ export class VoiceSessionManager {
     outputLeaseMode = null,
     latencyContext = null,
     utteranceText = null,
-    musicWakeRefreshAfterSpeech = false
+    musicWakeRefreshAfterSpeech = false,
+    transport = "auto"
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
     const realtimeClient = session.realtimeClient;
-    const requestPlaybackUtterance =
-      typeof realtimeClient?.requestPlaybackUtterance === "function"
-        ? realtimeClient.requestPlaybackUtterance.bind(realtimeClient)
-        : typeof realtimeClient?.requestTextUtterance === "function"
-          ? realtimeClient.requestTextUtterance.bind(realtimeClient)
-          : null;
-    if (!requestPlaybackUtterance) return false;
+    const requestPlaybackUtterance = typeof realtimeClient?.requestPlaybackUtterance === "function"
+      ? realtimeClient.requestPlaybackUtterance.bind(realtimeClient)
+      : null;
+    const requestTextUtterance = typeof realtimeClient?.requestTextUtterance === "function"
+      ? realtimeClient.requestTextUtterance.bind(realtimeClient)
+      : null;
+    const normalizedTransport =
+      transport === "text" || transport === "playback" ? transport : "auto";
+    const requestUtterance =
+      normalizedTransport === "text"
+        ? requestTextUtterance
+        : normalizedTransport === "playback"
+          ? (requestPlaybackUtterance || requestTextUtterance)
+          : (requestPlaybackUtterance || requestTextUtterance);
+    if (!requestUtterance) return false;
 
     const normalizedInterruptionPolicy = this.resolveReplyInterruptionPolicy({
       session,
@@ -3068,7 +3080,7 @@ export class VoiceSessionManager {
         : normalizeVoiceText(String(utteranceText || ""), STT_REPLY_MAX_CHARS) || null;
 
     try {
-      requestPlaybackUtterance(prompt);
+      requestUtterance(prompt);
       this.replyManager.createTrackedAudioResponse({
         session,
         userId: userId || this.client.user?.id || null,
@@ -3114,7 +3126,9 @@ export class VoiceSessionManager {
     outputLeaseMode = null,
     latencyContext = null,
     utteranceText = null,
-    musicWakeRefreshAfterSpeech = false
+    musicWakeRefreshAfterSpeech = false,
+    maxPromptChars = STT_REPLY_MAX_CHARS + 420,
+    transport = "auto"
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -3129,16 +3143,22 @@ export class VoiceSessionManager {
       return false;
     }
 
+    const promptCharCap = Math.max(
+      STT_REPLY_MAX_CHARS,
+      Math.floor(Number(maxPromptChars) || (STT_REPLY_MAX_CHARS + 420))
+    );
     const utterancePrompt = String(prompt || "")
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, STT_REPLY_MAX_CHARS + 420);
+      .slice(0, promptCharCap);
     if (!utterancePrompt) return false;
     const normalizedInterruptionPolicy = this.resolveReplyInterruptionPolicy({
       session,
       userId,
       policy: interruptionPolicy,
     });
+    const normalizedTransport =
+      transport === "text" || transport === "playback" ? transport : "auto";
     const normalizedOutputLeaseMode = normalizeVoiceOutputLeaseMode(outputLeaseMode);
     const effectiveOutputLeaseMode =
       session.botTurnOpen ? "ambient" : normalizedOutputLeaseMode;
@@ -3152,6 +3172,7 @@ export class VoiceSessionManager {
       utteranceText: normalizedUtteranceText,
       userId: userId || this.client.user?.id || null,
       source: String(source || "voice_prompt_utterance"),
+      transport: normalizedTransport,
       queuedAt: Date.now(),
       interruptionPolicy: normalizedInterruptionPolicy,
       outputLeaseMode: effectiveOutputLeaseMode,
@@ -3240,8 +3261,71 @@ export class VoiceSessionManager {
       outputLeaseMode: normalizedOutputLeaseMode,
       latencyContext,
       utteranceText: normalizedUtteranceText,
-      musicWakeRefreshAfterSpeech
+      musicWakeRefreshAfterSpeech,
+      transport: normalizedTransport
     });
+  }
+
+  requestRealtimeCodeTaskFollowup({
+    guildId,
+    channelId,
+    prompt,
+    userId = null,
+    source = "voice_realtime_code_task_followup"
+  }: {
+    guildId?: string | null;
+    channelId?: string | null;
+    prompt?: string | null;
+    userId?: string | null;
+    source?: string | null;
+  } = {}) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return false;
+    const session = this.getSession(normalizedGuildId);
+    if (!session || session.ending) return false;
+
+    const normalizedChannelId = String(channelId || "").trim();
+    const sessionChannelId = String(session.textChannelId || "").trim();
+    if (normalizedChannelId && sessionChannelId && sessionChannelId !== normalizedChannelId) {
+      return false;
+    }
+
+    const normalizedPrompt = String(prompt || "").trim();
+    if (!normalizedPrompt) return false;
+
+    // Track the user who triggered this async task so follow-up
+    // responses (e.g. tool result spoken output) attribute correctly.
+    const normalizedUserId = String(userId || "").trim() || null;
+    if (normalizedUserId) {
+      session.lastRealtimeToolCallerUserId = normalizedUserId;
+    }
+
+    const delivered = this.requestRealtimePromptUtterance({
+      session,
+      prompt: normalizedPrompt,
+      userId: String(userId || "").trim() || null,
+      source: String(source || "voice_realtime_code_task_followup"),
+      utteranceText: null,
+      maxPromptChars: 7_000,
+      transport: "text"
+    });
+
+    this.store.logAction({
+      kind: delivered ? "voice_runtime" : "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: String(userId || "").trim() || null,
+      content: delivered
+        ? "realtime_async_code_task_followup_enqueued"
+        : "realtime_async_code_task_followup_skipped",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_realtime_code_task_followup"),
+        promptChars: normalizedPrompt.length
+      }
+    });
+
+    return delivered;
   }
 
   requestRealtimeTextUtterance({
@@ -3292,6 +3376,7 @@ export class VoiceSessionManager {
     if (!this.isCollapsibleQueuedStreamTailEntry(laterEntry, sourcePrefix)) return false;
     return (
       String(earlierEntry?.userId || "") === String(laterEntry?.userId || "") &&
+      String(earlierEntry?.transport || "auto") === String(laterEntry?.transport || "auto") &&
       Boolean(earlierEntry?.musicWakeRefreshAfterSpeech) === Boolean(laterEntry?.musicWakeRefreshAfterSpeech) &&
       this.replyInterruptionPoliciesMatch(earlierEntry?.interruptionPolicy || null, laterEntry?.interruptionPolicy || null) &&
       voiceOutputLeaseModesMatch(earlierEntry?.outputLeaseMode || null, laterEntry?.outputLeaseMode || null)
