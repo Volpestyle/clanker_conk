@@ -15,6 +15,7 @@ import type { SubAgentSessionManager } from "../agents/subAgentSession.ts";
 import type { BrowserStreamPublishManager } from "../voice/voiceBrowserStreamPublish.ts";
 import type {
   InFlightAcceptedBrainTurn,
+  VoiceSession,
   VoiceSessionStreamWatchState,
   VoiceSessionDurableContextEntry
 } from "../voice/voiceSessionTypes.ts";
@@ -126,6 +127,7 @@ type MaybeHandleScreenWatchIntentFn = typeof import("./screenShare.ts").maybeHan
 type RunModelRequestedBrowserBrowseFn = typeof import("./agentTasks.ts").runModelRequestedBrowserBrowse;
 type RunModelRequestedCodeTaskFn = typeof import("./agentTasks.ts").runModelRequestedCodeTask;
 type BuildSubAgentSessionsRuntimeFn = typeof import("./agentTasks.ts").buildSubAgentSessionsRuntime;
+type DispatchBackgroundCodeTaskFn = ClankerBot["dispatchBackgroundCodeTask"];
 type ResolveMediaAttachmentFn = typeof import("./mediaAttachment.ts").resolveMediaAttachment;
 type MaybeAttachReplyGifFn = typeof import("./mediaAttachment.ts").maybeAttachReplyGif;
 type MaybeAttachGeneratedImageFn = typeof import("./mediaAttachment.ts").maybeAttachGeneratedImage;
@@ -201,6 +203,7 @@ type ReplyPipelineRuntimeMember =
   | "gifs"
   | "search"
   | "voiceSessionManager"
+  | "dispatchBackgroundCodeTask"
   | "getReactionEmojiOptions"
   | "getEmojiHints"
   | "maybeHandleStructuredAutomationIntent"
@@ -236,6 +239,7 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   runModelRequestedBrowserBrowse: StripFirstArg<RunModelRequestedBrowserBrowseFn>;
   runModelRequestedCodeTask: StripFirstArg<RunModelRequestedCodeTaskFn>;
   buildSubAgentSessionsRuntime: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
+  dispatchBackgroundCodeTask: DispatchBackgroundCodeTaskFn;
   runModelRequestedImageLookup: RunModelRequestedImageLookupRuntimeFn;
   mergeImageInputs: MergeImageInputsFn;
   maybeHandleScreenWatchIntent: MaybeHandleScreenWatchIntentRuntimeFn;
@@ -258,6 +262,57 @@ export interface VoiceReplyRuntime extends BotContext {
       warmMemory?: WarmMemoryState | null;
       streamWatch?: VoiceSessionStreamWatchState | null;
     } | null;
+    resolveVoiceSpeakerName?: (session: VoiceSession, userId?: string | null) => string;
+    getStreamWatchNotesForPrompt?: (
+      session: VoiceSession,
+      settings?: Record<string, unknown> | null
+    ) => {
+      prompt?: string;
+      notes?: string[];
+      active?: boolean;
+      lastAt?: number;
+      provider?: string | null;
+      model?: string | null;
+    } | null;
+    getVoiceScreenWatchCapability?: (args?: {
+      settings?: Record<string, unknown> | null;
+      guildId?: string | null;
+      channelId?: string | null;
+      requesterUserId?: string | null;
+    }) => Record<string, unknown> | null;
+    getVoiceChannelParticipants?: (session: VoiceSession) => Array<{
+      userId: string;
+      displayName: string;
+    }>;
+    getRecentVoiceMembershipEvents?: (
+      session: VoiceSession,
+      args?: { now?: number; maxItems?: number }
+    ) => Array<{
+      userId: string;
+      displayName: string;
+      eventType: string;
+      at: number;
+      ageMs: number;
+    }>;
+    getRecentVoiceChannelEffectEvents?: (
+      session: VoiceSession,
+      args?: { now?: number; maxItems?: number }
+    ) => Array<{
+      userId: string;
+      displayName: string;
+      channelId: string;
+      guildId: string;
+      effectType: string;
+      soundId: string | null;
+      soundName: string | null;
+      soundVolume: number | null;
+      emoji: string | null;
+      animationType: number | null;
+      animationId: number | null;
+      at: number;
+      ageMs: number;
+      summary: string;
+    }>;
     abortHeldPrePlaybackReplyBeforeToolCall?: (payload: {
       session?: {
         durableContext?: VoiceSessionDurableContextEntry[];
@@ -363,6 +418,7 @@ export interface VoiceReplyRuntime extends BotContext {
   buildBrowserBrowseContext: StripFirstArg<BuildBrowserBrowseContextFn>;
   runModelRequestedCodeTask: StripFirstArg<RunModelRequestedCodeTaskFn>;
   buildSubAgentSessionsRuntime?: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
+  dispatchBackgroundCodeTask?: DispatchBackgroundCodeTaskFn;
 }
 
 type TextThoughtLoopPolicyRuntime = {

@@ -468,96 +468,6 @@ export function buildReplyPrompt({
   return parts.join("\n\n");
 }
 
-function buildDiscoveryPrompt({
-  channelName,
-  recentMessages,
-  relevantFacts = [],
-  emojiHints,
-  allowSimpleImagePosts,
-  allowComplexImagePosts,
-  allowVideoPosts,
-  remainingDiscoveryImages = 0,
-  remainingDiscoveryVideos = 0,
-  discoveryFindings = [],
-  maxLinksPerPost = 2,
-  requireDiscoveryLink = false,
-  maxMediaPromptChars = 900,
-  mediaPromptCraftGuidance = null
-}) {
-  const parts = [];
-  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
-
-  parts.push(
-    `You are posting proactively in #${channelName}. No one directly asked you to respond.`
-  );
-  parts.push("Recent channel messages:");
-  parts.push(formatRecentChat(recentMessages));
-  if (relevantFacts?.length) {
-    parts.push("Relevant durable memory:");
-    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
-  }
-
-  if (emojiHints?.length) {
-    parts.push(`Server emoji options: ${emojiHints.join(", ")}`);
-  }
-
-  const remainingImages = Math.max(0, Math.floor(Number(remainingDiscoveryImages) || 0));
-  const remainingVideos = Math.max(0, Math.floor(Number(remainingDiscoveryVideos) || 0));
-  const simpleImageAvailable = allowSimpleImagePosts && remainingImages > 0;
-  const complexImageAvailable = allowComplexImagePosts && remainingImages > 0;
-  const videoAvailable = allowVideoPosts && remainingVideos > 0;
-  const anyVisualAvailable = simpleImageAvailable || complexImageAvailable || videoAvailable;
-
-  if (anyVisualAvailable) {
-    parts.push(
-      "You may include visual or meme-friendly ideas in your post text; an image or short video may be generated separately."
-    );
-    parts.push(
-      `Visual generation is available for this post (${remainingImages} image slot(s), ${remainingVideos} video slot(s) left where enabled in the rolling 24h budgets).`
-    );
-    if (simpleImageAvailable) {
-      parts.push("For a simple/quick visual, append: [[IMAGE_PROMPT: your prompt here]]");
-    }
-    if (complexImageAvailable) {
-      parts.push("For a detailed/composition-heavy visual, append: [[COMPLEX_IMAGE_PROMPT: your prompt here]]");
-    }
-    if (videoAvailable) {
-      parts.push("If this post should include motion, append: [[VIDEO_PROMPT: your prompt here]]");
-    }
-    parts.push(
-      `Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT under ${maxMediaPromptChars} chars.`
-    );
-    parts.push(
-      "Any visual prompt must avoid visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks."
-    );
-    parts.push(mediaGuidance);
-    parts.push(
-      "If no media is needed, output only the post text. If media is needed, output at most one media directive."
-    );
-  } else {
-    parts.push("Image/video generation for discovery posts is unavailable right now. Output text only.");
-  }
-
-  if (discoveryFindings?.length) {
-    parts.push("Fresh external findings (optional inspiration):");
-    parts.push(formatDiscoveryFindings(discoveryFindings));
-    parts.push(
-      `If you include links, use URLs exactly as listed above and keep it to at most ${maxLinksPerPost} links.`
-    );
-    if (requireDiscoveryLink) {
-      parts.push(
-        "Include at least one of the listed URLs if possible. If none fit naturally, output exactly [SKIP]."
-      );
-    }
-  }
-
-  parts.push("Task: write one ambient Discord message that feels timely and human.");
-  parts.push("Keep it open, honest, non-spammy, and slightly surprising.");
-  parts.push("If there is genuinely nothing good to post, output exactly [SKIP].");
-
-  return parts.join("\n\n");
-}
-
 export function buildInitiativePrompt({
   botName,
   persona = "",
@@ -807,4 +717,96 @@ export function buildAutomationPrompt({
   parts.push("Use [SKIP] only when sending nothing is clearly best.");
 
   return parts.join("\n\n");
+}
+
+function formatCodeTaskDuration(durationMs: number) {
+  const boundedMs = Math.max(0, Math.floor(Number(durationMs) || 0));
+  const totalSeconds = Math.floor(boundedMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
+export function buildCodeTaskResultPrompt({
+  mode = "completion",
+  sessionId,
+  role = "implementation",
+  status = "completed",
+  durationMs = 0,
+  costUsd = 0,
+  resultText = "",
+  filesTouched = [],
+  triggerMessageId = null,
+  recentEvents = []
+}: {
+  mode?: "completion" | "progress" | "cancelled";
+  sessionId: string;
+  role?: string;
+  status?: string;
+  durationMs?: number;
+  costUsd?: number;
+  resultText?: string;
+  filesTouched?: string[];
+  triggerMessageId?: string | null;
+  recentEvents?: Array<{ summary?: string | null }>;
+}) {
+  const normalizedMode = mode === "progress" ? "progress" : mode === "cancelled" ? "cancelled" : "completion";
+  const lines: string[] = [];
+
+  if (normalizedMode === "progress") {
+    lines.push("[CODE TASK PROGRESS]");
+  } else if (normalizedMode === "cancelled") {
+    lines.push("[CODE TASK CANCELLED]");
+  } else {
+    lines.push("[CODE TASK COMPLETED]");
+  }
+
+  lines.push(`Session: ${String(sessionId || "").trim() || "unknown"}`);
+  lines.push(`Role: ${String(role || "implementation").trim() || "implementation"}`);
+  lines.push(`Status: ${String(status || "").trim() || "unknown"}`);
+  lines.push(`Duration: ${formatCodeTaskDuration(durationMs)}`);
+  if (Number(costUsd || 0) > 0) {
+    lines.push(`Cost: $${Number(costUsd || 0).toFixed(4)}`);
+  }
+  if (triggerMessageId) {
+    lines.push(`Requested via message: ${String(triggerMessageId).trim()}`);
+  }
+
+  const normalizedFilesTouched = Array.isArray(filesTouched)
+    ? filesTouched.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  if (normalizedFilesTouched.length > 0) {
+    lines.push(`Files touched: ${normalizedFilesTouched.join(", ")}`);
+  }
+
+  if (normalizedMode === "progress") {
+    const items = Array.isArray(recentEvents)
+      ? recentEvents
+        .map((event) => String(event?.summary || "").trim())
+        .filter(Boolean)
+        .slice(-6)
+      : [];
+    if (items.length > 0) {
+      lines.push("Recent activity:");
+      for (const item of items) {
+        lines.push(`- ${item}`);
+      }
+    }
+    lines.push("");
+    lines.push("This is a progress update for an active async code task.");
+    lines.push("Compose a brief natural update for the requester, or output [SKIP] if unnecessary.");
+    return lines.join("\n");
+  }
+
+  const normalizedResultText = String(resultText || "").trim();
+  if (normalizedResultText) {
+    lines.push("");
+    lines.push("Result:");
+    lines.push(normalizedResultText);
+  }
+  lines.push("");
+  lines.push("This is an async code task completion event, not a chat message.");
+  lines.push("Compose a natural follow-up for the user who requested this task.");
+  return lines.join("\n");
 }

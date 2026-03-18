@@ -29,6 +29,20 @@ export interface SubAgentTurnResult {
   };
 }
 
+export interface SubAgentProgressEvent {
+  kind: "tool_use" | "file_edit" | "assistant_message" | "turn_complete" | "error";
+  summary: string;
+  turnNumber?: number;
+  elapsedMs: number;
+  timestamp: number;
+  filePath?: string;
+}
+
+export interface SubAgentRunTurnOptions {
+  signal?: AbortSignal;
+  onProgress?: (event: SubAgentProgressEvent) => void;
+}
+
 export interface SubAgentSession {
   readonly id: string;
   readonly type: "code" | "browser";
@@ -40,7 +54,7 @@ export interface SubAgentSession {
   getBrowserSessionKey?(): string | null;
 
   /** Send a turn (initial instruction or follow-up) and get the result. */
-  runTurn(input: string, options?: { signal?: AbortSignal }): Promise<SubAgentTurnResult>;
+  runTurn(input: string, options?: SubAgentRunTurnOptions): Promise<SubAgentTurnResult>;
 
   /** Cancel any in-flight work and reject future turns. */
   cancel(reason?: string): void;
@@ -48,12 +62,6 @@ export interface SubAgentSession {
   /** Close the session and free resources. */
   close(): void;
 }
-
-type SubAgentSessionFactory = (opts: {
-  type: "code" | "browser";
-  scopeKey: string;
-  config: Record<string, unknown>;
-}) => SubAgentSession;
 
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_MAX_SESSIONS = 20;

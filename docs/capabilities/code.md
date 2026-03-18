@@ -7,7 +7,8 @@ This document describes the `code_task` capability.
 `code_task` is available in:
 
 - text reply tool loop (`src/tools/replyTools.ts`)
-- voice realtime tool loop (`src/voice/voiceToolCalls.ts`)
+- voice text-mediated reply loop (`src/bot/voiceReplies.ts`)
+- voice realtime tool loop (`src/voice/voiceToolCallAgents.ts`)
 - `/clank code` slash subcommand (`src/commands/codeCommand.ts`)
 
 Core runtime files:
@@ -126,6 +127,28 @@ Important boundary:
 
 `codex` still runs through OpenAI's API-driven Responses execution path and does not provision a local worktree.
 
+## Async Dispatch
+
+`code_task` supports async background dispatch for new code sessions.
+
+- worker-level routing is controlled by `agentStack.runtimeConfig.devTeam.<worker>.asyncDispatch`
+- when enabled and the worker threshold is met, `executeCodeTask` dispatches through `BackgroundTaskRunner` and returns immediately
+- the orchestrator LLM receives a normal tool result indicating dispatch and composes the user-facing acknowledgment
+- session continuation calls (`session_id` present) remain synchronous by design
+
+`BackgroundTaskRunner` (`src/agents/backgroundTaskRunner.ts`) handles:
+
+- in-flight async task lifecycle and retention cleanup
+- real-time progress accumulation from `SubAgentSession.runTurn(..., { onProgress })`
+- milestone callbacks for optional progress updates
+- completion/cancellation callbacks
+- scope cancellation via `buildCodeTaskScopeKey(...)` + `cancelByScope(...)`
+
+Delivery surfaces:
+
+- text and text-mediated voice use synthetic message events (`code_task_progress` / `code_task_result`) fed into `enqueueReplyJob(..., forceRespond: true)`
+- voice realtime tasks (`voice_realtime_tool_code_task`) deliver completion/cancellation back into the live realtime conversation via `VoiceSessionManager.requestRealtimeCodeTaskFollowup(...)`, then trigger spoken follow-up output
+
 ## Logging
 
 Primary action kinds:
@@ -157,7 +180,16 @@ devTeam: {
     maxBufferBytes: 2 * 1024 * 1024,
     defaultCwd: "",
     maxTasksPerHour: 10,
-    maxParallelTasks: 2
+    maxParallelTasks: 2,
+    asyncDispatch: {
+      enabled: true,
+      thresholdMs: 0,
+      progressReports: {
+        enabled: true,
+        intervalMs: 60_000,
+        maxReportsPerTask: 5
+      }
+    }
   },
   codexCli: {
     enabled: false,
@@ -167,7 +199,16 @@ devTeam: {
     maxBufferBytes: 2 * 1024 * 1024,
     defaultCwd: "",
     maxTasksPerHour: 10,
-    maxParallelTasks: 2
+    maxParallelTasks: 2,
+    asyncDispatch: {
+      enabled: true,
+      thresholdMs: 0,
+      progressReports: {
+        enabled: true,
+        intervalMs: 60_000,
+        maxReportsPerTask: 5
+      }
+    }
   },
   claudeCode: {
     enabled: false,
@@ -177,7 +218,16 @@ devTeam: {
     maxBufferBytes: 2 * 1024 * 1024,
     defaultCwd: "",
     maxTasksPerHour: 10,
-    maxParallelTasks: 2
+    maxParallelTasks: 2,
+    asyncDispatch: {
+      enabled: true,
+      thresholdMs: 0,
+      progressReports: {
+        enabled: true,
+        intervalMs: 60_000,
+        maxReportsPerTask: 5
+      }
+    }
   }
 }
 ```

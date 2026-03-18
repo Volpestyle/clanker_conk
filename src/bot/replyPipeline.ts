@@ -1001,10 +1001,11 @@ async function executeReplyLlm(
       }
     },
     codeAgent: {
-      runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source }) =>
+      runTask: async ({ settings: toolSettings, task, role, cwd, guildId, channelId, userId, source }) =>
         await bot.runModelRequestedCodeTask({
           settings: toolSettings,
           task,
+          role,
           cwd,
           guildId,
           channelId,
@@ -1016,6 +1017,9 @@ async function executeReplyLlm(
     memory: bot.memory,
     store: bot.store,
     subAgentSessions: bot.buildSubAgentSessionsRuntime(),
+    backgroundCodeTasks: {
+      dispatch: (args) => bot.dispatchBackgroundCodeTask(args)
+    },
     voiceSession: activeVoiceCallbacks || undefined,
     voiceJoin: Boolean(getVoiceSettings(settings).enabled) && bot.voiceSessionManager
       ? async () => {
