@@ -721,7 +721,7 @@ export function toAnthropicTool(schema: SharedToolSchema): {
   };
 }
 
-/** Convert to OpenAI/xAI realtime tool format (for voiceToolCalls.ts). */
+/** Convert to OpenAI/xAI realtime tool format (for the voice tool-call runtime). */
 export function toRealtimeTool(schema: SharedToolSchema): VoiceRealtimeToolDescriptor {
   return {
     toolType: "function",

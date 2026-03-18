@@ -372,7 +372,7 @@ Voice-only or voice-centric tools include:
 Relevant code:
 
 - `src/tools/replyTools.ts`
-- `src/voice/voiceToolCalls.ts`
+- `src/voice/voiceToolCallInfra.ts`
 - `src/voice/voiceToolCallDispatch.ts`
 
 ## Defaults Worth Remembering

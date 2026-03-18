@@ -81,7 +81,6 @@ const STATE_LABELS: Record<string, string> = {
 };
 
 const WAKE_WINDOW_FALLBACK_MS = 35_000;
-const DEFAULT_JOIN_TEXT_CHANNEL_ID = "1475944808198574205";
 
 function parseIsoMs(iso?: string | null): number | null {
   const normalized = String(iso || "").trim();
@@ -1646,7 +1645,7 @@ export default function VoiceMonitor() {
   const { guilds, selectedGuildId } = useDashboardGuildScope();
   const history = useVoiceHistory(selectedGuildId || null);
   const { refresh: refreshHistory, ingestLiveEvent } = history;
-  const [joinTextChannelId, setJoinTextChannelId] = useState(DEFAULT_JOIN_TEXT_CHANNEL_ID);
+  const [joinTextChannelId, setJoinTextChannelId] = useState("");
   const [joinPending, setJoinPending] = useState(false);
   const [joinStatus, setJoinStatus] = useState<{
     text: string;
@@ -1794,7 +1793,7 @@ export default function VoiceMonitor() {
               value={joinTextChannelId}
               onChange={(event) => setJoinTextChannelId(event.target.value)}
               disabled={joinPending}
-              placeholder={DEFAULT_JOIN_TEXT_CHANNEL_ID}
+              placeholder="Optional text channel ID"
             />
           </div>
           <button type="button" onClick={requestVoiceJoin} disabled={joinPending}>

@@ -34,11 +34,34 @@ import { RECENT_ENGAGEMENT_WINDOW_MS } from "./voiceSessionManager.constants.ts"
 import { clamp } from "../utils.ts";
 import type { BargeInController } from "./bargeInController.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
-import type { MusicPlaybackProvider } from "./musicPlayback.ts";
 import type { DiscordMusicPlayer } from "./musicPlayer.ts";
 import type { MusicSearchProvider } from "./musicSearch.ts";
 import type { ReplyManager } from "./replyManager.ts";
 import { resolveVoiceDirectAddressSignal } from "./voiceAddressing.ts";
+
+type MusicPlaybackTrack = {
+  id: string;
+  title: string;
+  artistNames: string[];
+  externalUrl: string | null;
+};
+
+type MusicPlaybackResult = {
+  ok: boolean;
+  provider: string;
+  reason: string;
+  message: string;
+  status: number;
+  track: MusicPlaybackTrack | null;
+  query: string | null;
+};
+
+type MusicPlaybackProviderLike = {
+  provider: string;
+  isConfigured?: () => boolean;
+  startPlayback?: (payload?: { query?: string; trackId?: string | null; deviceId?: string | null }) => Promise<MusicPlaybackResult>;
+  stopPlayback?: (payload?: { deviceId?: string | null }) => Promise<MusicPlaybackResult>;
+};
 
 // English-only fallback/fast-path heuristics for obvious media control turns
 // (music, video, stream). Lightweight transport shortcuts, not the main brain.
@@ -205,7 +228,7 @@ export interface MusicPlaybackHost {
     session: MusicRuntimeSessionLike | null | undefined
   ) => void;
   musicPlayer?: Pick<DiscordMusicPlayer, "duck" | "unduck" | "play" | "stop" | "pause" | "resume"> | null;
-  musicPlayback?: Pick<MusicPlaybackProvider, "provider" | "isConfigured" | "startPlayback" | "stopPlayback"> | null;
+  musicPlayback?: MusicPlaybackProviderLike | null;
   musicSearch?: Pick<MusicSearchProvider, "isConfigured" | "search"> | null;
   maybeClearActiveReplyInterruptionPolicy: (session: MusicRuntimeSessionLike | null | undefined) => void;
   abortActiveInboundCaptures: (args: {

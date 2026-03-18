@@ -12,7 +12,10 @@ import {
   type AgentStackPresetName,
   type AgentStackPresetDefaults as PresetDefaults
 } from "./agentStackCatalog.ts";
-import { resolveVoiceAdmissionModeForSettings } from "./voiceDashboardMappings.ts";
+import {
+  resolveVoiceAdmissionModeForSettings,
+  resolveVoiceProviderFromRuntimeMode
+} from "./voiceDashboardMappings.ts";
 
 type ModelBinding = {
   provider?: string;
@@ -202,10 +205,6 @@ export function getDevTaskPermissions(settings: unknown): Settings["permissions"
   );
 }
 
-function getInteractionSettings(settings: unknown): Settings["interaction"] {
-  return getSettingsSection(settings, (input) => input.interaction, DEFAULT_SETTINGS.interaction);
-}
-
 export function getActivitySettings(settings: unknown): Settings["interaction"]["activity"] {
   return getSettingsSection(
     settings,
@@ -235,14 +234,6 @@ export function getStartupSettings(settings: unknown): Settings["interaction"]["
     settings,
     (input) => input.interaction?.startup,
     DEFAULT_SETTINGS.interaction.startup
-  );
-}
-
-function getSessionOrchestrationSettings(settings: unknown): Settings["interaction"]["sessions"] {
-  return getSettingsSection(
-    settings,
-    (input) => input.interaction?.sessions,
-    DEFAULT_SETTINGS.interaction.sessions
   );
 }
 
@@ -338,10 +329,6 @@ export function getVoiceSoundboardSettings(settings: unknown): Settings["voice"]
   );
 }
 
-function getMediaSettings(settings: unknown): Settings["media"] {
-  return getSettingsSection(settings, (input) => input.media, DEFAULT_SETTINGS.media);
-}
-
 export function getVisionSettings(settings: unknown): Settings["media"]["vision"] {
   return getSettingsSection(
     settings,
@@ -356,10 +343,6 @@ export function getVideoContextSettings(settings: unknown): Settings["media"]["v
     (input) => input.media?.videoContext,
     DEFAULT_SETTINGS.media.videoContext
   );
-}
-
-function getMusicSettings(settings: unknown): Settings["music"] {
-  return getSettingsSection(settings, (input) => input.music, DEFAULT_SETTINGS.music);
 }
 
 export function getAutomationsSettings(settings: unknown): Settings["automations"] {
@@ -397,15 +380,6 @@ export function getBrowserRuntimeConfig(settings: unknown): Settings["agentStack
 
 export function getVoiceRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"]["voice"] {
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.voice, getRuntimeConfig(settings).voice);
-}
-
-function getClaudeOAuthSessionRuntimeConfig(
-  settings: unknown
-): Settings["agentStack"]["runtimeConfig"]["claudeOAuthSession"] {
-  return mergeWithDefaults(
-    DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeOAuthSession,
-    getRuntimeConfig(settings).claudeOAuthSession
-  );
 }
 
 export function getDevTeamRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"]["devTeam"] {
@@ -584,10 +558,7 @@ export function getResolvedVoiceProvider(settings: unknown): string {
   const runtimeMode = String(resolveAgentStack(settings).voiceRuntime || "")
     .trim()
     .toLowerCase();
-  if (runtimeMode === "voice_agent") return "xai";
-  if (runtimeMode === "gemini_realtime") return "gemini";
-  if (runtimeMode === "elevenlabs_realtime") return "elevenlabs";
-  return "openai";
+  return resolveVoiceProviderFromRuntimeMode(runtimeMode) || "openai";
 }
 
 export function getResolvedVoiceGenerationBinding(settings: unknown) {
