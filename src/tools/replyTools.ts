@@ -24,10 +24,7 @@ import {
   getMemorySettings
 } from "../settings/agentStack.ts";
 
-const MAX_WEB_QUERY_LEN = 220;
-const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
-const MAX_CONVERSATION_LOOKUP_QUERY_LEN = 220;
-const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
+const MAX_TOOL_QUERY_LEN = 220;
 const MAX_WEB_SCRAPE_URL_LEN = 2000;
 const MAX_WEB_SCRAPE_MAX_CHARS = 24000;
 const MAX_WEB_SCRAPE_DEFAULT_CHARS = 8000;
@@ -376,7 +373,7 @@ async function executeConversationSearch(
 
   const query = normalizeDirectiveText(
     String(input?.query || ""),
-    MAX_CONVERSATION_LOOKUP_QUERY_LEN
+    MAX_TOOL_QUERY_LEN
   );
   if (!query) {
     return { content: "Missing or empty conversation search query.", isError: true };
@@ -437,7 +434,7 @@ async function executeWebSearch(
   }
   const query = normalizeDirectiveText(
     String(input?.query || ""),
-    MAX_WEB_QUERY_LEN
+    MAX_TOOL_QUERY_LEN
   );
   if (!query) {
     return { content: "Missing or empty search query.", isError: true };
@@ -777,7 +774,7 @@ async function executeMemorySearch(
       channelId: context.channelId,
       actorUserId: context.userId,
       namespace: input?.namespace,
-      queryText: normalizeDirectiveText(String(input?.query || ""), MAX_MEMORY_LOOKUP_QUERY_LEN),
+      queryText: normalizeDirectiveText(String(input?.query || ""), MAX_TOOL_QUERY_LEN),
       trace: {
         ...context.trace,
         source: "reply_tool_memory_search"
@@ -881,11 +878,11 @@ async function executeImageLookup(
   // history image candidates exist (checked at the prompt layer).
   const imageId = normalizeDirectiveText(
     String(input?.imageId || ""),
-    MAX_IMAGE_LOOKUP_QUERY_LEN
+    MAX_TOOL_QUERY_LEN
   );
   const query = normalizeDirectiveText(
     String(input?.query || ""),
-    MAX_IMAGE_LOOKUP_QUERY_LEN
+    MAX_TOOL_QUERY_LEN
   );
   const request = imageId || query;
   if (!request) {
@@ -1147,8 +1144,9 @@ async function executeCodeTask(
     }
     try {
       const turnResult = await session.runTurn(task, { signal: context.signal });
+      maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
       const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
-      const sessionNote = `\n\n[session_id: ${session.id}]`;
+      const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
       if (turnResult.isError) {
         return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
       }
@@ -1177,8 +1175,9 @@ async function executeCodeTask(
       runtime.subAgentSessions.manager.register(session);
       try {
         const turnResult = await session.runTurn(task, { signal: context.signal });
+        maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
         const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
-        const sessionNote = `\n\n[session_id: ${session.id}]`;
+        const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
         if (turnResult.isError) {
           return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
         }

@@ -8,6 +8,7 @@ import {
   getVoiceTranscriptionSettings,
   resolveAgentStack
 } from "../settings/agentStack.ts";
+import { resolveVoiceProviderFromRuntimeMode } from "../settings/voiceDashboardMappings.ts";
 import type { VoiceRuntimeEventContext } from "./voiceSessionTypes.ts";
 
 const VOICE_ADDRESSING_ALL_TOKENS = new Set([
@@ -58,6 +59,14 @@ const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 
 const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
 export const STT_TRANSCRIPT_MAX_CHARS = 2000;
+
+export function resolveVoiceSettingsSnapshot<TSettings>(
+  store: { getSettings: () => TSettings },
+  session: { settingsSnapshot?: TSettings | null } | null | undefined,
+  settings: TSettings | null = null
+): TSettings {
+  return settings || session?.settingsSnapshot || store.getSettings();
+}
 
 export interface AsrTranscriptGuardResult {
   transcript: string;
@@ -447,14 +456,7 @@ export function resolveVoiceRuntimeMode(settings) {
 }
 
 export function resolveRealtimeProvider(mode) {
-  const normalized = String(mode || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "voice_agent") return "xai";
-  if (normalized === "openai_realtime") return "openai";
-  if (normalized === "gemini_realtime") return "gemini";
-  if (normalized === "elevenlabs_realtime") return "elevenlabs";
-  return null;
+  return resolveVoiceProviderFromRuntimeMode(mode);
 }
 
 export function isRealtimeMode(mode) {

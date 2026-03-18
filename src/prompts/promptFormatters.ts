@@ -336,15 +336,7 @@ export function formatWebSearchFindings(webSearch) {
 }
 
 function formatPromptRelativeAge(rawValue) {
-  const createdAtMs = Date.parse(String(rawValue || ""));
-  if (!Number.isFinite(createdAtMs)) return "unknown";
-  const deltaMinutes = Math.max(0, Math.round((Date.now() - createdAtMs) / 60000));
-  if (deltaMinutes < 1) return "just now";
-  if (deltaMinutes < 60) return `${deltaMinutes}m ago`;
-  const deltaHours = Math.round(deltaMinutes / 60);
-  if (deltaHours < 24) return `${deltaHours}h ago`;
-  const deltaDays = Math.round(deltaHours / 24);
-  return `${deltaDays}d ago`;
+  return formatRelativePromptAge(rawValue) || "unknown";
 }
 
 type InitiativePromptMessage = {

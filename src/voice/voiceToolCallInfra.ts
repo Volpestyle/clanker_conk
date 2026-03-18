@@ -1,4 +1,5 @@
 import { shouldRegisterRealtimeTools } from "./voiceConfigResolver.ts";
+import { resolveVoiceSettingsSnapshot } from "./voiceSessionHelpers.ts";
 import type { VoiceMcpServerStatus, VoicePendingToolCallState, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import {
@@ -69,7 +70,7 @@ export async function executeRealtimeFunctionCall(
   if (!callId) return;
 
   const startedAtMs = Date.now();
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   const callArgs = parseRealtimeToolArguments(manager, pendingCall?.argumentsText || "");
   const toolDescriptor = resolveRealtimeToolDescriptor(manager, session, toolName);
   const resolvedToolName = toolName || toolDescriptor?.name || "unknown_tool";
@@ -256,7 +257,7 @@ export async function refreshRealtimeTools(
       : null;
   if (!updateTools) return;
 
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   if (!shouldRegisterRealtimeTools({ session, settings: resolvedSettings })) {
     const hadRealtimeTools =
       (Array.isArray(session.realtimeToolDefinitions) && session.realtimeToolDefinitions.length > 0) ||

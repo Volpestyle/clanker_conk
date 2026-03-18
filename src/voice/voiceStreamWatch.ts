@@ -17,7 +17,7 @@ import {
   type GoLiveStream,
   type StreamDiscoveryState
 } from "../selfbot/streamDiscovery.ts";
-import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import { isRealtimeMode, normalizeVoiceText, resolveVoiceSettingsSnapshot } from "./voiceSessionHelpers.ts";
 import {
   clearNativeDiscordScreenShareState,
   ensureNativeDiscordScreenShareState,
@@ -1083,7 +1083,10 @@ export function getStreamWatchNotesForPrompt(session, settings = null) {
 export function supportsStreamWatchCommentary(manager: StreamWatchManager, session, settings = null) {
   if (!session || session.ending) return false;
   if (!isRealtimeMode(session.mode)) return false;
-  return supportsDirectVisionCommentary(manager, settings || session.settingsSnapshot || manager.store.getSettings());
+  return supportsDirectVisionCommentary(
+    manager,
+    resolveVoiceSettingsSnapshot(manager.store, session, settings)
+  );
 }
 
 export function supportsStreamWatchNotes(manager: StreamWatchManager, { session = null, settings = null } = {}) {
@@ -1611,7 +1614,7 @@ async function finalizeStreamWatchState(manager: StreamWatchManager, {
       reason: "session_not_found"
     };
   }
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   const memoryRecap = persistMemory
     ? await persistStreamWatchRecapToMemory(manager, {
         session,
@@ -1728,7 +1731,7 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
     };
   }
 
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   const streamWatchSettings = resolvedSettings?.voice?.streamWatch || {};
   if (!streamWatchSettings.enabled) {
     return {
@@ -2141,7 +2144,7 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
     };
   }
 
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   const streamWatchSettings = resolvedSettings?.voice?.streamWatch || {};
   if (!streamWatchSettings.enabled) {
     return {
@@ -2318,7 +2321,7 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
   if (!session || session.ending) return;
   if (!supportsStreamWatchCommentary(manager, session, settings)) return;
   if (!session.streamWatch?.active) return;
-  const baseSettings = (settings || session.settingsSnapshot || manager.store.getSettings()) as Record<string, unknown> | null;
+  const baseSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings) as Record<string, unknown> | null;
   const commentarySettings = resolveStreamWatchCommentarySettings(baseSettings);
   if (!commentarySettings.enabled) return;
   if (typeof manager.runRealtimeBrainReply !== "function") return;
