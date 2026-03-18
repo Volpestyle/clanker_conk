@@ -1,5 +1,6 @@
 import { clamp01 } from "../normalization/numbers.ts";
 import { normalizeWhitespaceText } from "../normalization/text.ts";
+import { normalizeInlineText, parseMemoryExtractionJson } from "../llm/llmHelpers.ts";
 
 export const LORE_SUBJECT = "__lore__";
 export const SELF_SUBJECT = "__self__";
@@ -21,6 +22,14 @@ const FACT_TYPE_LABELS = {
   guidance: "Guidance",
   behavioral: "Behavioral"
 };
+
+const MEMORY_FACT_MAX_CHARS = 190;
+const MEMORY_EVIDENCE_MAX_CHARS = 220;
+const FACT_EMBEDDING_FACT_MAX_CHARS = 220;
+const FACT_EMBEDDING_EVIDENCE_MAX_CHARS = 180;
+const MEMORY_LINE_MAX_CHARS = 180;
+const MEMORY_RECENCY_HALF_LIFE_DAYS = 45;
+const HIGHLIGHT_ENTRY_MAX_CHARS = 220;
 
 const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "guidance", "behavioral", "other"]);
 // English-only fallback heuristics for filtering obvious instruction-like memory writes.
@@ -45,13 +54,78 @@ const EN_MEMORY_SECRET_RE = /(?:api key|token|password|credential|secret)/;
 const EN_MEMORY_STYLE_GUIDANCE_RE =
   /\b(?:use|keep|be|stay|avoid|prefer)\b[\s\S]{0,80}\b(?:tone|style|voice|responses?|replies?|brief|concise|casual|formal|playful|direct)\b/i;
 
+export type NormalizedReflectionFact = {
+  subject: string;
+  subjectName: string;
+  fact: string;
+  type: string;
+  confidence: number;
+  evidence: string;
+  supersedes?: string;
+};
+
+export const REFLECTION_FACTS_JSON_SCHEMA = JSON.stringify({
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    facts: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          subject: { type: "string", enum: ["author", "bot", "lore"] },
+          subjectName: { type: "string", maxLength: 80 },
+          fact: { type: "string", minLength: 1, maxLength: MEMORY_FACT_MAX_CHARS },
+          type: { type: "string", enum: ["preference", "profile", "relationship", "project", "other"] },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+          evidence: { type: "string", minLength: 1, maxLength: MEMORY_EVIDENCE_MAX_CHARS },
+          supersedes: { type: "string", maxLength: 200 }
+        },
+        required: ["subject", "subjectName", "fact", "type", "confidence", "evidence"]
+      }
+    }
+  },
+  required: ["facts"]
+});
+
+export function normalizeReflectionFacts(rawText: string, maxFacts: number): NormalizedReflectionFact[] {
+  const parsed = parseMemoryExtractionJson(rawText);
+  const rawFacts = Array.isArray(parsed?.facts) ? parsed.facts : [];
+  const facts: NormalizedReflectionFact[] = [];
+  const validSubjects = new Set(["author", "bot", "lore"]);
+
+  for (const item of rawFacts) {
+    if (!item || typeof item !== "object") continue;
+
+    const subject = String(item.subject || "").trim().toLowerCase();
+    const fact = normalizeInlineText(item.fact, MEMORY_FACT_MAX_CHARS);
+    const evidence = normalizeInlineText(item.evidence, MEMORY_EVIDENCE_MAX_CHARS);
+    if (!validSubjects.has(subject) || !fact || !evidence) continue;
+
+    const supersedes = normalizeInlineText(item.supersedes, 200) || "";
+    facts.push({
+      subject,
+      subjectName: normalizeInlineText(item.subjectName, 80) || "",
+      fact,
+      type: String(item.type || "other").trim().toLowerCase() || "other",
+      confidence: Math.max(0, Math.min(1, Number(item.confidence) || 0.5)),
+      evidence,
+      ...(supersedes ? { supersedes } : {})
+    });
+    if (facts.length >= maxFacts) break;
+  }
+
+  return facts;
+}
+
 export function normalizeStoredFactText(rawFact) {
   const compact = String(rawFact || "")
     .replace(/\s+/g, " ")
     .trim();
   if (compact.length < 4) return "";
-  if (!/[.!?]$/.test(compact)) return `${compact}.`.slice(0, 190);
-  return compact.slice(0, 190);
+  if (!/[.!?]$/.test(compact)) return `${compact}.`.slice(0, MEMORY_FACT_MAX_CHARS);
+  return compact.slice(0, MEMORY_FACT_MAX_CHARS);
 }
 
 export function normalizeFactType(rawType) {
@@ -62,13 +136,13 @@ export function normalizeFactType(rawType) {
 }
 
 export function normalizeEvidenceText(rawEvidence, _sourceText) {
-  const evidence = sanitizeInline(rawEvidence || "", 220);
+  const evidence = sanitizeInline(rawEvidence || "", MEMORY_EVIDENCE_MAX_CHARS);
   return evidence || null;
 }
 
 export function buildFactEmbeddingPayload(factRow) {
-  const fact = sanitizeInline(factRow?.fact || "", 220);
-  const evidence = sanitizeInline(factRow?.evidence_text || "", 180);
+  const fact = sanitizeInline(factRow?.fact || "", FACT_EMBEDDING_FACT_MAX_CHARS);
+  const evidence = sanitizeInline(factRow?.evidence_text || "", FACT_EMBEDDING_EVIDENCE_MAX_CHARS);
   const factType = sanitizeInline(factRow?.fact_type || "", 40);
   if (!fact) return "";
 
@@ -100,7 +174,7 @@ export function computeRecencyScore(createdAtIso) {
   if (!Number.isFinite(timestamp)) return 0;
   const ageMs = Math.max(0, Date.now() - timestamp);
   const ageDays = ageMs / (24 * 60 * 60 * 1000);
-  return 1 / (1 + ageDays / 45);
+  return 1 / (1 + ageDays / MEMORY_RECENCY_HALF_LIFE_DAYS);
 }
 
 const DECAY_EXEMPT_FACT_TYPES = new Set(["guidance", "behavioral"]);
@@ -237,7 +311,7 @@ function cleanFactForMemory(rawFact) {
   text = text.replace(/\s+/g, " ").trim();
   if (!/[.!?]$/.test(text)) text += ".";
 
-  return text.slice(0, 190);
+  return text.slice(0, MEMORY_FACT_MAX_CHARS);
 }
 
 export function formatTypedFactForMemory(rawFact, rawType) {
@@ -263,7 +337,7 @@ export function buildHighlightsSection(entries, maxItems = 24) {
     const text = String(entry.text || "")
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, 220);
+      .slice(0, HIGHLIGHT_ENTRY_MAX_CHARS);
     if (!author || !text) continue;
     if (text.length < 8) continue;
     if (/^https?:\/\/\S+$/i.test(text)) continue;
@@ -407,7 +481,7 @@ export function normalizeMemoryLineInput(input) {
     .trim();
 
   if (text.length < 4) return "";
-  return text.slice(0, 180);
+  return text.slice(0, MEMORY_LINE_MAX_CHARS);
 }
 
 export function isInstructionLikeFactText(line) {

@@ -376,39 +376,73 @@ export function extractRecentVideoTargets({
   return targets;
 }
 
+function normalizeMediaPromptContext(rawText) {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  return String(rawText || "")
+    .replace(URL_IN_TEXT_RE, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+}
+
+function composeMediaPrompt({
+  promptText,
+  contextText,
+  maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
+  memoryFacts = [],
+  intro,
+  contextLabel,
+  fallbackScene,
+  fallbackContext,
+  styleGuidance = [],
+  hardConstraints = []
+}) {
+  const requested = normalizeDirectiveText(promptText, maxLen);
+  const memoryHints = formatMediaMemoryHints(memoryFacts, 5);
+
+  return [
+    intro,
+    `Scene: ${requested || contextText || fallbackScene}.`,
+    `${contextLabel}: ${contextText || fallbackContext}.`,
+    memoryHints || null,
+    "Style guidance:",
+    ...styleGuidance,
+    "Hard constraints:",
+    ...hardConstraints
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function composeDiscoveryImagePrompt(
   imagePrompt,
   postText,
   maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
   memoryFacts = []
 ) {
-  URL_IN_TEXT_RE.lastIndex = 0;
-  const topic = String(postText || "")
-    .replace(URL_IN_TEXT_RE, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 260);
-  const requested = normalizeDirectiveText(imagePrompt, maxLen);
-  const memoryHints = formatMediaMemoryHints(memoryFacts, 5);
-
-  return [
-    "Create a vivid, shareable image for a Discord post.",
-    `Scene: ${requested || topic || "general chat mood"}.`,
-    `Mood/topic context (do not render as text): ${topic || "general chat mood"}.`,
-    memoryHints || null,
-    "Style guidance:",
-    "- Describe a concrete scene with a clear subject, action, and environment.",
-    "- Use cinematic or editorial framing: strong focal point, depth of field, deliberate camera angle.",
-    "- Include expressive lighting (golden hour, neon glow, dramatic chiaroscuro, soft diffused, etc.).",
-    "- Choose a cohesive color palette that reinforces the mood.",
-    "- Favor a specific visual medium when it fits (photo-realistic, illustration, 3D render, pixel art, watercolor, cel-shaded, collage).",
-    "Hard constraints:",
-    "- Absolutely no visible text, letters, numbers, logos, subtitles, captions, UI elements, or watermarks anywhere in the image.",
-    "- Do not render any words from the scene description or topic context as text inside the image.",
-    "- Keep the composition clean with a single strong focal point."
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const topic = normalizeMediaPromptContext(postText);
+  return composeMediaPrompt({
+    promptText: imagePrompt,
+    contextText: topic,
+    maxLen,
+    memoryFacts,
+    intro: "Create a vivid, shareable image for a Discord post.",
+    contextLabel: "Mood/topic context (do not render as text)",
+    fallbackScene: "general chat mood",
+    fallbackContext: "general chat mood",
+    styleGuidance: [
+      "- Describe a concrete scene with a clear subject, action, and environment.",
+      "- Use cinematic or editorial framing: strong focal point, depth of field, deliberate camera angle.",
+      "- Include expressive lighting (golden hour, neon glow, dramatic chiaroscuro, soft diffused, etc.).",
+      "- Choose a cohesive color palette that reinforces the mood.",
+      "- Favor a specific visual medium when it fits (photo-realistic, illustration, 3D render, pixel art, watercolor, cel-shaded, collage)."
+    ],
+    hardConstraints: [
+      "- Absolutely no visible text, letters, numbers, logos, subtitles, captions, UI elements, or watermarks anywhere in the image.",
+      "- Do not render any words from the scene description or topic context as text inside the image.",
+      "- Keep the composition clean with a single strong focal point."
+    ]
+  });
 }
 
 export function composeDiscoveryVideoPrompt(
@@ -417,31 +451,27 @@ export function composeDiscoveryVideoPrompt(
   maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
   memoryFacts = []
 ) {
-  URL_IN_TEXT_RE.lastIndex = 0;
-  const topic = String(postText || "")
-    .replace(URL_IN_TEXT_RE, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 260);
-  const requested = normalizeDirectiveText(videoPrompt, maxLen);
-  const memoryHints = formatMediaMemoryHints(memoryFacts, 5);
-
-  return [
-    "Create a short, dynamic, shareable video clip for a Discord post.",
-    `Scene: ${requested || topic || "general chat mood"}.`,
-    `Mood/topic context (do not render as text): ${topic || "general chat mood"}.`,
-    memoryHints || null,
-    "Style guidance:",
-    "- Describe a concrete motion arc: what the viewer sees at the start, what changes, and how it resolves.",
-    "- Specify camera behavior (slow pan, tracking shot, static wide, zoom-in, dolly, handheld shake).",
-    "- Include lighting mood and color palette.",
-    "- Keep the action legible in a short social-clip format (3-6 seconds of clear motion).",
-    "Hard constraints:",
-    "- No visible text, captions, subtitles, logos, watermarks, or UI overlays.",
-    "- Smooth, continuous motion without abrupt jumps or flicker."
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const topic = normalizeMediaPromptContext(postText);
+  return composeMediaPrompt({
+    promptText: videoPrompt,
+    contextText: topic,
+    maxLen,
+    memoryFacts,
+    intro: "Create a short, dynamic, shareable video clip for a Discord post.",
+    contextLabel: "Mood/topic context (do not render as text)",
+    fallbackScene: "general chat mood",
+    fallbackContext: "general chat mood",
+    styleGuidance: [
+      "- Describe a concrete motion arc: what the viewer sees at the start, what changes, and how it resolves.",
+      "- Specify camera behavior (slow pan, tracking shot, static wide, zoom-in, dolly, handheld shake).",
+      "- Include lighting mood and color palette.",
+      "- Keep the action legible in a short social-clip format (3-6 seconds of clear motion)."
+    ],
+    hardConstraints: [
+      "- No visible text, captions, subtitles, logos, watermarks, or UI overlays.",
+      "- Smooth, continuous motion without abrupt jumps or flicker."
+    ]
+  });
 }
 
 function formatMediaMemoryHints(memoryFacts = [], maxItems = 5) {
@@ -479,30 +509,26 @@ export function composeReplyImagePrompt(
   maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
   memoryFacts = []
 ) {
-  URL_IN_TEXT_RE.lastIndex = 0;
-  const context = String(replyText || "")
-    .replace(URL_IN_TEXT_RE, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 260);
-  const requested = normalizeDirectiveText(imagePrompt, maxLen);
-  const memoryHints = formatMediaMemoryHints(memoryFacts, 5);
-
-  return [
-    "Create a vivid image to accompany a Discord chat reply.",
-    `Scene: ${requested || context || "chat reaction"}.`,
-    `Conversational context (do not render as text): ${context || "chat context"}.`,
-    memoryHints || null,
-    "Style guidance:",
-    "- Describe a concrete scene with a clear subject, action, and setting.",
-    "- Use expressive framing and lighting to sell the mood.",
-    "- Pick a visual medium that fits the tone (photo, illustration, 3D render, pixel art, etc.).",
-    "Hard constraints:",
-    "- No visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
-    "- Keep the composition clean with one clear focal point."
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const context = normalizeMediaPromptContext(replyText);
+  return composeMediaPrompt({
+    promptText: imagePrompt,
+    contextText: context,
+    maxLen,
+    memoryFacts,
+    intro: "Create a vivid image to accompany a Discord chat reply.",
+    contextLabel: "Conversational context (do not render as text)",
+    fallbackScene: "chat reaction",
+    fallbackContext: "chat context",
+    styleGuidance: [
+      "- Describe a concrete scene with a clear subject, action, and setting.",
+      "- Use expressive framing and lighting to sell the mood.",
+      "- Pick a visual medium that fits the tone (photo, illustration, 3D render, pixel art, etc.)."
+    ],
+    hardConstraints: [
+      "- No visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
+      "- Keep the composition clean with one clear focal point."
+    ]
+  });
 }
 
 export function composeReplyVideoPrompt(
@@ -511,31 +537,27 @@ export function composeReplyVideoPrompt(
   maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
   memoryFacts = []
 ) {
-  URL_IN_TEXT_RE.lastIndex = 0;
-  const context = String(replyText || "")
-    .replace(URL_IN_TEXT_RE, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 260);
-  const requested = normalizeDirectiveText(videoPrompt, maxLen);
-  const memoryHints = formatMediaMemoryHints(memoryFacts, 5);
-
-  return [
-    "Create a short, dynamic video clip to accompany a Discord chat reply.",
-    `Scene: ${requested || context || "chat reaction"}.`,
-    `Conversational context (do not render as text): ${context || "chat context"}.`,
-    memoryHints || null,
-    "Style guidance:",
-    "- Describe a concrete motion arc: what starts, what changes, how it ends.",
-    "- Specify camera behavior (pan, tracking, zoom, static, handheld).",
-    "- Include lighting and color palette.",
-    "- Keep the action clear in a short social-clip format.",
-    "Hard constraints:",
-    "- No visible text, captions, subtitles, logos, watermarks, or UI overlays.",
-    "- Smooth, continuous motion."
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const context = normalizeMediaPromptContext(replyText);
+  return composeMediaPrompt({
+    promptText: videoPrompt,
+    contextText: context,
+    maxLen,
+    memoryFacts,
+    intro: "Create a short, dynamic video clip to accompany a Discord chat reply.",
+    contextLabel: "Conversational context (do not render as text)",
+    fallbackScene: "chat reaction",
+    fallbackContext: "chat context",
+    styleGuidance: [
+      "- Describe a concrete motion arc: what starts, what changes, how it ends.",
+      "- Specify camera behavior (pan, tracking, zoom, static, handheld).",
+      "- Include lighting and color palette.",
+      "- Keep the action clear in a short social-clip format."
+    ],
+    hardConstraints: [
+      "- No visible text, captions, subtitles, logos, watermarks, or UI overlays.",
+      "- Smooth, continuous motion."
+    ]
+  });
 }
 
 export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {

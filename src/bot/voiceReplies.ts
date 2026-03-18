@@ -1446,7 +1446,16 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       subAgentSessions,
       backgroundCodeTasks: runtime.dispatchBackgroundCodeTask
         ? {
-            dispatch: (args) => runtime.dispatchBackgroundCodeTask!(args)
+            dispatch: (args) => runtime.dispatchBackgroundCodeTask!(args),
+            getTask: runtime.backgroundTaskRunner
+              ? (taskId) => runtime.backgroundTaskRunner!.getTask(taskId)
+              : () => null,
+            queueFollowup: runtime.backgroundTaskRunner
+              ? (taskId, input) => runtime.backgroundTaskRunner!.queueFollowup(taskId, input)
+              : () => false,
+            cancel: runtime.backgroundTaskRunner
+              ? (taskId, reason) => runtime.backgroundTaskRunner!.cancel(taskId, reason)
+              : () => false
           }
         : undefined,
       voiceSessionManager: runtime.voiceSessionManager || undefined,

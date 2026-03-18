@@ -60,6 +60,14 @@ const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
 export const STT_TRANSCRIPT_MAX_CHARS = 2000;
 
+export function resolveVoiceSettingsSnapshot<TSettings>(
+  store: { getSettings: () => TSettings },
+  session: { settingsSnapshot?: TSettings | null } | null | undefined,
+  settings: TSettings | null = null
+): TSettings {
+  return settings || session?.settingsSnapshot || store.getSettings();
+}
+
 export interface AsrTranscriptGuardResult {
   transcript: string;
   malformed: boolean;

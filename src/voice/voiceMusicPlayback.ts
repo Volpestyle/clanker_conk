@@ -8,6 +8,7 @@ import {
 import {
   normalizeInlineText,
   STT_TRANSCRIPT_MAX_CHARS,
+  resolveVoiceSettingsSnapshot,
   resolveTranscriberProvider,
   resolveVoiceAsrLanguageGuidance
 } from "./voiceSessionHelpers.ts";
@@ -34,11 +35,34 @@ import { RECENT_ENGAGEMENT_WINDOW_MS } from "./voiceSessionManager.constants.ts"
 import { clamp } from "../utils.ts";
 import type { BargeInController } from "./bargeInController.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
-import type { MusicPlaybackProvider } from "./musicPlayback.ts";
 import type { DiscordMusicPlayer } from "./musicPlayer.ts";
 import type { MusicSearchProvider } from "./musicSearch.ts";
 import type { ReplyManager } from "./replyManager.ts";
 import { resolveVoiceDirectAddressSignal } from "./voiceAddressing.ts";
+
+type MusicPlaybackTrack = {
+  id: string;
+  title: string;
+  artistNames: string[];
+  externalUrl: string | null;
+};
+
+type MusicPlaybackResult = {
+  ok: boolean;
+  provider: string;
+  reason: string;
+  message: string;
+  status: number;
+  track: MusicPlaybackTrack | null;
+  query: string | null;
+};
+
+type MusicPlaybackProviderLike = {
+  provider: string;
+  isConfigured?: () => boolean;
+  startPlayback?: (payload?: { query?: string; trackId?: string | null; deviceId?: string | null }) => Promise<MusicPlaybackResult>;
+  stopPlayback?: (payload?: { deviceId?: string | null }) => Promise<MusicPlaybackResult>;
+};
 
 // English-only fallback/fast-path heuristics for obvious media control turns
 // (music, video, stream). Lightweight transport shortcuts, not the main brain.
@@ -205,7 +229,7 @@ export interface MusicPlaybackHost {
     session: MusicRuntimeSessionLike | null | undefined
   ) => void;
   musicPlayer?: Pick<DiscordMusicPlayer, "duck" | "unduck" | "play" | "stop" | "pause" | "resume"> | null;
-  musicPlayback?: Pick<MusicPlaybackProvider, "provider" | "isConfigured" | "startPlayback" | "stopPlayback"> | null;
+  musicPlayback?: MusicPlaybackProviderLike | null;
   musicSearch?: Pick<MusicSearchProvider, "isConfigured" | "search"> | null;
   maybeClearActiveReplyInterruptionPolicy: (session: MusicRuntimeSessionLike | null | undefined) => void;
   abortActiveInboundCaptures: (args: {
@@ -1160,7 +1184,7 @@ export function isCommandOnlyActive(
   session: MusicRuntimeSessionLike | null | undefined,
   settings: MusicPlaybackSettings = null
 ) {
-  const resolved = settings || session?.settingsSnapshot || manager.store.getSettings();
+  const resolved = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   if (getVoiceConversationPolicy(resolved).commandOnlyMode) return true;
   return musicPhaseShouldForceCommandOnly(getMusicPhase(manager, session));
 }
@@ -1228,7 +1252,7 @@ export async function engageBotSpeechMusicDuck(
   }
   const { targetGain, fadeMs } = resolveMusicDuckingConfig(
     manager,
-    settings || session.settingsSnapshot || manager.store.getSettings()
+    resolveVoiceSettingsSnapshot(manager.store, session, settings)
   );
   const duckPromise = manager.musicPlayer?.duck({ targetGain, fadeMs });
   if (music) music.ducked = true;
@@ -1295,7 +1319,7 @@ export async function releaseBotSpeechMusicDuck(
   }
   const { fadeMs } = resolveMusicDuckingConfig(
     manager,
-    settings || session.settingsSnapshot || manager.store.getSettings()
+    resolveVoiceSettingsSnapshot(manager.store, session, settings)
   );
   manager.musicPlayer?.unduck({ targetGain: 1, fadeMs });
   return true;
@@ -1725,7 +1749,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
     channelId || message?.channelId || resolvedChannelIdFromChannel || session?.textChannelId || ""
   ).trim();
   const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
-  const resolvedSettings = settings || session?.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   const requestText = normalizeInlineText(message?.content || "", 220) || null;
   const resolvedOriginAcceptedAt =
     normalizeMusicTurnAcceptedAt(originAcceptedAt) ||
@@ -2234,7 +2258,7 @@ export async function requestStopMusic(manager: MusicPlaybackHost, {
     channelId || message?.channelId || resolvedChannelIdFromChannel || session?.textChannelId || ""
   ).trim();
   const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
-  const resolvedSettings = settings || session?.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   const normalizedRequestText = normalizeInlineText(requestText || message?.content || "", 220) || null;
 
   if (!session) {
@@ -2396,7 +2420,7 @@ export async function requestPauseMusic(manager: MusicPlaybackHost, {
     channelId || message?.channelId || resolvedChannelIdFromChannel || session?.textChannelId || ""
   ).trim();
   const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
-  const resolvedSettings = settings || session?.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   const normalizedRequestText = normalizeInlineText(requestText || message?.content || "", 220) || null;
 
   if (!session) {
@@ -2509,7 +2533,7 @@ export async function maybeHandleMusicTextSelectionRequest(manager: MusicPlaybac
 
   const text = normalizeInlineText(message?.content || "", STT_TRANSCRIPT_MAX_CHARS);
   if (!text) return false;
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   return await manager.maybeHandlePendingMusicDisambiguationTurn({
     session,
     settings: resolvedSettings,
@@ -2534,7 +2558,7 @@ export async function maybeHandleMusicTextStopRequest(manager: MusicPlaybackHost
   const session = manager.sessions.get(guildId);
   if (!session || !isMusicPlaybackActive(manager, session)) return false;
 
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   const text = normalizeInlineText(message?.content || "", STT_TRANSCRIPT_MAX_CHARS);
   if (!text) return false;
 
@@ -2571,7 +2595,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
   if (!isMusicPlaybackActive(manager, session)) return false;
   if (!pcmBuffer?.length && !preTranscript) return true;
 
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
 
   // When a bridge transcript is provided, skip the Whisper REST call entirely.
   let normalizedTranscript: string;
@@ -3053,7 +3077,7 @@ export async function handleMusicSlashCommand(
       externalUrl: selectedTrack.externalUrl || null
     };
     const requestedByUserId = user.id;
-    const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+    const resolvedSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings);
 
     if (action === "play_now") {
       const trailingTracks = queueState.nowPlayingIndex == null

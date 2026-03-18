@@ -197,7 +197,8 @@ Provider-native realtime voice tool calls also create abort controllers per pend
 
 This is implemented in:
 
-- `src/voice/voiceToolCalls.ts`
+- `src/voice/voiceToolCallInfra.ts`
+- `src/voice/voiceToolCallAgents.ts`
 - `src/voice/voiceSessionManager.ts`
 
 ## Persistent Browser Profile (Authenticated Browsing)

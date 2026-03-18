@@ -21,27 +21,40 @@ export interface SubAgentTurnResult {
   errorMessage: string;
   /** True when the sub-agent intentionally ended the session during this turn. */
   sessionCompleted?: boolean;
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    cacheWriteTokens: number;
-    cacheReadTokens: number;
-  };
+  usage: SubAgentUsage;
 }
 
-export interface SubAgentProgressEvent {
-  kind: "tool_use" | "file_edit" | "assistant_message" | "turn_complete" | "error";
-  summary: string;
+export type SubAgentProgressEvent = {
+  kind?: string;
+  summary?: string;
+  message?: string;
+  percent?: number;
   turnNumber?: number;
-  elapsedMs: number;
-  timestamp: number;
+  elapsedMs?: number;
+  timestamp?: number;
   filePath?: string;
-}
+  metadata?: Record<string, unknown>;
+};
 
-export interface SubAgentRunTurnOptions {
+export interface SubAgentTurnOptions {
   signal?: AbortSignal;
   onProgress?: (event: SubAgentProgressEvent) => void;
 }
+
+export type SubAgentUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+};
+
+export const EMPTY_USAGE: SubAgentUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheWriteTokens: 0,
+  cacheReadTokens: 0
+};
+
 
 export interface SubAgentSession {
   readonly id: string;
@@ -54,7 +67,7 @@ export interface SubAgentSession {
   getBrowserSessionKey?(): string | null;
 
   /** Send a turn (initial instruction or follow-up) and get the result. */
-  runTurn(input: string, options?: SubAgentRunTurnOptions): Promise<SubAgentTurnResult>;
+  runTurn(input: string, options?: SubAgentTurnOptions): Promise<SubAgentTurnResult>;
 
   /** Cancel any in-flight work and reject future turns. */
   cancel(reason?: string): void;

@@ -81,7 +81,3 @@ export async function destroyDashboardSession(): Promise<DashboardAuthState> {
     method: "DELETE"
   });
 }
-
-async function resetSettings(): Promise<unknown> {
-  return api("/api/settings/reset", { method: "POST" });
-}

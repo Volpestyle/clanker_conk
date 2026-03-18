@@ -68,6 +68,12 @@ export const CODING_WORKER_RUNTIME_KINDS = [
 ] as const;
 
 export type SettingsCodingWorkerName = typeof CODING_WORKER_RUNTIME_KINDS[number];
+export type DevTeamRoles = {
+  design: SettingsCodingWorkerName;
+  implementation: SettingsCodingWorkerName;
+  review: SettingsCodingWorkerName;
+  research?: SettingsCodingWorkerName;
+};
 
 type Primitive = string | number | boolean | bigint | symbol | null | undefined;
 

@@ -1,12 +1,14 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  executeLocalVoiceToolCall,
   executeVoiceBrowserBrowseTool,
+} from "./voiceToolCallAgents.ts";
+import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
+import {
   executeVoiceMusicPlayTool,
   executeVoiceMusicQueueNextTool,
   executeVoiceVideoPlayTool
-} from "./voiceToolCalls.ts";
+} from "./voiceToolCallMusic.ts";
 import { createTestSettings } from "../testSettings.ts";
 
 test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse", async () => {

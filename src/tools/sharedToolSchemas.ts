@@ -198,21 +198,34 @@ export const VIDEO_CONTEXT_SCHEMA: SharedToolSchema = {
 
 export const CODE_TASK_SCHEMA: SharedToolSchema = {
   name: "code_task",
-  description: "Run the configured coding worker on a coding task. Supports optional role routing and session continuation.",
+  description:
+    "Run, follow up, check status, or cancel a coding task. " +
+    "action=run (default) dispatches a new task or continues a session. " +
+    "action=followup sends additional instructions to a running background task. " +
+    "action=status checks a background task's progress. " +
+    "action=cancel stops a running background task.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
-      task: { type: "string", description: "Detailed instruction for the configured coding worker." },
+      action: {
+        type: "string",
+        enum: ["run", "followup", "cancel", "status"],
+        description: "Action to perform. Defaults to run."
+      },
+      task: { type: "string", description: "Detailed instruction for the coding worker (required for run and followup)." },
       role: {
         type: "string",
         enum: ["design", "implementation", "review", "research"],
-        description: "Optional worker role to target. Defaults to implementation."
+        description: "Optional worker role to target. Defaults to implementation. Only used with action=run."
       },
-      cwd: { type: "string", description: "Working directory. Defaults to configured project root." },
-      session_id: { type: "string", description: "Session ID to continue a previous code session." }
+      cwd: { type: "string", description: "Working directory. Defaults to configured project root. Only used with action=run." },
+      session_id: { type: "string", description: "Session ID for session continuation (run), or background task ID (followup, cancel, status)." }
     },
-    required: ["task"],
+    anyOf: [
+      { required: ["task"] },
+      { required: ["session_id"] }
+    ],
     additionalProperties: false
   }
 };
@@ -721,7 +734,7 @@ export function toAnthropicTool(schema: SharedToolSchema): {
   };
 }
 
-/** Convert to OpenAI/xAI realtime tool format (for voiceToolCalls.ts). */
+/** Convert to OpenAI/xAI realtime tool format (for the voice tool-call runtime). */
 export function toRealtimeTool(schema: SharedToolSchema): VoiceRealtimeToolDescriptor {
   return {
     toolType: "function",

@@ -434,6 +434,7 @@ export function buildReplyPipelineRuntime(
     search: bot.search,
     voiceSessionManager: bot.voiceSessionManager,
     dispatchBackgroundCodeTask: (payload) => bot.dispatchBackgroundCodeTask(payload),
+    backgroundTaskRunner: bot.backgroundTaskRunner,
     getReplyAddressSignal: (settings, message, recentMessages = []) =>
       getReplyAddressSignalForReplyAdmission(
         {
@@ -557,6 +558,7 @@ export function buildVoiceReplyRuntime(bot: ClankerBot): VoiceReplyRuntime {
       buildBrowserBrowseContextForBudgetTracking(budgetContext, settings),
     runModelRequestedCodeTask: (payload) => runModelRequestedCodeTaskForAgentTasks(agentContext, payload),
     buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntimeForAgentTasks(agentContext),
-    dispatchBackgroundCodeTask: (payload) => bot.dispatchBackgroundCodeTask(payload)
+    dispatchBackgroundCodeTask: (payload) => bot.dispatchBackgroundCodeTask(payload),
+    backgroundTaskRunner: bot.backgroundTaskRunner
   };
 }

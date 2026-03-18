@@ -204,6 +204,7 @@ type ReplyPipelineRuntimeMember =
   | "search"
   | "voiceSessionManager"
   | "dispatchBackgroundCodeTask"
+  | "backgroundTaskRunner"
   | "getReactionEmojiOptions"
   | "getEmojiHints"
   | "maybeHandleStructuredAutomationIntent"
@@ -419,6 +420,7 @@ export interface VoiceReplyRuntime extends BotContext {
   runModelRequestedCodeTask: StripFirstArg<RunModelRequestedCodeTaskFn>;
   buildSubAgentSessionsRuntime?: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
   dispatchBackgroundCodeTask?: DispatchBackgroundCodeTaskFn;
+  backgroundTaskRunner?: import("../agents/backgroundTaskRunner.ts").BackgroundTaskRunner | null;
 }
 
 type TextThoughtLoopPolicyRuntime = {

@@ -1018,7 +1018,10 @@ async function executeReplyLlm(
     store: bot.store,
     subAgentSessions: bot.buildSubAgentSessionsRuntime(),
     backgroundCodeTasks: {
-      dispatch: (args) => bot.dispatchBackgroundCodeTask(args)
+      dispatch: (args) => bot.dispatchBackgroundCodeTask(args),
+      getTask: (taskId) => bot.backgroundTaskRunner.getTask(taskId),
+      queueFollowup: (taskId, input) => bot.backgroundTaskRunner.queueFollowup(taskId, input),
+      cancel: (taskId, reason) => bot.backgroundTaskRunner.cancel(taskId, reason)
     },
     voiceSession: activeVoiceCallbacks || undefined,
     voiceJoin: Boolean(getVoiceSettings(settings).enabled) && bot.voiceSessionManager

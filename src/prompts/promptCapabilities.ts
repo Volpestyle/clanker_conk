@@ -45,7 +45,7 @@ const TEXT_TOOL_SUMMARIES: Record<string, string> = {
   memory_search: "Look up durable memory facts (speaker, guild, self, lore).",
   memory_write: "Store long-lived useful facts or standing guidance, never secrets or chatter. Write from your own perspective (use 'me'/'my', not your name).",
   image_lookup: "Find a previously shared image from message history by ref or description.",
-  code_task: "Run the configured coding worker on a coding task.",
+  code_task: "Run, follow up on, check status of, or cancel a coding task. Use action=followup with a session_id to steer a running background task.",
   join_voice_channel: "Join the requesting user's current voice channel.",
   leave_voice_channel: "Leave the voice channel.",
   music_search: "Browse track candidates without starting playback.",

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { clampInt, normalizeInlineText, parseMemoryExtractionJson } from "../llm/llmHelpers.ts";
+import { clampInt, normalizeInlineText } from "../llm/llmHelpers.ts";
 import { estimateUsdCost } from "../llm/pricing.ts";
 import {
   getBotName,
@@ -10,7 +10,11 @@ import {
   getResolvedOrchestratorBinding,
   getReplyGenerationSettings
 } from "../settings/agentStack.ts";
-import { parseDailyEntryLineWithScope } from "./memoryHelpers.ts";
+import {
+  REFLECTION_FACTS_JSON_SCHEMA,
+  normalizeReflectionFacts,
+  parseDailyEntryLineWithScope
+} from "./memoryHelpers.ts";
 
 type ParsedEntry = {
   timestampIso: string;
@@ -153,30 +157,6 @@ type ReflectionLlm = {
   ): Promise<ReflectionModelResponse>;
 };
 
-const REFLECTION_FACTS_JSON_SCHEMA = JSON.stringify({
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    facts: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          subject: { type: "string", enum: ["author", "bot", "lore"] },
-          subjectName: { type: "string", maxLength: 80 },
-          fact: { type: "string", minLength: 1, maxLength: 190 },
-          type: { type: "string", enum: ["preference", "profile", "relationship", "project", "other"] },
-          confidence: { type: "number", minimum: 0, maximum: 1 },
-          evidence: { type: "string", minLength: 1, maxLength: 220 },
-          supersedes: { type: "string", maxLength: 200 }
-        },
-        required: ["subject", "subjectName", "fact", "type", "confidence", "evidence"]
-      }
-    }
-  },
-  required: ["facts"]
-});
 
 function normalizeReflectionUsage(usage: Partial<ReflectionUsage> | null | undefined): ReflectionUsage {
   return {
@@ -194,35 +174,6 @@ function addReflectionUsage(target: ReflectionUsage, next: ReflectionUsage) {
   target.cacheReadTokens += next.cacheReadTokens;
 }
 
-function normalizeReflectionFacts(rawText: string, maxFacts: number): ReflectionFact[] {
-  const parsed = parseMemoryExtractionJson(rawText);
-  const rawFacts = Array.isArray(parsed?.facts) ? parsed.facts : [];
-  const facts: ReflectionFact[] = [];
-  const validSubjects = new Set(["author", "bot", "lore"]);
-
-  for (const item of rawFacts) {
-    if (!item || typeof item !== "object") continue;
-
-    const subject = String(item.subject || "").trim().toLowerCase();
-    const fact = normalizeInlineText(item.fact, 190);
-    const evidence = normalizeInlineText(item.evidence, 220);
-    if (!validSubjects.has(subject) || !fact || !evidence) continue;
-
-    const supersedes = normalizeInlineText(item.supersedes, 200) || "";
-    facts.push({
-      subject,
-      subjectName: normalizeInlineText(item.subjectName, 80) || "",
-      fact,
-      type: String(item.type || "other").trim().toLowerCase() || "other",
-      confidence: Math.max(0, Math.min(1, Number(item.confidence) || 0.5)),
-      evidence,
-      ...(supersedes ? { supersedes } : {})
-    });
-    if (facts.length >= maxFacts) break;
-  }
-
-  return facts;
-}
 
 function buildReflectionOnePassPrompts({
   dateKey,

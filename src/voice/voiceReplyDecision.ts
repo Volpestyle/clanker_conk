@@ -4,7 +4,8 @@ import { getPromptBotName } from "../prompts/promptCore.ts";
 import {
   normalizeVoiceText,
   isRealtimeMode,
-  normalizeVoiceRuntimeEventContext
+  normalizeVoiceRuntimeEventContext,
+  resolveVoiceSettingsSnapshot
 } from "./voiceSessionHelpers.ts";
 import {
   buildVoiceAddressingState as buildVoiceAddressingStateFromTranscript,
@@ -1378,7 +1379,7 @@ function isCommandOnlyActive(
   session: ReplyDecisionSessionLike | null | undefined,
   settings: ReplyDecisionSettings = null
 ) {
-  const resolved = settings || session?.settingsSnapshot || manager.store.getSettings();
+  const resolved = resolveVoiceSettingsSnapshot(manager.store, session, settings);
   if (getVoiceConversationPolicy(resolved).commandOnlyMode) return true;
   return typeof manager.getMusicPhase === "function"
     ? musicPhaseShouldForceCommandOnly(manager.getMusicPhase(session))

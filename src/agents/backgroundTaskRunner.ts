@@ -71,6 +71,7 @@ type InternalTask = BackgroundTask & {
   onProgress?: BackgroundTaskDispatchArgs["onProgress"];
   onComplete?: BackgroundTaskDispatchArgs["onComplete"];
   callbackInFlight: boolean;
+  followupQueue: string[];
 };
 
 type ActionStore = {
@@ -180,7 +181,8 @@ export class BackgroundTaskRunner {
       progressReports,
       onProgress: args.onProgress,
       onComplete: args.onComplete,
-      callbackInFlight: false
+      callbackInFlight: false,
+      followupQueue: []
     };
 
     const existing = this.tasks.get(task.id);
@@ -244,6 +246,35 @@ export class BackgroundTaskRunner {
     return true;
   }
 
+  getTask(taskId: string): BackgroundTask | null {
+    const task = this.tasks.get(String(taskId || "").trim());
+    if (!task) return null;
+    return this.snapshotTask(task);
+  }
+
+  queueFollowup(taskId: string, input: string): boolean {
+    const normalizedId = String(taskId || "").trim();
+    const task = this.tasks.get(normalizedId);
+    if (!task || task.status !== "running") return false;
+    const normalizedInput = String(input || "").trim();
+    if (!normalizedInput) return false;
+    task.followupQueue.push(normalizedInput);
+    this.store.logAction({
+      kind: "code_agent_call",
+      guildId: task.guildId || null,
+      channelId: task.channelId || null,
+      userId: task.userId || null,
+      content: truncateSummary(normalizedInput, 200),
+      metadata: {
+        taskId: task.id,
+        sessionId: task.sessionId,
+        action: "followup_queued",
+        queueDepth: task.followupQueue.length
+      }
+    });
+    return true;
+  }
+
   cancelByScope(scopeKey: string, reason = "Background code tasks cancelled"): number {
     const normalizedScopeKey = String(scopeKey || "").trim();
     if (!normalizedScopeKey) return 0;
@@ -270,10 +301,34 @@ export class BackgroundTaskRunner {
   private async runTask(task: InternalTask) {
     try {
       const signal = AbortSignal.any([task.abortController.signal]);
-      const result = await task.session.runTurn(task.input, {
+      const progressCb = (event: SubAgentProgressEvent) => this.handleProgressEvent(task, event);
+      let result = await task.session.runTurn(task.input, {
         signal,
-        onProgress: (event) => this.handleProgressEvent(task, event)
+        onProgress: progressCb
       });
+
+      // Drain any follow-up instructions queued while the initial turn was running.
+      while (task.followupQueue.length > 0 && task.status === "running" && !signal.aborted) {
+        const followupInput = task.followupQueue.shift()!;
+        this.store.logAction({
+          kind: "code_agent_call",
+          guildId: task.guildId || null,
+          channelId: task.channelId || null,
+          userId: task.userId || null,
+          content: truncateSummary(followupInput, 200),
+          metadata: {
+            taskId: task.id,
+            sessionId: task.sessionId,
+            action: "followup_executing",
+            queueRemaining: task.followupQueue.length
+          }
+        });
+        result = await task.session.runTurn(followupInput, {
+          signal,
+          onProgress: progressCb
+        });
+      }
+
       task.result = result;
       task.completedAt = Date.now();
       task.status = result.isError ? "error" : task.status === "cancelled" ? "cancelled" : "completed";

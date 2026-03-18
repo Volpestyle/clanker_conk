@@ -25,11 +25,11 @@ import {
   getMemorySettings
 } from "../settings/agentStack.ts";
 import type { SubAgentProgressEvent } from "../agents/subAgentSession.ts";
+import type { BackgroundTask } from "../agents/backgroundTaskRunner.ts";
 
-const MAX_WEB_QUERY_LEN = 220;
-const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
-const MAX_CONVERSATION_LOOKUP_QUERY_LEN = 220;
-const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
+type BackgroundTaskSnapshot = BackgroundTask;
+
+const MAX_TOOL_QUERY_LEN = 220;
 const MAX_WEB_SCRAPE_URL_LEN = 2000;
 const MAX_WEB_SCRAPE_MAX_CHARS = 24000;
 const MAX_WEB_SCRAPE_DEFAULT_CHARS = 8000;
@@ -283,6 +283,9 @@ export type ReplyToolRuntime = {
         events: SubAgentProgressEvent[];
       };
     };
+    getTask: (taskId: string) => BackgroundTaskSnapshot | null;
+    queueFollowup: (taskId: string, input: string) => boolean;
+    cancel: (taskId: string, reason?: string) => boolean;
   };
   voiceSessionManager?: BrowserStreamPublishManager & {
     stopMusicStreamPublish?: (opts: {
@@ -426,7 +429,7 @@ async function executeConversationSearch(
 
   const query = normalizeDirectiveText(
     String(input?.query || ""),
-    MAX_CONVERSATION_LOOKUP_QUERY_LEN
+    MAX_TOOL_QUERY_LEN
   );
   if (!query) {
     return { content: "Missing or empty conversation search query.", isError: true };
@@ -487,7 +490,7 @@ async function executeWebSearch(
   }
   const query = normalizeDirectiveText(
     String(input?.query || ""),
-    MAX_WEB_QUERY_LEN
+    MAX_TOOL_QUERY_LEN
   );
   if (!query) {
     return { content: "Missing or empty search query.", isError: true };
@@ -827,7 +830,7 @@ async function executeMemorySearch(
       channelId: context.channelId,
       actorUserId: context.userId,
       namespace: input?.namespace,
-      queryText: normalizeDirectiveText(String(input?.query || ""), MAX_MEMORY_LOOKUP_QUERY_LEN),
+      queryText: normalizeDirectiveText(String(input?.query || ""), MAX_TOOL_QUERY_LEN),
       trace: {
         ...context.trace,
         source: "reply_tool_memory_search"
@@ -931,11 +934,11 @@ async function executeImageLookup(
   // history image candidates exist (checked at the prompt layer).
   const imageId = normalizeDirectiveText(
     String(input?.imageId || ""),
-    MAX_IMAGE_LOOKUP_QUERY_LEN
+    MAX_TOOL_QUERY_LEN
   );
   const query = normalizeDirectiveText(
     String(input?.query || ""),
-    MAX_IMAGE_LOOKUP_QUERY_LEN
+    MAX_TOOL_QUERY_LEN
   );
   const request = imageId || query;
   if (!request) {
@@ -1168,12 +1171,94 @@ async function executeLeaveVoiceChannel(
   }
 }
 
+function formatBackgroundTaskStatus(task: BackgroundTaskSnapshot): string {
+  const elapsedMs = Math.max(0, (task.completedAt || Date.now()) - task.startedAt);
+  const elapsedSec = Math.round(elapsedMs / 1000);
+  const lines: string[] = [
+    `Session: ${task.sessionId}`,
+    `Status: ${task.status}`,
+    `Role: ${task.role}`,
+    `Duration: ${elapsedSec}s`
+  ];
+  if (task.progress.fileEdits.length > 0) {
+    lines.push(`Files touched: ${task.progress.fileEdits.join(", ")}`);
+  }
+  if (task.progress.turnNumber > 1) {
+    lines.push(`Turn: ${task.progress.turnNumber}${task.progress.totalTurns ? ` of ${task.progress.totalTurns}` : ""}`);
+  }
+  const recentEvents = task.progress.events.slice(-5);
+  if (recentEvents.length > 0) {
+    lines.push("Recent activity:");
+    for (const event of recentEvents) {
+      lines.push(`- ${event.summary}`);
+    }
+  }
+  if (task.result?.text) {
+    const preview = task.result.text.trim().slice(0, 500);
+    lines.push(`\nResult preview:\n${preview}`);
+  }
+  if (task.errorMessage) {
+    lines.push(`Error: ${task.errorMessage}`);
+  }
+  return lines.join("\n");
+}
+
 async function executeCodeTask(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
+  const action = String(input?.action || "run").trim().toLowerCase();
+  const sessionId = typeof input?.session_id === "string" ? String(input.session_id).trim() : "";
+
+  // --- action: status ---
+  if (action === "status") {
+    if (!sessionId) {
+      return { content: "Missing session_id for status check.", isError: true };
+    }
+    const task = runtime.backgroundCodeTasks?.getTask(sessionId);
+    if (!task) {
+      return { content: `No background task found with session ID '${sessionId}'.`, isError: true };
+    }
+    return { content: formatBackgroundTaskStatus(task) };
+  }
+
+  // --- action: cancel ---
+  if (action === "cancel") {
+    if (!sessionId) {
+      return { content: "Missing session_id for cancellation.", isError: true };
+    }
+    const cancelled = runtime.backgroundCodeTasks?.cancel(sessionId, "Cancelled by orchestrator via code_task action");
+    if (!cancelled) {
+      return { content: `No running background task found with session ID '${sessionId}'. It may have already completed.`, isError: true };
+    }
+    return { content: `Background code task '${sessionId}' cancelled.` };
+  }
+
+  // --- action: followup ---
+  if (action === "followup") {
+    const followupText = normalizeDirectiveText(String(input?.task || ""), MAX_CODE_TASK_LEN);
+    if (!followupText) {
+      return { content: "Missing or empty follow-up instruction. Provide a task.", isError: true };
+    }
+    if (!sessionId) {
+      return { content: "Missing session_id for follow-up. Provide the background task's session ID.", isError: true };
+    }
+    const queued = runtime.backgroundCodeTasks?.queueFollowup(sessionId, followupText);
+    if (!queued) {
+      return {
+        content: `Could not queue follow-up for session '${sessionId}'. The task may have already completed or no background dispatcher is available.`,
+        isError: true
+      };
+    }
+    return {
+      content: `Follow-up instruction queued for background task '${sessionId}'. ` +
+        "The coding worker will execute it after the current turn completes."
+    };
+  }
+
+  // --- action: run (default) ---
   const task = normalizeDirectiveText(
     String(input?.task || ""),
     MAX_CODE_TASK_LEN
@@ -1183,7 +1268,6 @@ async function executeCodeTask(
     return { content: "Missing or empty code task instruction.", isError: true };
   }
 
-  const sessionId = typeof input?.session_id === "string" ? String(input.session_id).trim() : "";
   const resolvedCwd = typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined;
 
   // --- Multi-turn session continuation ---

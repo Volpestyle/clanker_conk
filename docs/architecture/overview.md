@@ -96,7 +96,7 @@ Core routing:
 
 - local tool registry: `src/tools/toolRegistry.ts`
 - text: `src/tools/replyTools.ts`
-- voice: `src/voice/voiceToolCalls.ts` and `src/voice/voiceToolCallDispatch.ts`
+- voice: `src/voice/voiceToolCallInfra.ts` and `src/voice/voiceToolCallDispatch.ts`
 - browser tasks: `src/tools/browserTaskRuntime.ts`
 - code tasks: `src/agents/codeAgent.ts`
 

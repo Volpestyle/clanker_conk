@@ -38,21 +38,6 @@ export function deepMerge(base, patch) {
   return out;
 }
 
-function uniqueIdList(input) {
-  if (Array.isArray(input)) {
-    return [...new Set(input.map((x) => String(x).trim()).filter(Boolean))];
-  }
-
-  if (typeof input !== "string") return [];
-
-  const split = input
-    .split(/[\n,]/g)
-    .map((x) => x.trim())
-    .filter(Boolean);
-
-  return [...new Set(split)];
-}
-
 const DISCORD_MESSAGE_SAFE_LIMIT = 1900;
 
 export function sanitizeBotText(text, maxLen = DISCORD_MESSAGE_SAFE_LIMIT) {

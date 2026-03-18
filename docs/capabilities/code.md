@@ -16,6 +16,7 @@ Core runtime files:
 - `src/agents/codeAgent.ts`
 - `src/agents/codexAgent.ts`
 - `src/agents/codexCliAgent.ts`
+- `src/agents/baseAgentSession.ts`
 - `src/agents/subAgentSession.ts`
 - `src/llm/llmClaudeCode.ts`
 - `src/llm/llmCodex.ts`
@@ -87,6 +88,19 @@ That shared schema stays intentionally concise. The tool description names the c
 
 When `role` is omitted, the generic `code_task` path routes through the implementation role.
 
+## Actions
+
+`code_task` supports an `action` parameter that controls behavior:
+
+| Action | Required Params | Description |
+|--------|----------------|-------------|
+| `run` (default) | `task` | Dispatch a new task or continue an existing session via `session_id` |
+| `followup` | `task`, `session_id` | Queue a follow-up instruction for a running background task. Executes after the current turn completes. |
+| `status` | `session_id` | Check a background task's progress, files touched, and recent activity |
+| `cancel` | `session_id` | Cancel a running background task |
+
+The `followup` action enables the orchestrator LLM to steer a running sub-agent based on progress updates — adjusting instructions, narrowing scope, or redirecting work without cancelling and restarting. Follow-ups are queued and executed sequentially after the current turn finishes.
+
 ## Session Model
 
 `code_task` supports both session continuation and one-shot execution:
@@ -100,6 +114,8 @@ Session manager:
 - `SubAgentSessionManager` with idle sweep and max concurrent session controls
 - owner checks prevent one user from continuing another user’s session
 - provider-specific session implementations for Claude Code, Codex CLI, and Codex
+- all provider sessions extend `BaseAgentSession`, which owns shared `runTurn` lifecycle semantics (abort wiring, status transitions, cancel/close behavior, and lifecycle logging)
+- `runTurn` options support both `signal` and `onProgress` (for async background task progress emission)
 
 ## Workspace Isolation
 
@@ -157,6 +173,7 @@ Primary action kinds:
 
 - `code_agent_call`
 - `code_agent_error`
+- `sub_agent_session_lifecycle`
 
 Common metadata fields:
 
