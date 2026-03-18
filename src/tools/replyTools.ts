@@ -1147,8 +1147,9 @@ async function executeCodeTask(
     }
     try {
       const turnResult = await session.runTurn(task, { signal: context.signal });
+      maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
       const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
-      const sessionNote = `\n\n[session_id: ${session.id}]`;
+      const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
       if (turnResult.isError) {
         return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
       }
@@ -1177,8 +1178,9 @@ async function executeCodeTask(
       runtime.subAgentSessions.manager.register(session);
       try {
         const turnResult = await session.runTurn(task, { signal: context.signal });
+        maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
         const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
-        const sessionNote = `\n\n[session_id: ${session.id}]`;
+        const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
         if (turnResult.isError) {
           return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
         }

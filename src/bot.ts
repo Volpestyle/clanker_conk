@@ -48,6 +48,8 @@ import {
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
 import {
   runModelRequestedBrowserBrowse as runModelRequestedBrowserBrowseForAgentTasks,
+  runModelRequestedCodeTask as runModelRequestedCodeTaskForAgentTasks,
+  buildSubAgentSessionsRuntime as buildSubAgentSessionsRuntimeForAgentTasks
 } from "./bot/agentTasks.ts";
 import {
   buildBrowserBrowseContext as buildBrowserBrowseContextForBudgetTracking,
@@ -386,6 +388,17 @@ export class ClankerBot {
       startVoiceScreenWatch: (payload) =>
         startVoiceScreenWatchForScreenShare(this.toScreenShareRuntime(), payload)
     });
+
+    // Wire code agent hooks onto VoiceSessionManager so code_task is
+    // available on the voice_realtime surface (provider-native tool calls).
+    const voiceAgentContext = this.toAgentContext();
+    this.voiceSessionManager.runModelRequestedCodeTask = (payload) =>
+      runModelRequestedCodeTaskForAgentTasks(voiceAgentContext, payload);
+    this.voiceSessionManager.createCodeAgentSession = (opts) => {
+      const sessionsRuntime = buildSubAgentSessionsRuntimeForAgentTasks(voiceAgentContext);
+      return sessionsRuntime.createCodeSession(opts) ?? null;
+    };
+    this.voiceSessionManager.subAgentSessions = this.subAgentSessions;
 
     this.registerEvents();
   }
