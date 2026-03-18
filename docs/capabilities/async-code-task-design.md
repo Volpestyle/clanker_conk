@@ -1,5 +1,7 @@
 # Async Code Task Dispatch
 
+**Status: IMPLEMENTED** — see `code.md` §Async Dispatch for the canonical runtime documentation.
+
 ## Problem
 
 When the orchestrator LLM calls `code_task`, the entire reply pipeline blocks until the sub-agent finishes. For short tasks (< 30s), this is fine. For multi-minute tasks, the user experience degrades:

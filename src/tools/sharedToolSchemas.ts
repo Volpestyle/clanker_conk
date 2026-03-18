@@ -191,7 +191,6 @@ export const VIDEO_CONTEXT_SCHEMA: SharedToolSchema = {
         description: "Video ref from the current message context, for example VID 1."
       }
     },
-    anyOf: [{ required: ["url"] }, { required: ["videoRef"] }],
     additionalProperties: false
   }
 };
@@ -726,11 +725,14 @@ export function toAnthropicTool(schema: SharedToolSchema): {
   strict?: boolean;
   input_schema: { type: "object"; properties: Record<string, unknown>; required?: string[]; additionalProperties?: boolean };
 } {
+  // Claude API rejects oneOf/allOf/anyOf/not at the top level of input_schema.
+  // Strip them defensively (mirrors sanitizeProviderNativeRealtimeParameters in voice path).
+  const { anyOf, oneOf, allOf, not, ...sanitizedParameters } = schema.parameters as Record<string, unknown>;
   return {
     name: schema.name,
     description: schema.description,
     ...(schema.strict ? { strict: true } : {}),
-    input_schema: schema.parameters
+    input_schema: sanitizedParameters as typeof schema.parameters
   };
 }
 
