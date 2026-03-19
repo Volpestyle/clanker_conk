@@ -49,7 +49,7 @@ const MAX_MAX_ASR_SECONDS = 600;
 
 // Availability probing cache for yt-dlp/ffmpeg presence checks.
 const COMMAND_AVAILABILITY_CACHE_TTL_MS = 5 * 60 * 1000;
-const COMMAND_PROBE_TIMEOUT_MS = 4_000;
+const COMMAND_PROBE_TIMEOUT_MS = 10_000;
 
 // ASR/transcript formatting limits used in extracted context payloads.
 const ASR_AUDIO_SAMPLE_RATE_HZ = "16000";
