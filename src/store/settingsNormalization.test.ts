@@ -387,6 +387,29 @@ test("normalizeSettings preserves optional full-brain classifier admission", () 
   assert.equal(resolveAgentStack(normalized).voiceAdmissionPolicy.mode, "classifier_gate");
 });
 
+test("normalizeSettings clamps voice thinking budget tokens", () => {
+  const low = normalizeSettings({
+    voice: {
+      conversationPolicy: {
+        thinking: "enabled",
+        thinkingBudgetTokens: 1
+      }
+    }
+  });
+  assert.equal(low.voice.conversationPolicy.thinking, "enabled");
+  assert.equal(low.voice.conversationPolicy.thinkingBudgetTokens, 128);
+
+  const high = normalizeSettings({
+    voice: {
+      conversationPolicy: {
+        thinking: "enabled",
+        thinkingBudgetTokens: 99_999
+      }
+    }
+  });
+  assert.equal(high.voice.conversationPolicy.thinkingBudgetTokens, 16_384);
+});
+
 test("normalizeSettings restricts browser model providers to supported browser runtimes", () => {
   const normalized = normalizeSettings({
     agentStack: {

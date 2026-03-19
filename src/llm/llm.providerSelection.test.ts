@@ -132,6 +132,9 @@ test("resolveProviderAndModel falls back from unavailable openai to anthropic", 
     openaiApiKey: "",
     anthropicApiKey: "test-anthropic-key"
   });
+  // Isolate from any OAuth token files that may exist on disk.
+  service.codexOAuth = null;
+  service.claudeOAuth = null;
 
   const resolved = service.resolveProviderAndModel({ provider: "openai", model: "" });
   assert.deepEqual(resolved, { provider: "anthropic", model: "claude-haiku-4-5" });

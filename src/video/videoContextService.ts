@@ -693,33 +693,39 @@ export class VideoContextService {
     const outputPattern = path.join(tempDir, "frame-%03d.jpg");
 
     try {
+      const ffmpegStartedAt = Date.now();
+      const ffmpegArgs = [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        String(input),
+        "-vf",
+        `fps=1/${interval}`,
+        "-frames:v",
+        String(maxFrames),
+        "-q:v",
+        "5",
+        outputPattern
+      ];
       await runCommand({
         command: "ffmpeg",
-        args: [
-          "-hide_banner",
-          "-loglevel",
-          "error",
-          "-y",
-          "-i",
-          String(input),
-          "-vf",
-          `fps=1/${interval}`,
-          "-frames:v",
-          String(maxFrames),
-          "-q:v",
-          "5",
-          outputPattern
-        ],
+        args: ffmpegArgs,
         timeoutMs: FFMPEG_TIMEOUT_MS
       });
+      const ffmpegDurationMs = Date.now() - ffmpegStartedAt;
 
       const rows = await fs.readdir(tempDir);
       const frameFiles = rows.filter((name) => name.toLowerCase().endsWith(".jpg")).sort();
       const images = [];
+      const frameSizes: number[] = [];
       for (const frame of frameFiles) {
         const fullPath = path.join(tempDir, frame);
+        const stat = await fs.stat(fullPath);
         const dataBase64 = await fs.readFile(fullPath, { encoding: "base64" });
         if (!dataBase64) continue;
+        frameSizes.push(stat.size);
         images.push({
           filename: frame,
           contentType: "image/jpeg",
@@ -728,6 +734,17 @@ export class VideoContextService {
           source: "video_keyframe"
         });
       }
+      const totalBytes = frameSizes.reduce((a, b) => a + b, 0);
+      console.log(
+        `[VideoContextService] keyframe_extraction_complete` +
+        `  input=${String(input).slice(0, 120)}` +
+        `  intervalSeconds=${interval}` +
+        `  maxFrames=${maxFrames}` +
+        `  extractedFrames=${images.length}` +
+        `  frameSizesBytes=[${frameSizes.join(",")}]` +
+        `  totalBytes=${totalBytes}` +
+        `  ffmpegDurationMs=${ffmpegDurationMs}`
+      );
       return images;
     } finally {
       try {

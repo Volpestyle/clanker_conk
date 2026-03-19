@@ -23,7 +23,8 @@ interface SettingsRouteDeps {
 
 export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps) {
   const { store, bot, appConfig } = deps;
-  const providerAuth = resolveProviderAuth(appConfig);
+  // Resolve per-request so freshly-saved OAuth tokens are reflected immediately.
+  const getProviderAuth = () => resolveProviderAuth(appConfig);
   const applyNoStore = (c: { header(name: string, value: string): void }) => {
     c.header("Cache-Control", "no-store");
   };
@@ -38,7 +39,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     return c.json(buildSettingsResponse({
       intent: current.intent,
       effective: current.settings,
-      providerAuth,
+      providerAuth: getProviderAuth(),
       updatedAt: current.updatedAt
     }));
   });
@@ -60,7 +61,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
           ...buildSettingsResponse({
             intent: current.intent,
             effective: current.settings,
-            providerAuth,
+            providerAuth: getProviderAuth(),
             updatedAt: current.updatedAt
           })
         },
@@ -77,7 +78,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
           ...buildSettingsResponse({
             intent: current.intent,
             effective: current.settings,
-            providerAuth,
+            providerAuth: getProviderAuth(),
             updatedAt: current.updatedAt
           })
         },
@@ -95,7 +96,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
           ...buildSettingsResponse({
             intent: saved.intent,
             effective: saved.settings,
-            providerAuth,
+            providerAuth: getProviderAuth(),
             updatedAt: saved.updatedAt
           })
         },
@@ -133,7 +134,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
       buildSettingsResponse({
         intent: saved.intent,
         effective: saved.settings,
-        providerAuth,
+        providerAuth: getProviderAuth(),
         updatedAt: saved.updatedAt,
         saveAppliedToRuntime,
         ...(saveApplyError ? { saveApplyError } : {})
@@ -161,7 +162,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     return c.json(buildSettingsResponse({
       intent: settings,
       effective: settings,
-      providerAuth
+      providerAuth: getProviderAuth()
     }));
   });
 
@@ -211,7 +212,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     return c.json(buildSettingsResponse({
       intent: settings,
       effective: settings,
-      providerAuth
+      providerAuth: getProviderAuth()
     }));
   });
 
@@ -358,7 +359,12 @@ function resolveProviderAuth(appConfig: DashboardAppConfig): DashboardProviderAu
       isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || ""),
     codex:
       Boolean(appConfig.openaiApiKey) ||
-      isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || "")
+      isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || ""),
+    anthropic: Boolean(appConfig.anthropicApiKey),
+    openai: Boolean(appConfig.openaiApiKey),
+    claude_oauth: isClaudeOAuthConfigured(appConfig.claudeOAuthRefreshToken || ""),
+    openai_oauth: isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || ""),
+    xai: Boolean(appConfig.xaiApiKey)
   };
 }
 

@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { safeJsonParse } from "./llmClaudeCode.ts";
 import {
+  isGpt5FamilyModel,
   normalizeOpenAiReasoningEffort
 } from "./llmHelpers.ts";
 
@@ -309,10 +310,7 @@ export function buildContextContentBlocks(rawContent: unknown, fallbackText = ""
 }
 
 export function buildOpenAiTemperatureParam(model: string, temperature: number) {
-  const normalizedModel = String(model || "")
-    .trim()
-    .toLowerCase();
-  if (/^gpt-5(?:$|[-_])/u.test(normalizedModel)) {
+  if (isGpt5FamilyModel(model)) {
     return {};
   }
   return {
@@ -321,10 +319,7 @@ export function buildOpenAiTemperatureParam(model: string, temperature: number) 
 }
 
 export function buildOpenAiReasoningParam(model: string, reasoningEffort: unknown = "") {
-  const normalizedModel = String(model || "")
-    .trim()
-    .toLowerCase();
-  if (!/^gpt-5(?:$|[-_])/u.test(normalizedModel)) {
+  if (!isGpt5FamilyModel(model)) {
     return {};
   }
   const resolvedEffort = normalizeOpenAiReasoningEffort(reasoningEffort) || "low";
@@ -495,7 +490,6 @@ export function buildOpenAiToolLoopInput(messages: ToolLoopMessage[]) {
     if (message.role === "assistant") {
       if (textBlocks.length) {
         input.push({
-          id: `assistant-message-${index}`,
           type: "message",
           role: "assistant",
           status: "completed",
@@ -509,7 +503,6 @@ export function buildOpenAiToolLoopInput(messages: ToolLoopMessage[]) {
 
       for (const block of toolCallBlocks) {
         input.push({
-          id: `assistant-tool-${block.id}`,
           type: "function_call",
           call_id: block.id,
           name: block.name,

@@ -1,5 +1,14 @@
 import { SettingsSection } from "../SettingsSection";
 import { LlmProviderOptions } from "./LlmProviderOptions";
+import { isGpt5FamilyModel } from "../../../../src/llm/llmHelpers.ts";
+
+const REASONING_EFFORT_OPTIONS = Object.freeze([
+  { value: "none", label: "None" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "X-High" }
+]);
 
 export function LlmConfigurationSettingsSection({
   id,
@@ -22,6 +31,8 @@ export function LlmConfigurationSettingsSection({
   memoryLlmModelOptions,
   selectedMemoryLlmPresetModel
 }) {
+  const supportsReasoningEffort = isGpt5FamilyModel(form.model);
+
   return (
     <SettingsSection id={id} title="Text LLM">
       <label htmlFor="provider">LLM provider</label>
@@ -63,6 +74,26 @@ export function LlmConfigurationSettingsSection({
           />
         </div>
       </div>
+
+      {supportsReasoningEffort && (
+        <>
+          <label htmlFor="reasoning-effort">Reasoning effort</label>
+          <select
+            id="reasoning-effort"
+            value={String(form.reasoningEffort || "low")}
+            onChange={set("reasoningEffort")}
+          >
+            {REASONING_EFFORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <p>
+            Applied to GPT-5 family reasoning models. Lower effort is faster; higher effort spends more thinking tokens.
+          </p>
+        </>
+      )}
 
       <h4>Ambient Text LLM</h4>
       <p>Optional override for the ambient text cycle. Leave this on inherit unless you want ambient posts to use a different model.</p>

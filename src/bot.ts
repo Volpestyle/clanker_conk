@@ -1110,6 +1110,10 @@ export class ClankerBot {
     await this.voiceSessionManager.reconcileSettings(settings);
   }
 
+  async reloadOAuthProviders() {
+    return this.llm.reloadOAuthProviders();
+  }
+
   async ingestVoiceStreamFrame({
     guildId,
     streamerUserId = null,

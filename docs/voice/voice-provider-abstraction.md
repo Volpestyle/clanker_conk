@@ -307,10 +307,16 @@ Implementation note:
 | `voice.conversationPolicy.defaultInterruptionMode` | `"speaker"` | Default barge-in target |
 | `voice.conversationPolicy.replyPath` | `"brain"` | `native`, `bridge`, or `brain` |
 | `voice.conversationPolicy.ttsMode` | `"realtime"` | `realtime` or `api` output |
+| `voice.conversationPolicy.thinking` | `"disabled"` | Brain-path thinking mode (`disabled`, `enabled`, `think_aloud`) |
+| `voice.conversationPolicy.thinkingBudgetTokens` | `1024` | Token budget for Anthropic/Claude thinking when thinking is enabled |
 | `voice.conversationPolicy.streaming.enabled` | `true` | Enables streamed speech chunks on brain path |
 | `voice.conversationPolicy.streaming.minSentencesPerChunk` | `2` | Minimum completed sentences before a normal streamed chunk emits |
 | `voice.conversationPolicy.streaming.eagerFirstChunkChars` | `30` | Minimum buffered chars before the first streamed chunk can emit eagerly |
 | `voice.conversationPolicy.streaming.maxBufferChars` | `300` | Forced break size when streaming text grows too large without a clean chunk boundary |
+
+Dashboard placement note:
+
+- Voice thinking controls are shown in `Voice Mode -> Output -> Brain` and only when the active Brain provider resolves to an Anthropic/Claude-style lane (`anthropic`, `claude-oauth`, `ai_sdk_anthropic`).
 
 ### Soundboard Policy
 

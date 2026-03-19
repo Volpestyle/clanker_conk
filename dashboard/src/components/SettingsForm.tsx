@@ -35,6 +35,7 @@ import { StartupCatchupSettingsSection } from "./settingsSections/StartupCatchup
 import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSection";
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
 import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
+import { ProviderAuthSettingsSection } from "./settingsSections/ProviderAuthSettingsSection";
 
 const BEHAVIOR_FIELDS = new Set([
   "botName", "botNameAliases", "personaFlavor", "personaHardLimits",
@@ -100,9 +101,10 @@ const SEARCH_INDEX: SearchEntry[] = [
   { label: "Channels & Permissions", scrollTo: "sec-channels", navSection: "sec-perms", keywords: "channels allowed blocked users permissions reply" },
   { label: "Rate Limits", scrollTo: "sec-rate", navSection: "sec-perms", keywords: "rate limit messages reactions per hour gap" },
   { label: "Startup Catch-up", scrollTo: "sec-startup", navSection: "sec-perms", keywords: "startup catchup lookback" },
+  { label: "Provider Auth", scrollTo: "sec-provider-auth", navSection: "sec-advanced", keywords: "provider auth oauth openai claude anthropic xai credentials" },
   { label: "Stack Preset", scrollTo: "sec-stack", navSection: "sec-advanced", keywords: "preset stack defaults agent" },
   { label: "Prompt Lab", scrollTo: "sec-prompts", navSection: "sec-advanced", keywords: "prompt guidance capability honesty impossible action memory skip text voice media" },
-  { label: "Text LLM", scrollTo: "sec-llm", navSection: "sec-advanced", keywords: "llm provider model temperature tokens followup" },
+  { label: "Text LLM", scrollTo: "sec-llm", navSection: "sec-advanced", keywords: "llm provider model temperature reasoning effort tokens followup" },
   { label: "Code Agent", scrollTo: "sec-code-agent", navSection: "sec-advanced", keywords: "code agent codex claude dev team" },
   { label: "Sub-Agent Orchestration", scrollTo: "sec-orchestration", navSection: "sec-advanced", keywords: "orchestration sub agent session" }
 ];
@@ -217,6 +219,7 @@ export default function SettingsForm({
     "sec-rate": "sec-perms",
     "sec-startup": "sec-perms",
     "sec-channels": "sec-perms",
+    "sec-provider-auth": "sec-advanced",
     "sec-llm": "sec-advanced",
     "sec-code-agent": "sec-advanced",
     "sec-orchestration": "sec-advanced",
@@ -756,6 +759,12 @@ export default function SettingsForm({
 
           {/* ── Advanced ── */}
           <div id="sec-advanced" className="section-group">
+            <ProviderAuthSettingsSection
+              id="sec-provider-auth"
+              form={form}
+              onAuthChanged={onReloadServerSettings}
+            />
+
             <SettingsSection id="sec-stack" title="Stack Preset">
               <label htmlFor="stack-preset">Preset</label>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

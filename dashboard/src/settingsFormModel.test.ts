@@ -187,6 +187,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.browserLlmProvider, "claude-oauth");
   assert.equal(form.codeAgentProvider, "auto");
   assert.equal(form.textInitiativeUseTextModel, true);
+  assert.equal(form.reasoningEffort, "low");
 
   form.personaHardLimits = "no hate\nno hate\nkeep it fun\n";
   form.botNameAliases = "clank\nconk\nclank\n";
@@ -214,6 +215,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceStreamWatchNativeDiscordPreferredStreamType = "camera";
   form.voiceAsrLanguageMode = "fixed";
   form.voiceAsrLanguageHint = "en-us";
+  form.voiceThinking = "enabled";
+  form.voiceThinkingBudgetTokens = 2048;
   form.voiceStreamingEnabled = false;
   form.voiceStreamingMinSentencesPerChunk = 4;
   form.voiceStreamingEagerFirstChunkChars = 84;
@@ -231,6 +234,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.textInitiativeUseTextModel = false;
   form.textInitiativeLlmProvider = "anthropic";
   form.textInitiativeLlmModel = "claude-haiku-4-5";
+  form.reasoningEffort = "xhigh";
   form.textInitiativeMinMinutesBetweenPosts = 15;
   form.textInitiativeMaxPostsPerDay = 6;
   form.textInitiativeAllowActiveCuriosity = false;
@@ -262,6 +266,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(effectivePatch.voice.streamWatch.visualizerMode, "vectorscope");
   assert.equal(effectivePatch.voice.streamWatch.notePrompt, "Use stream snapshots as context for replies.");
   assert.equal(effectivePatch.voice.conversationPolicy.streaming.enabled, false);
+  assert.equal(effectivePatch.voice.conversationPolicy.thinking, "enabled");
+  assert.equal(effectivePatch.voice.conversationPolicy.thinkingBudgetTokens, 2048);
   assert.equal(effectivePatch.voice.conversationPolicy.defaultInterruptionMode, "speaker");
   assert.equal(effectivePatch.voice.conversationPolicy.commandOnlyMode, true);
   assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
@@ -275,6 +281,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
     research: "codex"
   });
   assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+  assert.equal(effectivePatch.interaction.replyGeneration.reasoningEffort, "xhigh");
   assert.equal(effectivePatch.initiative.voice.enabled, true);
   assert.equal(effectivePatch.initiative.discovery.sources.reddit, false);
   assert.equal(effectivePatch.initiative.discovery.allowSelfCuration, false);

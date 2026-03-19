@@ -183,11 +183,20 @@ export function normalizeOpenAiReasoningEffort(value, fallback = "") {
   const normalized = String(value || fallback || "")
     .trim()
     .toLowerCase();
-  if (normalized === "minimal") return "minimal";
+  if (normalized === "none") return "none";
+  if (normalized === "minimal") return "low";
   if (normalized === "low") return "low";
   if (normalized === "medium") return "medium";
   if (normalized === "high") return "high";
+  if (normalized === "xhigh" || normalized === "x-high" || normalized === "x_high") return "xhigh";
   return "";
+}
+
+export function isGpt5FamilyModel(model) {
+  const normalized = String(model || "")
+    .trim()
+    .toLowerCase();
+  return /^gpt-5(?:$|[._-])/u.test(normalized);
 }
 
 export function defaultModelForLlmProvider(provider) {

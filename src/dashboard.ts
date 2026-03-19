@@ -8,6 +8,7 @@ import { normalizeDashboardHost } from "./config.ts";
 import { classifyApiAccessPath, isAllowedPublicApiPath, isPublicTunnelRequestHost } from "./services/publicIngressAccess.ts";
 import { attachAuthRoutes, hasValidDashboardSessionCookie, isDashboardAuthSessionApiPath } from "./dashboard/routesAuth.ts";
 import { attachSettingsRoutes } from "./dashboard/routesSettings.ts";
+import { attachOAuthRoutes } from "./dashboard/routesOAuth.ts";
 import { attachMetricsRoutes } from "./dashboard/routesMetrics.ts";
 import { attachVoiceRoutes } from "./dashboard/routesVoice.ts";
 import { BonjourAdvertiser } from "./services/bonjourAdvertiser.ts";
@@ -55,10 +56,12 @@ export interface DashboardAppConfig {
   openaiApiKey?: string | null;
   claudeOAuthRefreshToken?: string | null;
   openaiOAuthRefreshToken?: string | null;
+  xaiApiKey?: string | null;
 }
 
 export interface DashboardBot {
   applyRuntimeSettings(settings: unknown): Promise<unknown>;
+  reloadOAuthProviders?(): Promise<{ claudeOAuth: boolean; codexOAuth: boolean }>;
   getRuntimeState(): Record<string, unknown> & {
     voice?: {
       activeCount?: unknown;
@@ -419,6 +422,7 @@ export function createDashboardServer({
     publicHttpsEntrypoint
   });
   attachSettingsRoutes(app, { store, bot, appConfig });
+  attachOAuthRoutes(app, { store, appConfig, bot });
   attachMetricsRoutes(app, {
     store,
     publicHttpsEntrypoint,

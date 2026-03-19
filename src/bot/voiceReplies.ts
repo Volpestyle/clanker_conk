@@ -19,6 +19,7 @@ import type { ReplyToolRuntime, ReplyToolContext } from "../tools/replyTools.ts"
 import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../settings/settingsConstraints.ts";
 import { normalizeFactProfileSlice } from "./memorySlice.ts";
 import type { MemoryFactRow } from "../store/storeMemory.ts";
 import {
@@ -1186,6 +1187,13 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     voiceThinkingMode === "think_aloud" ? "think_aloud"
       : voiceThinkingMode === "enabled" ? "enabled"
         : "disabled";
+  const voiceThinkingBudgetTokens = Math.max(
+    SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.thinkingBudgetTokens.min,
+    Math.min(
+      Number(voiceConversationPolicy.thinkingBudgetTokens) || 1024,
+      SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.thinkingBudgetTokens.max
+    )
+  );
   const streamingEnabled = Boolean(
     (_streamingSentencesEnabled ?? voiceConversationPolicy.streaming?.enabled) &&
     typeof onSpokenSentence === "function" &&
@@ -1536,7 +1544,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           contextMessages,
           tools: voiceReplyTools,
           thinking: voiceThinking,
-          thinkingBudgetTokens: voiceThinking !== "disabled" ? 1024 : undefined,
+          thinkingBudgetTokens: voiceThinking !== "disabled" ? voiceThinkingBudgetTokens : undefined,
           trace,
           signal
         });
@@ -1644,7 +1652,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         contextMessages,
         tools: voiceReplyTools,
         thinking: voiceThinking,
-        thinkingBudgetTokens: voiceThinking !== "disabled" ? 1024 : undefined,
+        thinkingBudgetTokens: voiceThinking !== "disabled" ? voiceThinkingBudgetTokens : undefined,
         trace,
         signal,
         onTextDelta(delta) {

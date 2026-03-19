@@ -158,6 +158,39 @@ export class LLMService {
     this.codexCliBrainModel = "";
   }
 
+  /**
+   * Re-check the filesystem for OAuth tokens and reinitialize clients that
+   * were previously null. Called after the dashboard OAuth flow saves new tokens.
+   */
+  async reloadOAuthProviders(): Promise<{ claudeOAuth: boolean; codexOAuth: boolean }> {
+    let claudeOAuthReloaded = false;
+    let codexOAuthReloaded = false;
+
+    if (!this.claudeOAuth && isClaudeOAuthConfigured(this.appConfig.claudeOAuthRefreshToken || "")) {
+      try {
+        this.claudeOAuth = createClaudeOAuthClient(this.appConfig.claudeOAuthRefreshToken || "");
+        await this.claudeOAuth.warmup();
+        claudeOAuthReloaded = true;
+        this.store.logAction({ kind: "llm_lifecycle", content: "claude_oauth_hot_reload", metadata: { source: "dashboard" } });
+      } catch (error) {
+        this.store.logAction({ kind: "llm_lifecycle", content: "claude_oauth_hot_reload_failed", metadata: { error: String(error?.message || error) } });
+      }
+    }
+
+    if (!this.codexOAuth && isCodexOAuthConfigured(this.appConfig.openaiOAuthRefreshToken || "")) {
+      try {
+        this.codexOAuth = createCodexOAuthClient(this.appConfig.openaiOAuthRefreshToken || "");
+        await this.codexOAuth.warmup();
+        codexOAuthReloaded = true;
+        this.store.logAction({ kind: "llm_lifecycle", content: "openai_oauth_hot_reload", metadata: { source: "dashboard" } });
+      } catch (error) {
+        this.store.logAction({ kind: "llm_lifecycle", content: "openai_oauth_hot_reload_failed", metadata: { error: String(error?.message || error) } });
+      }
+    }
+
+    return { claudeOAuth: claudeOAuthReloaded, codexOAuth: codexOAuthReloaded };
+  }
+
   async warmup(): Promise<void> {
     if (this.claudeOAuth) {
       const startedAt = Date.now();
@@ -168,6 +201,26 @@ export class LLMService {
         this.store.logAction({kind: "llm_lifecycle", content: "claude_oauth_warmup_failed", metadata: { durationMs: Date.now() - startedAt, error: String(error?.message || error) }});
       }
     }
+
+    if (this.codexOAuth) {
+      const startedAt = Date.now();
+      try {
+        await this.codexOAuth.warmup();
+        this.store.logAction({kind: "llm_lifecycle", content: "openai_oauth_warmup_completed", metadata: { durationMs: Date.now() - startedAt }});
+      } catch (error) {
+        this.store.logAction({kind: "llm_lifecycle", content: "openai_oauth_warmup_failed", metadata: { durationMs: Date.now() - startedAt, error: String(error?.message || error) }});
+      }
+    }
+
+    // Log provider readiness summary so operators can diagnose missing providers at startup.
+    const allProviders = ["anthropic", "claude-oauth", "openai", "openai-oauth", "xai"] as const;
+    const available = allProviders.filter((p) => this.isProviderConfigured(p));
+    const unavailable = allProviders.filter((p) => !this.isProviderConfigured(p));
+    this.store.logAction({
+      kind: "llm_lifecycle",
+      content: "provider_readiness_summary",
+      metadata: { available, unavailable }
+    });
 
     // Probe Ollama health so its isReady() returns true if reachable.
     const chain = this.buildEmbeddingProviderChain();
@@ -561,6 +614,7 @@ export class LLMService {
       return callAnthropicRequest(this.chatDeps("claude-oauth"), payload);
     }
     if (provider === "openai-oauth") {
+      await this.codexOAuth?.ensureFresh();
       return callOpenAIRequest(this.chatDeps("openai-oauth"), payload);
     }
     if (provider === "codex-cli" || provider === "codex_cli_session") {
@@ -591,6 +645,7 @@ export class LLMService {
       return callAnthropicStreamingRequest(this.chatDeps(), payload, callbacks);
     }
     if (provider === "openai-oauth") {
+      await this.codexOAuth?.ensureFresh();
       return callOpenAiResponsesStreamingRequest(this.chatDeps("openai-oauth"), payload, callbacks);
     }
     if (provider === "openai") {
@@ -714,7 +769,7 @@ export class LLMService {
     }
     if (desiredProvider === "openai-oauth" && !this.isProviderConfigured("openai-oauth")) {
       throw new Error(
-        "LLM provider is set to openai-oauth, but no OAuth tokens are configured. Set OPENAI_OAUTH_REFRESH_TOKEN or create data/openai-oauth-tokens.json."
+        "LLM provider is set to openai-oauth, but no OAuth tokens are configured. Set OPENAI_OAUTH_REFRESH_TOKEN, create data/openai-oauth-tokens.json, run `codex login`, or provide ~/.codex/auth.json."
       );
     }
     if ((desiredProvider === "codex-cli" || desiredProvider === "codex_cli_session") && !this.isProviderConfigured(desiredProvider)) {
@@ -736,6 +791,17 @@ export class LLMService {
         : provider === desiredProvider && desiredModel
           ? desiredModel
           : this.resolveDefaultModel(provider);
+      if (provider !== desiredProvider) {
+        this.store.logAction({
+          kind: "llm_lifecycle",
+          content: "provider_fallback",
+          metadata: {
+            desired: desiredProvider,
+            actual: provider,
+            reason: `${desiredProvider} not configured`
+          }
+        });
+      }
       return {
         provider,
         model

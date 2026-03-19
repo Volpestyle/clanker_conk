@@ -15,6 +15,8 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
       voiceProvider: "openai",
       voiceReplyPath: "brain",
       voiceTtsMode: "realtime",
+      voiceThinking: "disabled",
+      voiceThinkingBudgetTokens: 1024,
       voiceOpenAiRealtimeTranscriptionMethod: "realtime_bridge",
       voiceOpenAiRealtimeUsePerUserAsrBridge: false,
       voiceCommandOnlyMode: false,
@@ -32,6 +34,7 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
       voiceGenerationLlmUseTextModel: false,
       voiceGenerationLlmProvider: "claude-oauth",
       voiceGenerationLlmModel: "claude-sonnet-4-6",
+      reasoningEffort: "low",
       voiceStreamingEnabled: true,
       voiceStreamingMinSentencesPerChunk: 2,
       voiceStreamingEagerFirstChunkChars: 30,
@@ -198,6 +201,68 @@ test("full brain path keeps TTS mode controls visible", () => {
 
   assert.equal(hasText(doc, "TTS Mode"), true);
   assert.equal(hasText(doc, "TTS API"), true);
+});
+
+test("full brain path shows three thinking modes including silent enabled", () => {
+  const doc = renderVoiceModeSection("generation_decides", {
+    voiceReplyPath: "brain",
+    voiceThinking: "enabled"
+  });
+
+  assert.equal(hasText(doc, "Off"), true);
+  assert.equal(hasText(doc, "Enabled"), true);
+  assert.equal(hasText(doc, "Think aloud"), true);
+});
+
+test("thinking budget control shows only when thinking is enabled", () => {
+  const enabledDoc = renderVoiceModeSection("generation_decides", {
+    voiceReplyPath: "brain",
+    voiceThinking: "enabled",
+    voiceThinkingBudgetTokens: 1400
+  });
+  assert.equal(hasControl(enabledDoc, "voice-thinking-budget-tokens"), true);
+  assert.equal(hasText(enabledDoc, "Thinking budget tokens"), true);
+
+  const disabledDoc = renderVoiceModeSection("generation_decides", {
+    voiceReplyPath: "brain",
+    voiceThinking: "disabled"
+  });
+  assert.equal(hasControl(disabledDoc, "voice-thinking-budget-tokens"), false);
+});
+
+test("brain stage hides Anthropic thinking controls for non-Anthropic providers", () => {
+  const doc = renderVoiceModeSection("generation_decides", {
+    voiceReplyPath: "brain",
+    voiceGenerationLlmUseTextModel: false,
+    voiceGenerationLlmProvider: "openai-oauth",
+    voiceGenerationLlmModel: "gpt-5.4-mini"
+  });
+
+  assert.equal(hasText(doc, "Thinking mode"), false);
+  assert.equal(hasControl(doc, "voice-thinking-budget-tokens"), false);
+});
+
+test("brain stage shows reasoning effort control for GPT-5 voice brain models", () => {
+  const doc = renderVoiceModeSection("generation_decides", {
+    voiceReplyPath: "brain",
+    voiceGenerationLlmUseTextModel: false,
+    voiceGenerationLlmProvider: "openai-oauth",
+    voiceGenerationLlmModel: "gpt-5.4-mini"
+  });
+
+  assert.equal(hasControl(doc, "voice-brain-reasoning-effort"), true);
+  assert.equal(hasText(doc, "Reasoning effort"), true);
+});
+
+test("brain stage hides reasoning effort control for non-GPT-5 voice brain models", () => {
+  const doc = renderVoiceModeSection("generation_decides", {
+    voiceReplyPath: "brain",
+    voiceGenerationLlmUseTextModel: false,
+    voiceGenerationLlmProvider: "claude-oauth",
+    voiceGenerationLlmModel: "claude-sonnet-4-6"
+  });
+
+  assert.equal(hasControl(doc, "voice-brain-reasoning-effort"), false);
 });
 
 test("stream watch renders a compact mental model and hides advanced tuning behind disclosure copy", () => {

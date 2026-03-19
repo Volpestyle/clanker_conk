@@ -154,8 +154,9 @@ This provider is experimental. The authentication model is grounded in the offic
 
 1. Current implementation performs a PKCE login against `https://auth.openai.com`.
 2. Tokens are stored in `data/openai-oauth-tokens.json`
-3. Access tokens are refreshed automatically from the stored refresh token
-4. Requests are sent with bearer auth plus the ChatGPT account id when available
+3. If no local token cache is present, the provider also discovers Codex auth files from `$CHATGPT_LOCAL_HOME/auth.json`, `$CODEX_HOME/auth.json`, `~/.chatgpt-local/auth.json`, and `~/.codex/auth.json`
+4. Access tokens are refreshed automatically from the stored refresh token
+5. Requests are sent with bearer auth plus the ChatGPT account id when available
 
 Dashboard auth indicators treat `OPENAI_OAUTH_REFRESH_TOKEN` and `data/openai-oauth-tokens.json` equivalently, so file-backed logins show as authenticated even when no env var is set.
 
@@ -165,8 +166,14 @@ The custom fetch wrapper rewrites OpenAI Responses API requests onto a ChatGPT b
 
 - `/v1/responses` -> `https://chatgpt.com/backend-api/codex/responses`
 - `Authorization: Bearer <access_token>`
-- `ChatGPT-Account-Id: <account_id>`
+- `chatgpt-account-id: <account_id>`
+- `OpenAI-Beta: responses=experimental`
 - `originator: clanky`
+- request body normalization for Codex compatibility:
+  - `store` defaults to `false` when omitted
+  - `max_output_tokens` is stripped before forwarding (Codex rejects it)
+  - for `gpt-5*` model ids, `temperature` and `top_p` are stripped before forwarding
+  - for `gpt-5*` model ids, reasoning effort `minimal` is normalized to `low`
 
 ### Setup
 

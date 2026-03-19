@@ -276,7 +276,7 @@ Key server entrypoints:
 The main levers that change cost and latency are:
 
 - resolved orchestrator binding
-- `interaction.replyGeneration.*`
+- `interaction.replyGeneration.*` (temperature, max output tokens, reasoning effort)
 - follow-up execution policy
 - `agentStack.runtimeConfig.voice.runtimeMode`
 - `agentStack.runtimeConfig.voice.generation`
