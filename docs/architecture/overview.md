@@ -236,6 +236,10 @@ Canonical references:
 
 Durable memory is centered on `memory_facts`.
 
+Facts use dual scope:
+- `scope='user'` for user-portable facts (`guild_id=NULL`, optional `user_id` owner)
+- `scope='guild'` for server-specific lore/rules (`guild_id` required)
+
 Current behavioral guidance model:
 
 - `guidance` facts: always-on operating/persona guidance

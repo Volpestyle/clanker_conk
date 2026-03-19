@@ -303,7 +303,7 @@ export async function processReplyQueue(bot: QueueGatewayRuntime, channelId: str
         dequeueReplyJob(bot, channelId);
         continue;
       }
-      if (!headMessage.guild || !headMessage.channel) {
+      if (!headMessage.channel) {
         logReplyQueueGateRejected(bot, {
           channelId,
           queueDepth: queue.length,
@@ -314,7 +314,8 @@ export async function processReplyQueue(bot: QueueGatewayRuntime, channelId: str
         dequeueReplyJob(bot, channelId);
         continue;
       }
-      if (!bot.isChannelAllowed(settings, headMessage.channelId)) {
+      const isDmContext = !String(headMessage.guildId || "").trim();
+      if (!isDmContext && !bot.isChannelAllowed(settings, headMessage.channelId)) {
         logReplyQueueGateRejected(bot, {
           channelId,
           queueDepth: queue.length,
@@ -437,7 +438,7 @@ export async function processReplyQueue(bot: QueueGatewayRuntime, channelId: str
           const latestPermissions = getReplyPermissions(latestSettings);
           if (
             latestPermissions.allowReplies &&
-            bot.isChannelAllowed(latestSettings, message.channelId) &&
+            (!String(message.guildId || "").trim() || bot.isChannelAllowed(latestSettings, message.channelId)) &&
             !bot.isUserBlocked(latestSettings, message.author.id)
           ) {
             const retryWaitMs = getReplyQueueWaitMs(bot, latestSettings);

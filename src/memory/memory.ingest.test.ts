@@ -471,13 +471,13 @@ test("archival eviction prefers removing old unreinforced facts over recent ones
     const now = new Date().toISOString();
 
     store.db.prepare(
-      `INSERT INTO memory_facts(created_at, updated_at, guild_id, subject, fact, fact_type, confidence, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+      `INSERT INTO memory_facts(created_at, updated_at, scope, guild_id, user_id, subject, fact, fact_type, confidence, is_active)
+       VALUES (?, ?, 'guild', ?, NULL, ?, ?, ?, ?, 1)`
     ).run(sixMonthsAgo, sixMonthsAgo, "guild-1", "user-1", "Old fact about user.", "preference", 0.95);
 
     store.db.prepare(
-      `INSERT INTO memory_facts(created_at, updated_at, guild_id, subject, fact, fact_type, confidence, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+      `INSERT INTO memory_facts(created_at, updated_at, scope, guild_id, user_id, subject, fact, fact_type, confidence, is_active)
+       VALUES (?, ?, 'guild', ?, NULL, ?, ?, ?, ?, 1)`
     ).run(now, now, "guild-1", "user-1", "Recent fact about user.", "preference", 0.72);
 
     // Request keeping only 1 fact — with decay, the old 0.95 should be evicted
@@ -509,13 +509,13 @@ test("archival eviction keeps guidance facts despite age (evergreen)", async () 
     const now = new Date().toISOString();
 
     store.db.prepare(
-      `INSERT INTO memory_facts(created_at, updated_at, guild_id, subject, fact, fact_type, confidence, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+      `INSERT INTO memory_facts(created_at, updated_at, scope, guild_id, user_id, subject, fact, fact_type, confidence, is_active)
+       VALUES (?, ?, 'guild', ?, NULL, ?, ?, ?, ?, 1)`
     ).run(oneYearAgo, oneYearAgo, "guild-1", "user-1", "Always greet me in Spanish.", "guidance", 0.9);
 
     store.db.prepare(
-      `INSERT INTO memory_facts(created_at, updated_at, guild_id, subject, fact, fact_type, confidence, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+      `INSERT INTO memory_facts(created_at, updated_at, scope, guild_id, user_id, subject, fact, fact_type, confidence, is_active)
+       VALUES (?, ?, 'guild', ?, NULL, ?, ?, ?, ?, 1)`
     ).run(now, now, "guild-1", "user-1", "Recent preference fact.", "preference", 0.72);
 
     const archived = store.archiveOldFactsForSubject({
@@ -566,8 +566,18 @@ test("purgeGuildMemory removes only the selected guild's stored memory artifacts
       confidence: 0.8
     });
 
-    const guildOneFact = store.getMemoryFactBySubjectAndFact("guild-1", "user-1", "Guild one likes handhelds.");
-    const guildTwoFact = store.getMemoryFactBySubjectAndFact("guild-2", "user-2", "Guild two likes keyboards.");
+    const guildOneFact = store.getMemoryFactBySubjectAndFact({
+      scope: "guild",
+      guildId: "guild-1",
+      subject: "user-1",
+      fact: "Guild one likes handhelds."
+    });
+    const guildTwoFact = store.getMemoryFactBySubjectAndFact({
+      scope: "guild",
+      guildId: "guild-2",
+      subject: "user-2",
+      fact: "Guild two likes keyboards."
+    });
     assert.ok(guildOneFact);
     assert.ok(guildTwoFact);
 

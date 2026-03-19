@@ -182,7 +182,7 @@ export type ReplyAttemptOptions = {
 type SentMessageLike = {
   id: string;
   createdTimestamp: number;
-  guildId: string;
+  guildId: string | null;
   channelId: string;
   content?: string;
   attachments?: unknown;
@@ -1534,7 +1534,7 @@ export class ClankerBot {
   }
 
   async handleMessage(message) {
-    if (!message.guild || !message.channel || !message.author) return;
+    if (!message.channel || !message.author) return;
     if (isAppCommandInvocationMessage(message)) return;
 
     const settings = this.store.getSettings();
@@ -1557,7 +1557,8 @@ export class ClankerBot {
     });
 
     if (String(message.author.id) === String(this.client.user?.id || "")) return;
-    if (!isChannelAllowed(settings, String(message.channelId))) return;
+    const isDmContext = !String(message.guildId || "").trim();
+    if (!isDmContext && !isChannelAllowed(settings, String(message.channelId))) return;
     if (isUserBlocked(settings, String(message.author.id))) return;
 
     if (isCancelIntent(text)) {
@@ -2338,6 +2339,7 @@ export class ClankerBot {
   }
 
   getEmojiHints(guild) {
+    if (!guild?.emojis?.cache) return [];
     const custom = guild.emojis.cache
       .map((emoji) => (emoji.animated ? `<a:${emoji.name}:${emoji.id}>` : `<:${emoji.name}:${emoji.id}>`))
       .slice(0, 24);
@@ -2346,6 +2348,7 @@ export class ClankerBot {
   }
 
   getReactionEmojiOptions(guild) {
+    if (!guild?.emojis?.cache) return [];
     return guild.emojis.cache.map((emoji) => emoji.identifier).slice(0, 24);
   }
 

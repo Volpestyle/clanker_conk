@@ -138,7 +138,7 @@ type ReplyMessagePayload = Record<string, unknown> & {
 type ReplyPipelineSentMessage = {
   id: string;
   createdTimestamp: number;
-  guildId: string;
+  guildId: string | null;
   channelId: string;
   content?: string;
   attachments?: ReplyPipelineAttachmentCollection;
@@ -209,7 +209,7 @@ type ReplyPrompts = ReturnType<typeof buildLoggedReplyPrompts>;
 type ReplyContinuityContext = Awaited<ReturnType<typeof loadConversationContinuityContext>>;
 type ReplyPromptBase = Parameters<typeof buildReplyPrompt>[0];
 type ReplyTrace = {
-  guildId: string;
+  guildId: string | null;
   channelId: string;
   userId: string;
   source: string | null;
@@ -675,7 +675,7 @@ async function buildReplyContext(
       bot.loadFactProfile({
         settings: payload.settings,
         userId: payload.userId,
-        guildId: String(payload.guildId || message.guildId),
+        guildId: payload.guildId ?? message.guildId ?? null,
         channelId: payload.channelId,
         queryText: payload.queryText,
         trace: payload.trace,

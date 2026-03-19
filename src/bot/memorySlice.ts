@@ -143,8 +143,7 @@ export function loadFactProfile(
     return empty;
   }
 
-  const normalizedGuildId = String(guildId || "").trim();
-  if (!normalizedGuildId) return empty;
+  const normalizedGuildId = String(guildId || "").trim() || null;
   const normalizedUserId = String(userId || "").trim() || null;
   const normalizedChannelId = String(channelId || "").trim() || null;
   const normalizedSource = String(source || "fact_profile").trim() || "fact_profile";
@@ -164,7 +163,7 @@ export function loadFactProfile(
   } catch (error) {
     ctx.store.logAction({
       kind: "bot_error",
-      guildId: normalizedGuildId,
+      guildId: normalizedGuildId || null,
       channelId: normalizedChannelId,
       userId: normalizedUserId,
       content: `${normalizedSource}: ${String(error?.message || error)}`

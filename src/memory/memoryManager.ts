@@ -379,9 +379,8 @@ export class MemoryManager {
   }
 
   loadUserFactProfile({ userId, guildId }: { userId?: string | null; guildId?: string | null }) {
-    const normalizedGuildId = String(guildId || "").trim();
     const normalizedUserId = String(userId || "").trim();
-    if (!normalizedGuildId || !normalizedUserId) {
+    if (!normalizedUserId) {
       return {
         userFacts: [] as MemoryFactRow[],
         guidanceFacts: [] as MemoryFactRow[]
@@ -389,7 +388,7 @@ export class MemoryManager {
     }
 
     const rows = this.store.getFactsForScope({
-      guildId: normalizedGuildId,
+      scope: "user",
       subjectIds: [normalizedUserId],
       limit: FACT_PROFILE_LOAD_LIMIT
     });
@@ -416,6 +415,7 @@ export class MemoryManager {
     }
 
     const rows = this.store.getFactsForScope({
+      scope: "guild",
       guildId: normalizedGuildId,
       subjectIds: [SELF_SUBJECT, LORE_SUBJECT],
       limit: FACT_PROFILE_LOAD_LIMIT
@@ -443,11 +443,18 @@ export class MemoryManager {
   loadExistingFactsForReflection({ guildId, subjectIds }: { guildId: string; subjectIds: string[] }) {
     const normalizedGuildId = String(guildId || "").trim();
     if (!normalizedGuildId || !subjectIds.length) return [];
-    const rows = this.store.getFactProfileRows({
+    const guildRows = this.store.getFactProfileRows({
       guildId: normalizedGuildId,
+      scope: "guild",
       subjects: subjectIds,
       limit: REFLECTION_EXISTING_FACT_LIMIT
     });
+    const userRows = this.store.getFactProfileRows({
+      scope: "user",
+      subjects: subjectIds,
+      limit: REFLECTION_EXISTING_FACT_LIMIT
+    });
+    const rows = mergeUniqueFactCandidates(guildRows, userRows);
     return rows.map((row) => ({
       id: Number(row.id || 0),
       subject: String(row.subject || ""),
@@ -479,16 +486,7 @@ export class MemoryManager {
       normalizedParticipantIds.unshift(normalizedUserId);
     }
     const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) {
-      return {
-        participantProfiles: [],
-        selfFacts: [],
-        loreFacts: [],
-        userFacts: [],
-        relevantFacts: [],
-        guidanceFacts: []
-      };
-    }
+
     const subjectLabels: Record<string, string> = {
       [SELF_SUBJECT]: "Bot",
       [LORE_SUBJECT]: "Shared lore"
@@ -496,11 +494,21 @@ export class MemoryManager {
     for (const participantId of normalizedParticipantIds) {
       subjectLabels[participantId] = String(participantNames?.[participantId] || participantId).trim() || participantId;
     }
-    const rows = this.store.getFactsForScope({
-      guildId: normalizedGuildId,
-      subjectIds: [...normalizedParticipantIds, SELF_SUBJECT, LORE_SUBJECT],
-      limit: Math.max(160, (normalizedParticipantIds.length + 2) * 40)
+
+    const userRows = this.store.getFactsForScope({
+      scope: "user",
+      subjectIds: [...normalizedParticipantIds, SELF_SUBJECT],
+      limit: Math.max(120, (normalizedParticipantIds.length + 1) * 40)
     });
+    const guildRows = normalizedGuildId
+      ? this.store.getFactsForScope({
+        scope: "guild",
+        guildId: normalizedGuildId,
+        subjectIds: [...normalizedParticipantIds, SELF_SUBJECT, LORE_SUBJECT],
+        limit: Math.max(120, (normalizedParticipantIds.length + 2) * 40)
+      })
+      : [];
+    const rows = mergeUniqueFactCandidates(userRows, guildRows);
     const regularFacts = sortProfileFacts(
       rows.filter((row) => {
         const factType = String(row?.fact_type || "").trim();
@@ -524,7 +532,9 @@ export class MemoryManager {
     });
     const primaryProfile = participants.find((entry) => entry.isPrimary) || participants[0] || null;
     const selfFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === SELF_SUBJECT).slice(0, MAX_GUILD_SELF_FACTS);
-    const loreFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === LORE_SUBJECT).slice(0, MAX_GUILD_LORE_FACTS);
+    const loreFacts = regularFacts
+      .filter((row) => String(row?.subject || "").trim() === LORE_SUBJECT)
+      .slice(0, MAX_GUILD_LORE_FACTS);
     const secondaryFacts = participants
       .filter((entry) => !entry.isPrimary)
       .flatMap((entry) => entry.facts.slice(0, MAX_SECONDARY_RELEVANT_FACTS));
@@ -574,6 +584,7 @@ export class MemoryManager {
     ];
     const rows = await this.searchDurableFacts({
       guildId: normalizedGuildId,
+      scope: "guild",
       channelId: String(channelId || "").trim() || null,
       queryText: normalizedQueryText,
       subjectIds,
@@ -645,7 +656,7 @@ export class MemoryManager {
     before = 1,
     after = 1
   }: {
-    guildId: string;
+    guildId?: string | null;
     channelId?: string | null;
     queryText: string;
     settings?: Record<string, unknown> | null;
@@ -655,9 +666,10 @@ export class MemoryManager {
     before?: number;
     after?: number;
   }) {
-    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedGuildId = String(guildId || "").trim() || null;
+    const normalizedChannelId = String(channelId || "").trim() || null;
     const normalizedQuery = String(queryText || "").replace(/\s+/g, " ").trim().slice(0, MAX_CONVERSATION_QUERY_CHARS);
-    if (!normalizedGuildId || !normalizedQuery) return [];
+    if ((!normalizedGuildId && !normalizedChannelId) || !normalizedQuery) return [];
 
     try {
       const queryEmbedding = await this.getQueryEmbeddingForRetrieval({
@@ -675,7 +687,7 @@ export class MemoryManager {
       ) {
         const semanticWindows = this.store.searchConversationWindowsByEmbedding({
           guildId: normalizedGuildId,
-          channelId: String(channelId || "").trim() || null,
+          channelId: normalizedChannelId,
           queryEmbedding: queryEmbedding.embedding,
           model: queryEmbedding.model,
           limit: clampInt(limit, 1, 8),
@@ -694,7 +706,7 @@ export class MemoryManager {
     if (typeof this.store?.searchConversationWindows !== "function") return [];
     return this.store.searchConversationWindows({
       guildId: normalizedGuildId,
-      channelId: String(channelId || "").trim() || null,
+      channelId: normalizedChannelId,
       queryText: normalizedQuery,
       limit: clampInt(limit, 1, 8),
       maxAgeHours: clampInt(maxAgeHours, 1, 24 * 30),
@@ -1013,21 +1025,49 @@ export class MemoryManager {
   }
 
   async searchDurableFacts({
-    guildId,
+    guildId = null,
+    scope = "all",
     channelId = null,
     queryText,
     subjectIds = null,
     factTypes = null,
-    settings,
+    settings = null,
     trace = {},
     limit = HYBRID_FACT_LIMIT
+  }: {
+    guildId?: string | null;
+    scope?: "user" | "guild" | "all";
+    channelId?: string | null;
+    queryText: string;
+    subjectIds?: string[] | null;
+    factTypes?: string[] | null;
+    settings?: Record<string, unknown> | null;
+    trace?: Record<string, unknown>;
+    limit?: number;
   }) {
-    const scopeGuildId = String(guildId || "").trim();
-    if (!scopeGuildId) return [];
+    const scopeGuildId = String(guildId || "").trim() || null;
+    const rawScopeMode = String(scope || "all").trim().toLowerCase();
+    const scopeMode = rawScopeMode === "user" || rawScopeMode === "guild" || rawScopeMode === "all"
+      ? rawScopeMode
+      : "all";
     const normalizedTrace =
       trace && typeof trace === "object"
         ? trace as Record<string, unknown>
         : {};
+    const normalizedSubjectIds = [
+      ...new Set(
+        (Array.isArray(subjectIds) ? subjectIds : [])
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      )
+    ];
+    const hasSubjectFilter = normalizedSubjectIds.length > 0;
+    const scopedSubjectIds = normalizedSubjectIds.length ? normalizedSubjectIds : null;
+    const includeUserScope =
+      scopeMode === "user" ||
+      (scopeMode === "all" && (!scopeGuildId || hasSubjectFilter));
+    const includeGuildScope = (scopeMode === "all" || scopeMode === "guild") && Boolean(scopeGuildId);
+    if (!includeUserScope && !includeGuildScope) return [];
 
     const isFullMemoryQuery = queryText === "__ALL__";
     const boundedLimit = isFullMemoryQuery
@@ -1035,27 +1075,44 @@ export class MemoryManager {
       : clampInt(limit, 1, 24);
 
     if (isFullMemoryQuery) {
-      const rows = this.store.getFactsForScope?.({
-        guildId: scopeGuildId,
-        subjectIds,
-        factTypes,
-        limit: boundedLimit
-      }) || [];
-      return rows.map((row) => ({
+      const rows = mergeUniqueFactCandidates(
+        includeUserScope
+          ? this.store.getFactsForScope?.({
+            scope: "user",
+            subjectIds: scopedSubjectIds,
+            factTypes,
+            limit: Math.max(boundedLimit, 24)
+          }) || []
+          : [],
+        includeGuildScope
+          ? this.store.getFactsForScope?.({
+            scope: "guild",
+            guildId: scopeGuildId,
+            subjectIds: scopedSubjectIds,
+            factTypes,
+            limit: Math.max(boundedLimit, 24)
+          }) || []
+          : []
+      );
+      const sortedRows = sortProfileFacts(rows);
+      return sortedRows.map((row) => ({
         id: row.id,
         created_at: row.created_at,
+        updated_at: row.updated_at,
+        scope: row.scope,
         guild_id: row.guild_id,
         channel_id: row.channel_id,
+        user_id: row.user_id,
         subject: row.subject,
         fact: row.fact,
         fact_type: row.fact_type,
         evidence_text: row.evidence_text,
         source_message_id: row.source_message_id,
         confidence: row.confidence,
-        score: row._score,
-        semanticScore: row._semanticScore,
-        lexicalScore: row._lexicalScore
-      }));
+        score: 0,
+        semanticScore: 0,
+        lexicalScore: 0
+      })).slice(0, boundedLimit);
     }
 
     const query = String(queryText || "").trim();
@@ -1069,47 +1126,61 @@ export class MemoryManager {
     );
     const queryTokens = extractStableTokens(query, 8);
 
-    const recentCandidates = this.store.getFactsForScope?.({
-      guildId: scopeGuildId,
-      subjectIds,
-      factTypes,
-      limit: recentCandidateLimit
-    }) || [];
+    const recentCandidates: MemoryFactRow[] = [];
+    const lexicalCandidates: MemoryFactRow[] = [];
+    const semanticCandidates: MemoryFactRow[] = [];
 
-    const lexicalCandidates = this.store.searchMemoryFactsLexical?.({
-      guildId: scopeGuildId,
-      subjectIds,
-      factTypes,
-      queryText: query,
-      queryTokens,
-      limit: candidateLimit
-    }) || [];
-
-    let semanticCandidates: MemoryFactRow[] = [];
-    if (typeof this.store.searchMemoryFactsByEmbedding === "function") {
-      try {
-        const queryEmbedding = await this.getQueryEmbeddingForRetrieval({
+    const queryEmbedding =
+      typeof this.store.searchMemoryFactsByEmbedding === "function"
+        ? await this.getQueryEmbeddingForRetrieval({
           queryText: query,
           settings,
           trace: {
             ...normalizedTrace,
             source: String(normalizedTrace.source || "memory_semantic_candidates")
           }
-        });
-        if (queryEmbedding?.embedding?.length && queryEmbedding?.model) {
-          semanticCandidates = this.store.searchMemoryFactsByEmbedding({
-            guildId: scopeGuildId,
-            subjectIds,
-            factTypes,
-            model: queryEmbedding.model,
-            queryEmbedding: queryEmbedding.embedding,
-            limit: candidateLimit
-          });
-        }
-      } catch {
-        semanticCandidates = [];
+        }).catch(() => null)
+        : null;
+
+    const collectScopeCandidates = (factScope: "user" | "guild") => {
+      if (factScope === "guild" && !scopeGuildId) return;
+      const scopeGuild = factScope === "guild" ? scopeGuildId : null;
+      const recentRows = this.store.getFactsForScope?.({
+        scope: factScope,
+        guildId: scopeGuild,
+        subjectIds: scopedSubjectIds,
+        factTypes,
+        limit: recentCandidateLimit
+      }) || [];
+      recentCandidates.push(...recentRows);
+
+      const lexicalRows = this.store.searchMemoryFactsLexical?.({
+        scope: factScope,
+        guildId: scopeGuild,
+        subjectIds: scopedSubjectIds,
+        factTypes,
+        queryText: query,
+        queryTokens,
+        limit: candidateLimit
+      }) || [];
+      lexicalCandidates.push(...lexicalRows);
+
+      if (queryEmbedding?.embedding?.length && queryEmbedding?.model) {
+        const semanticRows = this.store.searchMemoryFactsByEmbedding?.({
+          scope: factScope,
+          guildId: scopeGuild,
+          subjectIds: scopedSubjectIds,
+          factTypes,
+          model: queryEmbedding.model,
+          queryEmbedding: queryEmbedding.embedding,
+          limit: candidateLimit
+        }) || [];
+        semanticCandidates.push(...semanticRows);
       }
-    }
+    };
+
+    if (includeUserScope) collectScopeCandidates("user");
+    if (includeGuildScope) collectScopeCandidates("guild");
 
     const candidates = mergeUniqueFactCandidates(
       semanticCandidates,
@@ -1130,8 +1201,11 @@ export class MemoryManager {
     return ranked.slice(0, boundedLimit).map((row) => ({
       id: row.id,
       created_at: row.created_at,
+      updated_at: row.updated_at,
+      scope: row.scope,
       guild_id: row.guild_id,
       channel_id: row.channel_id,
+      user_id: row.user_id,
       subject: row.subject,
       fact: row.fact,
       fact_type: row.fact_type,
@@ -1566,7 +1640,11 @@ export class MemoryManager {
     const peopleLines = [];
 
     for (const subjectRow of subjects) {
-      const scopedSubjectKey = `${String(subjectRow.guild_id || "").trim()}::${String(subjectRow.subject || "").trim()}`;
+      const scopedSubjectKey = [
+        String(subjectRow.scope || "guild").trim(),
+        String(subjectRow.guild_id || "").trim(),
+        String(subjectRow.subject || "").trim()
+      ].join("::");
       const rows = factsByScopedSubject.get(scopedSubjectKey) || [];
       const cleaned = [
         ...new Set(
@@ -1576,7 +1654,11 @@ export class MemoryManager {
         )
       ].slice(0, MAX_PEOPLE_FACTS_PER_SUBJECT);
       if (!cleaned.length) continue;
-      const scopeLabel = normalizedGuildId ? "" : subjectRow.guild_id ? `[guild:${subjectRow.guild_id}] ` : "";
+      const scopeLabel = normalizedGuildId
+        ? ""
+        : String(subjectRow.scope || "") === "guild"
+          ? subjectRow.guild_id ? `[guild:${subjectRow.guild_id}] ` : ""
+          : "[user] ";
       peopleLines.push(`- ${scopeLabel}${subjectRow.subject}: ${cleaned.join(" | ")}`);
     }
 
@@ -1584,22 +1666,27 @@ export class MemoryManager {
   }
 
   getPeopleFactsByScopedSubject(subjectRows = []) {
-    const subjectsByGuild = new Map();
+    const subjectsByScope = new Map();
     for (const subjectRow of subjectRows) {
+      const scope = String(subjectRow?.scope || "guild").trim().toLowerCase();
       const guildId = String(subjectRow?.guild_id || "").trim();
       const subjectId = String(subjectRow?.subject || "").trim();
-      if (!guildId || !subjectId) continue;
-      const existing = subjectsByGuild.get(guildId) || [];
+      if (!subjectId) continue;
+      if (scope !== "guild" && scope !== "user") continue;
+      const scopeKey = `${scope}::${guildId}`;
+      const existing = subjectsByScope.get(scopeKey) || [];
       if (!existing.includes(subjectId)) {
         existing.push(subjectId);
       }
-      subjectsByGuild.set(guildId, existing);
+      subjectsByScope.set(scopeKey, existing);
     }
 
     const factsByScopedSubject = new Map();
-    for (const [guildId, subjectIds] of subjectsByGuild.entries()) {
+    for (const [scopeKey, subjectIds] of subjectsByScope.entries()) {
+      const [scopeType, guildId = ""] = String(scopeKey || "").split("::");
       const rows = this.store.getFactsForSubjectsScoped({
-        guildId,
+        scope: scopeType,
+        guildId: guildId || null,
         subjectIds,
         perSubjectLimit: MAX_PEOPLE_FACTS_PER_SUBJECT,
         totalLimit: Math.min(
@@ -1609,10 +1696,11 @@ export class MemoryManager {
       });
 
       for (const row of rows) {
+        const rowScope = String(row?.scope || "guild").trim();
         const scopedGuildId = String(row?.guild_id || "").trim();
         const scopedSubjectId = String(row?.subject || "").trim();
-        if (!scopedGuildId || !scopedSubjectId) continue;
-        const scopedSubjectKey = `${scopedGuildId}::${scopedSubjectId}`;
+        if (!scopedSubjectId) continue;
+        const scopedSubjectKey = `${rowScope}::${scopedGuildId}::${scopedSubjectId}`;
         const existing = factsByScopedSubject.get(scopedSubjectKey) || [];
         if (existing.length >= MAX_PEOPLE_FACTS_PER_SUBJECT) continue;
         existing.push(row);
@@ -1694,15 +1782,16 @@ export class MemoryManager {
     evidenceText?: string | null;
     supersedesFactText?: string | null;
   }) {
-    const scopeGuildId = String(guildId || "").trim();
-    if (!scopeGuildId) {
+    const scopeGuildId = String(guildId || "").trim() || null;
+    const scopeConfig = resolveDirectiveScopeConfig(scope);
+    const memoryScope = scopeConfig.scope === "lore" ? "guild" : "user";
+    if (memoryScope === "guild" && !scopeGuildId) {
       return {
         ok: false,
         reason: "guild_required"
       };
     }
-
-    const scopeConfig = resolveDirectiveScopeConfig(scope);
+    const durableGuildId = memoryScope === "guild" ? scopeGuildId : null;
     const subject = subjectOverride ? String(subjectOverride).trim() : scopeConfig.subject;
     const normalizedFactType = normalizeFactType(factType || scopeConfig.defaultFactType);
     if (!subject) {
@@ -1711,6 +1800,10 @@ export class MemoryManager {
         reason: "subject_required"
       };
     }
+    const scopedUserId =
+      memoryScope === "user" && subject !== SELF_SUBJECT
+        ? String(subjectOverride || userId || subject).trim() || null
+        : null;
 
     const cleaned = normalizeMemoryLineInput(line);
     if (!cleaned) {
@@ -1749,14 +1842,18 @@ export class MemoryManager {
       : null;
     let supersededFact = null;
     if (normalizedSupersedesText && normalizedSupersedesText !== factText) {
-      supersededFact = this.store.getMemoryFactBySubjectAndFact?.(
-        scopeGuildId,
+      supersededFact = this.store.getMemoryFactBySubjectAndFact?.({
+        scope: memoryScope,
+        guildId: durableGuildId,
+        userId: scopedUserId,
         subject,
-        normalizedSupersedesText
-      ) || null;
+        fact: normalizedSupersedesText
+      }) || null;
       if (supersededFact && typeof this.store.updateMemoryFact === "function") {
         const updateResult = this.store.updateMemoryFact({
-          guildId: scopeGuildId,
+          scope: memoryScope,
+          guildId: durableGuildId,
+          userId: scopedUserId,
           factId: supersededFact.id,
           subject,
           fact: factText,
@@ -1765,7 +1862,13 @@ export class MemoryManager {
           confidence: Math.max(normalizedConfidence, Number(supersededFact.confidence || 0))
         });
         if (updateResult?.ok) {
-          const updatedRow = updateResult.row || this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
+          const updatedRow = updateResult.row || this.store.getMemoryFactBySubjectAndFact({
+            scope: memoryScope,
+            guildId: durableGuildId,
+            userId: scopedUserId,
+            subject,
+            fact: factText
+          });
           this.store.logAction({
             kind: "memory_fact",
             guildId: scopeGuildId,
@@ -1785,6 +1888,7 @@ export class MemoryManager {
               reason: "merged_superseded",
               supersededFact: normalizedSupersedesText,
               scope: scopeConfig.scope,
+              memoryScope,
               channelId: channelId ? String(channelId) : null,
               sourceMessageId
             }
@@ -1811,10 +1915,18 @@ export class MemoryManager {
       }
     }
 
-    const existingFact = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
+    const existingFact = this.store.getMemoryFactBySubjectAndFact({
+      scope: memoryScope,
+      guildId: durableGuildId,
+      userId: scopedUserId,
+      subject,
+      fact: factText
+    });
     const inserted = this.store.addMemoryFact({
-      guildId: scopeGuildId,
+      scope: memoryScope,
+      guildId: durableGuildId,
       channelId: channelId ? String(channelId) : null,
+      userId: scopedUserId,
       subject,
       fact: factText,
       factType: normalizedFactType,
@@ -1833,7 +1945,13 @@ export class MemoryManager {
       };
     }
 
-    const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
+    const factRow = this.store.getMemoryFactBySubjectAndFact({
+      scope: memoryScope,
+      guildId: durableGuildId,
+      userId: scopedUserId,
+      subject,
+      fact: factText
+    });
     this.store.logAction({
       kind: "memory_fact",
       guildId: scopeGuildId,
@@ -1852,12 +1970,15 @@ export class MemoryManager {
         source: scopeConfig.traceSource,
         reason: existingFact ? "updated_existing" : "added_new",
         scope: scopeConfig.scope,
+        memoryScope,
         channelId: channelId ? String(channelId) : null,
         sourceMessageId
       }
     });
     this.store.archiveOldFactsForSubject({
-      guildId: scopeGuildId,
+      scope: memoryScope,
+      guildId: durableGuildId,
+      userId: scopedUserId,
       subject,
       keep: scopeConfig.keep
     });

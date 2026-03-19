@@ -44,6 +44,7 @@ test("executeSharedMemoryToolSearch forwards namespace subject and fact-type fil
   assert.equal(result.namespace, "user:user-1");
   assert.deepEqual(calls, [{
     guildId: "guild-1",
+    scope: "user",
     channelId: "chan-1",
     queryText: "tea",
     subjectIds: ["user-1"],
@@ -68,7 +69,7 @@ test("executeSharedMemoryToolSearch uses guild scope for cross-subject lookup", 
           return [
             {
               id: "fact-1",
-              subject: "user-2",
+              subject: "__lore__",
               fact: "Sarah likes Rust.",
               fact_type: "preference",
               score: 0.91,
@@ -95,9 +96,10 @@ test("executeSharedMemoryToolSearch uses guild scope for cross-subject lookup", 
   assert.equal(result.namespace, "guild:guild-1");
   assert.deepEqual(calls, [{
     guildId: "guild-1",
+    scope: "guild",
     channelId: "chan-1",
     queryText: "who likes rust",
-    subjectIds: null,
+    subjectIds: ["__lore__"],
     factTypes: null,
     settings: {},
     trace: { source: "test_memory_search_guild" },
@@ -144,6 +146,7 @@ test("executeSharedMemoryToolWrite forwards fact type through dedupe and write",
   assert.equal(result.ok, true);
   assert.deepEqual(searchCalls, [{
     guildId: "guild-1",
+    scope: "user",
     channelId: "chan-1",
     queryText: "Alice is my sister",
     subjectIds: ["user-1"],
@@ -166,4 +169,68 @@ test("executeSharedMemoryToolWrite forwards fact type through dedupe and write",
     text: "Alice is my sister",
     subject: "user-1"
   }]);
+});
+
+test("executeSharedMemoryToolSearch defaults to user scope in DMs", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+
+  const result = await executeSharedMemoryToolSearch({
+    runtime: {
+      memory: {
+        async searchDurableFacts(opts) {
+          calls.push(opts as Record<string, unknown>);
+          return [];
+        },
+        async rememberDirectiveLineDetailed() {
+          throw new Error("not used");
+        }
+      }
+    },
+    settings: {},
+    guildId: null,
+    channelId: "dm-chan-1",
+    actorUserId: "user-7",
+    namespace: "",
+    queryText: "what do you remember",
+    trace: { source: "test_memory_search_dm" },
+    limit: 5
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.namespace, "user:user-7");
+  assert.deepEqual(calls, [{
+    guildId: null,
+    scope: "user",
+    channelId: "dm-chan-1",
+    queryText: "what do you remember",
+    subjectIds: ["user-7", "__self__"],
+    factTypes: null,
+    settings: {},
+    trace: { source: "test_memory_search_dm" },
+    limit: 10
+  }]);
+});
+
+test("executeSharedMemoryToolWrite rejects guild namespace in DMs", async () => {
+  const result = await executeSharedMemoryToolWrite({
+    runtime: {
+      memory: {
+        async searchDurableFacts() {
+          return [];
+        },
+        async rememberDirectiveLineDetailed() {
+          return { ok: true };
+        }
+      }
+    },
+    settings: {},
+    guildId: null,
+    channelId: "dm-chan-1",
+    actorUserId: "user-7",
+    namespace: "guild",
+    items: [{ text: "Friday is meme day." }]
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "guild_context_required");
 });
