@@ -56,6 +56,204 @@ function resolveStoreEnvInt(name, fallback, min, max) {
   return resolveEnvBoundedInt(process.env[name], fallback, min, max);
 }
 
+type SqliteTableColumnRow = {
+  name?: string;
+  notnull?: number;
+};
+
+const MEMORY_USER_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other"]);
+
+function hasMemoryFactsDualScopeSchema(db: Database) {
+  const columns = db
+    .prepare<SqliteTableColumnRow, []>("PRAGMA table_info(memory_facts)")
+    .all();
+  if (!columns.length) return false;
+
+  const byName = new Map(
+    columns.map((column) => [String(column?.name || "").trim().toLowerCase(), column])
+  );
+  const scopeColumn = byName.get("scope");
+  const userIdColumn = byName.get("user_id");
+  const guildIdColumn = byName.get("guild_id");
+  if (!scopeColumn || !userIdColumn || !guildIdColumn) return false;
+  return Number(guildIdColumn.notnull || 0) === 0;
+}
+
+function ensureMemoryFactsIndexes(db: Database) {
+  db.exec(`
+    DROP INDEX IF EXISTS idx_memory_scope_subject;
+    DROP INDEX IF EXISTS idx_memory_scope_channel;
+    DROP INDEX IF EXISTS idx_memory_scope_subject_type;
+    DROP INDEX IF EXISTS idx_memory_scope_active;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_scope_unique
+      ON memory_facts(scope, COALESCE(guild_id, ''), COALESCE(user_id, ''), subject, fact);
+    CREATE INDEX IF NOT EXISTS idx_memory_user_scope
+      ON memory_facts(scope, user_id, subject, is_active, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_guild_scope
+      ON memory_facts(scope, guild_id, subject, is_active, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_subject_active
+      ON memory_facts(subject, is_active, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_scope_subject_type
+      ON memory_facts(scope, guild_id, subject, fact_type, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_scope_channel
+      ON memory_facts(scope, guild_id, channel_id, updated_at DESC);
+  `);
+}
+
+function migrateMemoryFactsToDualScope(db: Database) {
+  const userFactTypeList = [...MEMORY_USER_FACT_TYPES].map((value) => `'${value}'`).join(", ");
+  const migrateTx = db.transaction(() => {
+    db.exec(`
+      DROP INDEX IF EXISTS idx_memory_scope_subject;
+      DROP INDEX IF EXISTS idx_memory_scope_channel;
+      DROP INDEX IF EXISTS idx_memory_scope_subject_type;
+      DROP INDEX IF EXISTS idx_memory_scope_active;
+      DROP INDEX IF EXISTS idx_memory_scope_unique;
+      DROP INDEX IF EXISTS idx_memory_user_scope;
+      DROP INDEX IF EXISTS idx_memory_guild_scope;
+      DROP INDEX IF EXISTS idx_memory_subject_active;
+
+      CREATE TABLE memory_facts_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'guild',
+        guild_id TEXT,
+        channel_id TEXT,
+        user_id TEXT,
+        subject TEXT NOT NULL,
+        fact TEXT NOT NULL,
+        fact_type TEXT NOT NULL DEFAULT 'other',
+        evidence_text TEXT,
+        source_message_id TEXT,
+        confidence REAL NOT NULL DEFAULT 0.5,
+        is_active INTEGER NOT NULL DEFAULT 1
+      );
+
+      WITH classified AS (
+        SELECT
+          id,
+          created_at,
+          updated_at,
+          guild_id,
+          channel_id,
+          subject,
+          fact,
+          fact_type,
+          evidence_text,
+          source_message_id,
+          confidence,
+          is_active,
+          CASE
+            WHEN subject = '__self__' THEN 'user'
+            WHEN subject = '__lore__' THEN 'guild'
+            WHEN LOWER(TRIM(fact_type)) IN ('guidance', 'behavioral') THEN 'guild'
+            WHEN subject GLOB '[0-9]*'
+              AND subject NOT GLOB '*[^0-9]*'
+              AND LOWER(TRIM(fact_type)) IN (${userFactTypeList})
+              THEN 'user'
+            ELSE 'guild'
+          END AS resolved_scope
+        FROM memory_facts
+      ),
+      normalized AS (
+        SELECT
+          id,
+          created_at,
+          updated_at,
+          resolved_scope AS scope,
+          CASE WHEN resolved_scope = 'user' THEN NULL ELSE guild_id END AS guild_id,
+          channel_id,
+          CASE
+            WHEN subject = '__self__' THEN NULL
+            WHEN resolved_scope = 'user' THEN subject
+            ELSE NULL
+          END AS user_id,
+          subject,
+          fact,
+          fact_type,
+          evidence_text,
+          source_message_id,
+          confidence,
+          is_active
+        FROM classified
+      ),
+      ranked AS (
+        SELECT
+          id,
+          created_at,
+          updated_at,
+          scope,
+          guild_id,
+          channel_id,
+          user_id,
+          subject,
+          fact,
+          fact_type,
+          evidence_text,
+          source_message_id,
+          confidence,
+          is_active,
+          ROW_NUMBER() OVER (
+            PARTITION BY
+              scope,
+              COALESCE(guild_id, ''),
+              COALESCE(user_id, ''),
+              subject,
+              fact
+            ORDER BY confidence DESC, updated_at DESC, id DESC
+          ) AS row_num
+        FROM normalized
+      )
+      INSERT INTO memory_facts_new(
+        id,
+        created_at,
+        updated_at,
+        scope,
+        guild_id,
+        channel_id,
+        user_id,
+        subject,
+        fact,
+        fact_type,
+        evidence_text,
+        source_message_id,
+        confidence,
+        is_active
+      )
+      SELECT
+        id,
+        created_at,
+        updated_at,
+        scope,
+        guild_id,
+        channel_id,
+        user_id,
+        subject,
+        fact,
+        fact_type,
+        evidence_text,
+        source_message_id,
+        confidence,
+        is_active
+      FROM ranked
+      WHERE row_num = 1;
+
+      DROP TABLE memory_facts;
+      ALTER TABLE memory_facts_new RENAME TO memory_facts;
+    `);
+  });
+  migrateTx();
+}
+
+function setupMemoryFactsSchema(db: Database) {
+  if (!hasMemoryFactsDualScopeSchema(db)) {
+    migrateMemoryFactsToDualScope(db);
+  }
+  ensureMemoryFactsIndexes(db);
+}
+
 
 export class Store {
   dbPath;
@@ -136,16 +334,17 @@ export class Store {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        guild_id TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'guild',
+        guild_id TEXT,
         channel_id TEXT,
+        user_id TEXT,
         subject TEXT NOT NULL,
         fact TEXT NOT NULL,
         fact_type TEXT NOT NULL DEFAULT 'other',
         evidence_text TEXT,
         source_message_id TEXT,
         confidence REAL NOT NULL DEFAULT 0.5,
-        is_active INTEGER NOT NULL DEFAULT 1,
-        UNIQUE(guild_id, subject, fact)
+        is_active INTEGER NOT NULL DEFAULT 1
       );
 
       CREATE TABLE IF NOT EXISTS memory_fact_vectors_native (
@@ -228,12 +427,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_response_triggers_action_id ON response_triggers(action_id);
     `);
     this.ensureSqliteVecReady();
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_memory_scope_subject ON memory_facts(guild_id, subject, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_memory_scope_channel ON memory_facts(guild_id, channel_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_memory_scope_subject_type ON memory_facts(guild_id, subject, fact_type, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_memory_scope_active ON memory_facts(guild_id, is_active, created_at DESC);
-    `);
+    setupMemoryFactsSchema(this.db);
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
       const defaultSettings = minimizeSettingsIntent({});
@@ -318,19 +512,19 @@ export class Store {
   }
 
   searchConversationWindows(opts: {
-    guildId;
-    channelId?;
-    queryText?;
-    limit?;
-    maxAgeHours?;
-    before?;
-    after?;
+    guildId?: string | null;
+    channelId?: string | null;
+    queryText?: string;
+    limit?: number;
+    maxAgeHours?: number;
+    before?: number;
+    after?: number;
   }) {
     return searchConversationWindows(this, opts);
   }
 
   searchConversationWindowsByEmbedding(opts: {
-    guildId: string;
+    guildId?: string | null;
     channelId?: string | null;
     queryEmbedding: number[];
     model: string;
@@ -562,16 +756,24 @@ export class Store {
     return getFactsForSubjects(this, subjects, limit, scope);
   }
 
-  getFactProfileRows(opts: { guildId?; subjects?; limit? } = {}) {
+  getFactProfileRows(opts: { guildId?; scope?: "user" | "guild" | null; subjects?; limit? } = {}) {
     return getFactProfileRows(this, opts);
   }
 
-  getFactsForScope(opts: { guildId; limit?; subjectIds?; factTypes?; queryText? }) {
+  getFactsForScope(opts: {
+    guildId?;
+    scope?: "user" | "guild" | null;
+    limit?;
+    subjectIds?;
+    factTypes?;
+    queryText?;
+  }) {
     return getFactsForScope(this, opts);
   }
 
   searchMemoryFactsLexical(opts: {
-    guildId;
+    guildId?;
+    scope?: "user" | "guild" | null;
     subjectIds?;
     factTypes?;
     queryText?;
@@ -582,7 +784,8 @@ export class Store {
   }
 
   searchMemoryFactsByEmbedding(opts: {
-    guildId;
+    guildId?;
+    scope?: "user" | "guild" | null;
     subjectIds?;
     factTypes?;
     model;
@@ -594,6 +797,7 @@ export class Store {
 
   getFactsForSubjectsScoped(opts: {
     guildId?;
+    scope?: "user" | "guild" | null;
     subjectIds?;
     perSubjectLimit?;
     totalLimit?;
@@ -601,16 +805,24 @@ export class Store {
     return getFactsForSubjectsScoped(this, opts);
   }
 
-  getMemoryFactBySubjectAndFact(guildId, subject, fact) {
-    return getMemoryFactBySubjectAndFact(this, guildId, subject, fact);
+  getMemoryFactBySubjectAndFact(opts: {
+    guildId?: string | null;
+    scope?: "user" | "guild" | null;
+    userId?: string | null;
+    subject: string;
+    fact: string;
+  }) {
+    return getMemoryFactBySubjectAndFact(this, opts);
   }
 
-  getMemoryFactById(factId, guildId = null) {
-    return getMemoryFactById(this, factId, guildId);
+  getMemoryFactById(factId, guildId = null, scope: "user" | "guild" | null = null) {
+    return getMemoryFactById(this, factId, guildId, scope);
   }
 
   updateMemoryFact(opts: {
-    guildId;
+    guildId?;
+    scope?: "user" | "guild" | null;
+    userId?;
     factId;
     subject;
     fact;
@@ -621,7 +833,12 @@ export class Store {
     return updateMemoryFact(this, opts);
   }
 
-  deleteMemoryFact(opts: { guildId; factId }) {
+  deleteMemoryFact(opts: {
+    guildId?;
+    scope?: "user" | "guild" | null;
+    userId?;
+    factId;
+  }) {
     return deleteMemoryFact(this, opts);
   }
 
@@ -649,7 +866,14 @@ export class Store {
     return getMemorySubjects(this, limit, scope);
   }
 
-  archiveOldFactsForSubject(opts: { guildId; subject; factType?; keep? }) {
+  archiveOldFactsForSubject(opts: {
+    guildId?;
+    scope?: "user" | "guild" | null;
+    userId?;
+    subject;
+    factType?;
+    keep?;
+  }) {
     return archiveOldFactsForSubject(this, opts);
   }
 }

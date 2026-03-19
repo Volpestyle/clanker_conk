@@ -11,8 +11,10 @@ type MemoryToolNamespaceScope = {
   ok: boolean;
   reason?: string;
   namespace?: string;
-  guildId?: string;
+  guildId?: string | null;
   subject?: string | null;
+  subjectIds?: string[] | null;
+  searchScope?: "user" | "guild" | "all";
   directiveScope?: "lore" | "self" | "user";
 };
 
@@ -29,7 +31,8 @@ type MemorySearchRow = {
 type SharedMemoryRuntime = {
   memory: {
     searchDurableFacts: (opts: {
-      guildId: string;
+      guildId?: string | null;
+      scope?: "user" | "guild" | "all";
       channelId: string | null;
       queryText: string;
       subjectIds?: string[] | null;
@@ -42,7 +45,7 @@ type SharedMemoryRuntime = {
       line: string;
       sourceMessageId: string;
       userId: string;
-      guildId: string;
+      guildId?: string | null;
       channelId: string | null;
       sourceText: string;
       scope: "lore" | "self" | "user";
@@ -61,15 +64,16 @@ type SharedMemoryRuntime = {
 };
 
 type ResolveScopeArgs = {
-  guildId: string;
+  guildId?: string | null;
   actorUserId: string | null;
   namespace?: unknown;
+  operation?: "search" | "write";
 };
 
 type SearchArgs = {
   runtime: SharedMemoryRuntime;
   settings: Record<string, unknown>;
-  guildId: string;
+  guildId?: string | null;
   channelId?: string | null;
   actorUserId?: string | null;
   namespace?: unknown;
@@ -82,7 +86,7 @@ type SearchArgs = {
 type WriteArgs = {
   runtime: SharedMemoryRuntime;
   settings: Record<string, unknown>;
-  guildId: string;
+  guildId?: string | null;
   channelId?: string | null;
   actorUserId?: string | null;
   namespace?: unknown;
@@ -101,15 +105,18 @@ const USER_NAMESPACE_ALIASES = new Set(["speaker", "user", "me", "current_user",
 const GUILD_NAMESPACE_ALIASES = new Set(["guild", "lore", "shared"]);
 const SELF_NAMESPACE_ALIASES = new Set(["self", "bot", "assistant"]);
 const LORE_SUBJECT = "__lore__";
+const SELF_SUBJECT = "__self__";
 
 function resolveMemorySearchSubjectIds(rawNamespace: unknown, scope: MemoryToolNamespaceScope) {
-  const normalizedNamespace = String(rawNamespace || "")
-    .trim()
-    .toLowerCase();
+  const explicitSubjectIds = Array.isArray(scope.subjectIds)
+    ? scope.subjectIds.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  if (explicitSubjectIds.length) return explicitSubjectIds;
 
+  const normalizedNamespace = String(rawNamespace || "").trim().toLowerCase();
   if (!scope.subject) return null;
-  if (!normalizedNamespace || normalizedNamespace === "guild" || MEMORY_NAMESPACE_GUILD_RE.test(normalizedNamespace)) {
-    return null;
+  if (normalizedNamespace === "self" || normalizedNamespace === "bot" || normalizedNamespace === "assistant") {
+    return [SELF_SUBJECT];
   }
   if (normalizedNamespace === "lore" || normalizedNamespace === "shared") {
     return [LORE_SUBJECT];
@@ -120,28 +127,74 @@ function resolveMemorySearchSubjectIds(rawNamespace: unknown, scope: MemoryToolN
 export function resolveMemoryToolNamespaceScope({
   guildId,
   actorUserId,
-  namespace = ""
+  namespace = "",
+  operation = "search"
 }: ResolveScopeArgs): MemoryToolNamespaceScope {
-  const normalizedGuildId = String(guildId || "").trim();
+  const normalizedGuildId = String(guildId || "").trim() || null;
   const normalizedActorUserId = String(actorUserId || "").trim() || null;
-  if (!normalizedGuildId) {
-    return {
-      ok: false,
-      reason: "guild_required"
-    };
-  }
-
+  const normalizedOperation = operation === "write" ? "write" : "search";
+  const hasGuildContext = Boolean(normalizedGuildId);
   const normalizedNamespace = String(namespace || "")
     .trim()
     .toLowerCase();
 
-  if (!normalizedNamespace || GUILD_NAMESPACE_ALIASES.has(normalizedNamespace)) {
+  if (!normalizedNamespace) {
+    if (normalizedOperation === "write") {
+      if (hasGuildContext) {
+        return {
+          ok: true,
+          namespace: `guild:${normalizedGuildId}`,
+          guildId: normalizedGuildId,
+          subject: LORE_SUBJECT,
+          subjectIds: [LORE_SUBJECT],
+          searchScope: "guild",
+          directiveScope: "lore"
+        };
+      }
+      if (!normalizedActorUserId) {
+        return {
+          ok: false,
+          reason: "actor_user_required"
+        };
+      }
+      return {
+        ok: true,
+        namespace: `user:${normalizedActorUserId}`,
+        guildId: null,
+        subject: normalizedActorUserId,
+        subjectIds: [normalizedActorUserId],
+        searchScope: "user",
+        directiveScope: "user"
+      };
+    }
+
+    if (!hasGuildContext) {
+      if (!normalizedActorUserId) {
+        return {
+          ok: false,
+          reason: "actor_user_required"
+        };
+      }
+      return {
+        ok: true,
+        namespace: `user:${normalizedActorUserId}`,
+        guildId: null,
+        subject: normalizedActorUserId,
+        subjectIds: [normalizedActorUserId, SELF_SUBJECT],
+        searchScope: "user"
+      };
+    }
+
+    const defaultSubjectIds = [
+      ...new Set([normalizedActorUserId, SELF_SUBJECT, LORE_SUBJECT].filter(Boolean) as string[])
+    ];
     return {
       ok: true,
-      namespace: `guild:${normalizedGuildId}`,
+      namespace: `context:${normalizedGuildId}`,
       guildId: normalizedGuildId,
-      subject: "__lore__",
-      directiveScope: "lore"
+      subject: normalizedActorUserId || null,
+      subjectIds: defaultSubjectIds.length ? defaultSubjectIds : null,
+      searchScope: "all"
     };
   }
 
@@ -150,7 +203,9 @@ export function resolveMemoryToolNamespaceScope({
       ok: true,
       namespace: "self",
       guildId: normalizedGuildId,
-      subject: "__self__",
+      subject: SELF_SUBJECT,
+      subjectIds: [SELF_SUBJECT],
+      searchScope: "user",
       directiveScope: "self"
     };
   }
@@ -167,7 +222,27 @@ export function resolveMemoryToolNamespaceScope({
       namespace: `user:${normalizedActorUserId}`,
       guildId: normalizedGuildId,
       subject: normalizedActorUserId,
+      subjectIds: [normalizedActorUserId],
+      searchScope: "user",
       directiveScope: "user"
+    };
+  }
+
+  if (GUILD_NAMESPACE_ALIASES.has(normalizedNamespace)) {
+    if (!hasGuildContext) {
+      return {
+        ok: false,
+        reason: "guild_context_required"
+      };
+    }
+    return {
+      ok: true,
+      namespace: `guild:${normalizedGuildId}`,
+      guildId: normalizedGuildId,
+      subject: LORE_SUBJECT,
+      subjectIds: [LORE_SUBJECT],
+      searchScope: "guild",
+      directiveScope: "lore"
     };
   }
 
@@ -177,6 +252,12 @@ export function resolveMemoryToolNamespaceScope({
       return {
         ok: false,
         reason: "invalid_guild_namespace"
+      };
+    }
+    if (!hasGuildContext) {
+      return {
+        ok: false,
+        reason: "guild_context_required"
       };
     }
     if (namespaceGuildId !== normalizedGuildId) {
@@ -189,7 +270,9 @@ export function resolveMemoryToolNamespaceScope({
       ok: true,
       namespace: `guild:${normalizedGuildId}`,
       guildId: normalizedGuildId,
-      subject: "__lore__",
+      subject: LORE_SUBJECT,
+      subjectIds: [LORE_SUBJECT],
+      searchScope: "guild",
       directiveScope: "lore"
     };
   }
@@ -202,17 +285,13 @@ export function resolveMemoryToolNamespaceScope({
         reason: "invalid_user_namespace"
       };
     }
-    if (!normalizedActorUserId || namespaceUserId !== normalizedActorUserId) {
-      return {
-        ok: false,
-        reason: "user_namespace_mismatch"
-      };
-    }
     return {
       ok: true,
       namespace: `user:${namespaceUserId}`,
       guildId: normalizedGuildId,
       subject: namespaceUserId,
+      subjectIds: [namespaceUserId],
+      searchScope: "user",
       directiveScope: "user"
     };
   }
@@ -261,9 +340,10 @@ export async function executeSharedMemoryToolSearch({
   const scope = resolveMemoryToolNamespaceScope({
     guildId,
     actorUserId,
-    namespace
+    namespace,
+    operation: "search"
   });
-  if (!scope.ok || !scope.guildId) {
+  if (!scope.ok || !scope.searchScope) {
     return {
       ok: false,
       namespace: null,
@@ -278,7 +358,8 @@ export async function executeSharedMemoryToolSearch({
   const boundedLimit = clamp(Math.floor(Number(limit) || 6), 1, 20);
   const searchSubjectIds = resolveMemorySearchSubjectIds(namespace, scope);
   const rows = await runtime.memory.searchDurableFacts({
-    guildId: scope.guildId,
+    guildId: scope.guildId || null,
+    scope: scope.searchScope,
     channelId,
     queryText: resolvedQuery,
     subjectIds: searchSubjectIds,
@@ -336,9 +417,10 @@ export async function executeSharedMemoryToolWrite({
   const scope = resolveMemoryToolNamespaceScope({
     guildId,
     actorUserId,
-    namespace
+    namespace,
+    operation: "write"
   });
-  if (!scope.ok || !scope.guildId || !scope.directiveScope) {
+  if (!scope.ok || !scope.directiveScope) {
     return {
       ok: false,
       namespace: null,
@@ -368,6 +450,7 @@ export async function executeSharedMemoryToolWrite({
   const written = [];
   const skipped = [];
   const resolvedDedupeThreshold = clamp(Number(dedupeThreshold) || 0.9, 0, 1);
+  const writeSearchScope = scope.directiveScope === "lore" ? "guild" : "user";
 
   for (const [index, item] of normalizedItems.entries()) {
     const factType = String(item.factType || "").trim().toLowerCase();
@@ -395,7 +478,8 @@ export async function executeSharedMemoryToolWrite({
     }
 
     const potentialDuplicates = await runtime.memory.searchDurableFacts({
-      guildId: scope.guildId,
+      guildId: scope.guildId || null,
+      scope: writeSearchScope,
       channelId,
       queryText: item.text,
       subjectIds: scope.subject ? [scope.subject] : null,
@@ -421,7 +505,7 @@ export async function executeSharedMemoryToolWrite({
       line: item.text,
       sourceMessageId,
       userId: String(actorUserId || ""),
-      guildId: scope.guildId,
+      guildId: scope.guildId || null,
       channelId,
       sourceText: sourceText || item.text,
       scope: scope.directiveScope,

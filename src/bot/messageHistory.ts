@@ -383,9 +383,9 @@ export async function getConversationHistoryForPrompt(
   }: ConversationHistoryOptions = {}
 ) {
   if (!ctx.store || typeof ctx.store.searchConversationWindows !== "function") return [];
-  const normalizedGuildId = String(guildId || "").trim();
-  if (!normalizedGuildId) return [];
+  const normalizedGuildId = String(guildId || "").trim() || null;
   const normalizedChannelId = String(channelId || "").trim() || null;
+  if (!normalizedGuildId && !normalizedChannelId) return [];
   const normalizedQuery = String(queryText || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -422,7 +422,7 @@ export async function getConversationHistoryForPrompt(
     try {
       ctx.store.logAction({
         kind: "bot_error",
-        guildId: normalizedGuildId,
+        guildId: normalizedGuildId || null,
         channelId: normalizedChannelId,
         userId: getBotUserId(ctx) || null,
         content: `conversation_history_search: ${String(error?.message || error)}`

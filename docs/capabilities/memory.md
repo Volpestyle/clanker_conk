@@ -148,12 +148,18 @@ These are fallbacks, not primary access paths. The model shouldn't need to searc
 
 ### `memory_facts` (durable facts)
 
-- `guild_id` (required): primary scope boundary. Facts never cross guild boundaries.
+- `scope` (required): `user` or `guild`.
+- `guild_id` (optional): required for `scope='guild'`, `NULL` for `scope='user'`.
 - `channel_id` (optional): retrieval bias, not hard partitioning.
+- `user_id` (optional): owner for user-scoped facts (NULL for shared bot-self facts like `__self__`).
 - `subject` (required): user ID, `__lore__`, or `__self__`.
 - `fact`, `fact_type`, `evidence_text`, `source_message_id`, `confidence`.
 - `is_active`: soft archive flag (archiving is soft delete, not hard).
-- `UNIQUE(guild_id, subject, fact)`: dedup/upsert key.
+- Unique key spans both scopes: `(scope, COALESCE(guild_id,''), COALESCE(user_id,''), subject, fact)`.
+
+Runtime composition:
+- Guild context: user-scoped participant facts + guild-scoped server facts.
+- DM context: user-scoped facts only (DM partner + bot self), no guild lore.
 
 ### `memory_fact_vectors_native` (semantic vectors)
 

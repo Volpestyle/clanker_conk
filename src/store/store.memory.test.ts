@@ -21,9 +21,9 @@ async function withTempStore(run) {
   }
 }
 
-test("memory facts are scoped by guild", async () => {
+test("memory facts support user scope across guilds and guild scope partitioning", async () => {
   await withTempStore(async (store) => {
-    const factPayload = {
+    const userFactPayload = {
       channelId: "channel-1",
       subject: "user-1",
       fact: "User likes pineapple pizza.",
@@ -33,21 +33,45 @@ test("memory facts are scoped by guild", async () => {
       confidence: 0.7
     };
 
-    const insertedA = store.addMemoryFact({
-      ...factPayload,
-      guildId: "guild-a"
+    const insertedUser = store.addMemoryFact({
+      ...userFactPayload,
+      scope: "user",
+      guildId: null,
+      userId: "user-1"
     });
-    const insertedB = store.addMemoryFact({
-      ...factPayload,
+    const insertedGuildA = store.addMemoryFact({
+      scope: "guild",
+      guildId: "guild-a",
+      channelId: "channel-1",
+      subject: "__lore__",
+      fact: "Guild A runs a Friday meme competition.",
+      factType: "other",
+      sourceMessageId: "msg-guild-a",
+      confidence: 0.75
+    });
+    const insertedGuildB = store.addMemoryFact({
+      scope: "guild",
       guildId: "guild-b",
-      sourceMessageId: "msg-2"
+      channelId: "channel-1",
+      subject: "__lore__",
+      fact: "Guild B runs a Friday meme competition.",
+      factType: "other",
+      sourceMessageId: "msg-guild-b",
+      confidence: 0.75
     });
 
-    assert.equal(insertedA, true);
-    assert.equal(insertedB, true);
+    assert.equal(insertedUser, true);
+    assert.equal(insertedGuildA, true);
+    assert.equal(insertedGuildB, true);
 
-    const guildAFacts = store.getFactsForSubjects(["user-1"], 10, { guildId: "guild-a" });
-    const guildBFacts = store.getFactsForSubjects(["user-1"], 10, { guildId: "guild-b" });
+    const userFacts = store.getFactsForSubjects(["user-1"], 10, { scope: "user" });
+    assert.equal(userFacts.length, 1);
+    assert.equal(userFacts[0]?.scope, "user");
+    assert.equal(userFacts[0]?.guild_id, null);
+    assert.equal(userFacts[0]?.user_id, "user-1");
+
+    const guildAFacts = store.getFactsForSubjects(["__lore__"], 10, { scope: "guild", guildId: "guild-a" });
+    const guildBFacts = store.getFactsForSubjects(["__lore__"], 10, { scope: "guild", guildId: "guild-b" });
     assert.equal(guildAFacts.length, 1);
     assert.equal(guildBFacts.length, 1);
     assert.equal(guildAFacts[0].guild_id, "guild-a");
@@ -167,7 +191,12 @@ test("memory facts can be updated and soft-deleted while clearing stale vectors"
       confidence: 0.66
     });
 
-    const inserted = store.getMemoryFactBySubjectAndFact("guild-a", "user-1", "User likes handhelds.");
+    const inserted = store.getMemoryFactBySubjectAndFact({
+      scope: "guild",
+      guildId: "guild-a",
+      subject: "user-1",
+      fact: "User likes handhelds."
+    });
     assert.ok(inserted);
 
     const factId = Number(inserted?.id);
@@ -181,6 +210,7 @@ test("memory facts can be updated and soft-deleted while clearing stale vectors"
     assert.equal(vector?.length, 3);
 
     const updated = store.updateMemoryFact({
+      scope: "guild",
       guildId: "guild-a",
       factId,
       subject: "user-1",
@@ -198,13 +228,14 @@ test("memory facts can be updated and soft-deleted while clearing stale vectors"
     assert.equal(store.getMemoryFactVectorNative(factId, "text-embedding-3-small"), null);
 
     const deleted = store.deleteMemoryFact({
+      scope: "guild",
       guildId: "guild-a",
       factId
     });
 
     assert.equal(deleted.ok, true);
     assert.equal(deleted.deleted, 1);
-    assert.equal(store.getMemoryFactById(factId, "guild-a"), null);
+    assert.equal(store.getMemoryFactById(factId, "guild-a", "guild"), null);
     assert.equal(
       store.getFactsForScope({
         guildId: "guild-a",

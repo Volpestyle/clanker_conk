@@ -7,7 +7,7 @@ import {
 
 export type ConversationContinuityPayload = {
   settings: Record<string, unknown>;
-  guildId: string;
+  guildId?: string | null;
   channelId?: string | null;
   userId?: string | null;
   queryText?: string;
@@ -17,7 +17,7 @@ export type ConversationContinuityPayload = {
 };
 
 type ConversationLookupPayload = {
-  guildId: string;
+  guildId?: string | null;
   channelId?: string | null;
   queryText: string;
   limit: number;
@@ -71,7 +71,7 @@ function resolveFactProfile({
 }) {
   const empty = emptyFactProfileSlice();
   if (!isMemoryEnabled(settings)) return empty;
-  if (!guildId || !userId || typeof loadFactProfile !== "function") {
+  if (!userId || typeof loadFactProfile !== "function") {
     return empty;
   }
 
@@ -79,7 +79,7 @@ function resolveFactProfile({
     return normalizeFactProfileSlice(loadFactProfile({
       settings,
       userId,
-      guildId,
+      guildId: guildId || null,
       channelId,
       queryText,
       recentMessages,
@@ -158,11 +158,10 @@ export async function loadConversationContinuityContext({
   }));
 
   const recentConversationHistoryPromise =
-    normalizedGuildId &&
     normalizedQueryText &&
     typeof loadRecentConversationHistory === "function"
       ? Promise.resolve(loadRecentConversationHistory({
-        guildId: normalizedGuildId,
+        guildId: normalizedGuildId || null,
         channelId: normalizedChannelId,
         queryText: normalizedQueryText,
         limit: CONVERSATION_HISTORY_PROMPT_LIMIT,

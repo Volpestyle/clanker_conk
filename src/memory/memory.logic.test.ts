@@ -522,8 +522,8 @@ test("supersedesFactText merges into existing fact via updateMemoryFact", async 
         addCalled = true;
         return true;
       },
-      getMemoryFactBySubjectAndFact(_guildId, _subject, factText) {
-        if (factText === "User likes Python.") return existingRow;
+      getMemoryFactBySubjectAndFact(options) {
+        if (options?.fact === "User likes Python.") return existingRow;
         return null;
       },
       updateMemoryFact({ factId, fact, confidence }) {

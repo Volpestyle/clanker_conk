@@ -138,7 +138,7 @@ type ReplyMessagePayload = Record<string, unknown> & {
 type ReplyPipelineSentMessage = {
   id: string;
   createdTimestamp: number;
-  guildId: string;
+  guildId: string | null;
   channelId: string;
   content?: string;
   attachments?: ReplyPipelineAttachmentCollection;
@@ -209,7 +209,7 @@ type ReplyPrompts = ReturnType<typeof buildLoggedReplyPrompts>;
 type ReplyContinuityContext = Awaited<ReturnType<typeof loadConversationContinuityContext>>;
 type ReplyPromptBase = Parameters<typeof buildReplyPrompt>[0];
 type ReplyTrace = {
-  guildId: string;
+  guildId: string | null;
   channelId: string;
   userId: string;
   source: string | null;
@@ -675,7 +675,7 @@ async function buildReplyContext(
       bot.loadFactProfile({
         settings: payload.settings,
         userId: payload.userId,
-        guildId: String(payload.guildId || message.guildId),
+        guildId: payload.guildId ?? message.guildId ?? null,
         channelId: payload.channelId,
         queryText: payload.queryText,
         trace: payload.trace,
@@ -979,8 +979,30 @@ async function executeReplyLlm(
         if (video.keyframeError) lines.push(`Keyframe error: ${video.keyframeError}`);
         const frameImages = video.frameImages || [];
         if (frameImages.length) lines.push(`Keyframes: ${frameImages.length} frame(s) attached`);
+        const toolResultText = lines.join("\n");
+        const frameImageBytes = frameImages.reduce((sum, img) => sum + (img.dataBase64 ? Math.ceil(img.dataBase64.length * 3 / 4) : 0), 0);
+        bot.store.logAction({
+          kind: "runtime",
+          guildId: trace.guildId,
+          channelId: trace.channelId,
+          userId: trace.userId,
+          content: "video_context_tool_result",
+          metadata: {
+            url,
+            provider: video.provider || "unknown",
+            title: video.title || "untitled",
+            durationSeconds: video.durationSeconds || null,
+            hasTranscript: Boolean(video.transcript),
+            transcriptChars: video.transcript?.length || 0,
+            keyframeCount: frameImages.length,
+            keyframePayloadBytes: frameImageBytes,
+            keyframeError: video.keyframeError || null,
+            toolResultChars: toolResultText.length,
+            toolResultPreview: toolResultText.slice(0, 300)
+          }
+        });
         return {
-          text: lines.join("\n"),
+          text: toolResultText,
           imageInputs: frameImages.length ? frameImages : undefined
         };
       }

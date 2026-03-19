@@ -596,9 +596,18 @@ export function searchConversationWindows(store: MessageStore, {
     maxAgeHours = DEFAULT_CONVERSATION_MAX_AGE_HOURS,
     before = 1,
     after = 1
+  }: {
+    guildId?: string | null;
+    channelId?: string | null;
+    queryText?: string;
+    limit?: number;
+    maxAgeHours?: number;
+    before?: number;
+    after?: number;
   }) {
-const normalizedGuildId = String(guildId || "").trim();
-if (!normalizedGuildId) return [];
+const normalizedGuildId = String(guildId || "").trim() || null;
+const normalizedChannelId = String(channelId || "").trim() || null;
+if (!normalizedGuildId && !normalizedChannelId) return [];
 
 const tokens = normalizeConversationSearchTokens(queryText);
 const normalizedPhrase = String(queryText || "")
@@ -618,10 +627,17 @@ const candidateLimit = clamp(
 );
 const likeArgs = tokens.map((token) => `%${token}%`);
 const tokenClauses = tokens.map(() => "content LIKE ? COLLATE NOCASE");
-const args: Array<string | number> = [normalizedGuildId, sinceIso];
-let whereClause = "";
+const where = ["created_at >= ?"];
+const args: Array<string | number> = [sinceIso];
+if (normalizedGuildId) {
+  where.push("guild_id = ?");
+  args.push(normalizedGuildId);
+} else if (normalizedChannelId) {
+  where.push("channel_id = ?");
+  args.push(normalizedChannelId);
+}
 if (tokenClauses.length) {
-  whereClause = ` AND (${tokenClauses.join(" OR ")})`;
+  where.push(`(${tokenClauses.join(" OR ")})`);
   args.push(...likeArgs);
 }
 args.push(candidateLimit);
@@ -630,16 +646,13 @@ const rows = store.db
   .prepare<ConversationMessageRow, Array<string | number>>(
     `SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content
          FROM messages
-         WHERE guild_id = ?
-           AND created_at >= ?${whereClause}
+         WHERE ${where.join(" AND ")}
          ORDER BY created_at DESC
          LIMIT ?`
   )
   .all(...args);
 
 if (!rows.length) return [];
-
-const normalizedChannelId = String(channelId || "").trim() || null;
 const rankedRows = rows
   .map((row, index) => {
     const scored = scoreConversationMessage(row, {
@@ -679,7 +692,7 @@ export function searchConversationWindowsByEmbedding(
     before = 1,
     after = 1
   }: {
-    guildId: string;
+    guildId?: string | null;
     channelId?: string | null;
     queryEmbedding: number[];
     model: string;
@@ -691,10 +704,11 @@ export function searchConversationWindowsByEmbedding(
 ) {
   if (typeof store.ensureSqliteVecReady !== "function" || !store.ensureSqliteVecReady()) return [];
 
-  const normalizedGuildId = String(guildId || "").trim();
+  const normalizedGuildId = String(guildId || "").trim() || null;
+  const normalizedChannelId = String(channelId || "").trim() || null;
   const normalizedModel = String(model || "").trim();
   const normalizedQueryEmbedding = normalizeEmbeddingVector(queryEmbedding);
-  if (!normalizedGuildId || !normalizedModel || !normalizedQueryEmbedding.length) return [];
+  if ((!normalizedGuildId && !normalizedChannelId) || !normalizedModel || !normalizedQueryEmbedding.length) return [];
 
   const boundedLimit = clamp(Math.floor(Number(limit) || DEFAULT_CONVERSATION_WINDOW_LIMIT), MIN_RECENT_MESSAGES_LIMIT, MAX_CONVERSATION_WINDOW_LIMIT);
   const boundedMaxAgeHours = clamp(Math.floor(Number(maxAgeHours) || DEFAULT_CONVERSATION_MAX_AGE_HOURS), MIN_RECENT_MESSAGES_LIMIT, MAX_CONVERSATION_MAX_AGE_HOURS);
@@ -704,6 +718,15 @@ export function searchConversationWindowsByEmbedding(
     boundedLimit,
     CONVERSATION_CANDIDATE_LIMIT_SEMANTIC
   );
+  const where = ["m.created_at >= ?"];
+  const scopeArgs: Array<string | number> = [sinceIso];
+  if (normalizedGuildId) {
+    where.push("m.guild_id = ?");
+    scopeArgs.push(normalizedGuildId);
+  } else if (normalizedChannelId) {
+    where.push("m.channel_id = ?");
+    scopeArgs.push(normalizedChannelId);
+  }
   const rows = store.db
     .prepare<MessageVectorScoreRow, Array<string | number | Buffer>>(
       `SELECT
@@ -720,8 +743,7 @@ export function searchConversationWindowsByEmbedding(
            FROM messages AS m
            JOIN message_vectors_native AS v
              ON v.message_id = m.message_id
-          WHERE m.guild_id = ?
-            AND m.created_at >= ?
+          WHERE ${where.join(" AND ")}
             AND v.model = ?
             AND v.dims = ?
           ORDER BY score DESC, m.created_at DESC
@@ -729,15 +751,13 @@ export function searchConversationWindowsByEmbedding(
     )
     .all(
       vectorToBlob(normalizedQueryEmbedding),
-      normalizedGuildId,
-      sinceIso,
+      ...scopeArgs,
       normalizedModel,
       normalizedQueryEmbedding.length,
       candidateLimit
     );
   if (!rows.length) return [];
 
-  const normalizedChannelId = String(channelId || "").trim() || null;
   const rankedRows = rows
     .map((row, index) => {
       const baseScore = Number.isFinite(Number(row.score)) ? Number(row.score) : 0;

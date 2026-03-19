@@ -228,7 +228,8 @@ export type ReplyToolRuntime = {
   };
   memory?: {
     searchDurableFacts: (opts: {
-      guildId: string;
+      guildId?: string | null;
+      scope?: "user" | "guild" | "all";
       channelId: string | null;
       queryText: string;
       subjectIds?: string[] | null;
@@ -238,7 +239,7 @@ export type ReplyToolRuntime = {
       limit?: number;
     }) => Promise<Array<Record<string, unknown>>>;
     searchConversationHistory?: (opts: {
-      guildId: string;
+      guildId?: string | null;
       channelId?: string | null;
       queryText: string;
       settings?: Record<string, unknown>;
@@ -252,7 +253,7 @@ export type ReplyToolRuntime = {
       line: string;
       sourceMessageId: string;
       userId: string;
-      guildId: string;
+      guildId?: string | null;
       channelId: string | null;
       sourceText: string;
       scope: "lore" | "self" | "user";
@@ -268,7 +269,7 @@ export type ReplyToolRuntime = {
   store?: {
     logAction: (opts: Record<string, unknown>) => void;
     searchConversationWindows?: (opts: {
-      guildId: string;
+      guildId?: string | null;
       channelId?: string | null;
       queryText: string;
       limit?: number;
@@ -379,7 +380,7 @@ export type ReplyToolRuntime = {
 
 export type ReplyToolContext = {
   settings: Record<string, unknown>;
-  guildId: string;
+  guildId: string | null;
   channelId: string | null;
   userId: string;
   sourceMessageId: string;

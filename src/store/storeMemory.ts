@@ -16,8 +16,10 @@ export interface MemoryFactRow {
   id: number;
   created_at: string;
   updated_at: string;
-  guild_id: string;
+  scope: MemoryFactScope;
+  guild_id: string | null;
   channel_id: string | null;
+  user_id: string | null;
   subject: string;
   fact: string;
   fact_type: string;
@@ -25,6 +27,8 @@ export interface MemoryFactRow {
   source_message_id: string | null;
   confidence: number;
 }
+
+export type MemoryFactScope = "user" | "guild";
 
 interface MemoryFactIdRow {
   id: number;
@@ -59,7 +63,9 @@ interface MemoryFactSemanticSearchRow extends MemoryFactRow {
 }
 
 interface MemorySubjectRow {
-  guild_id: string;
+  scope: MemoryFactScope;
+  guild_id: string | null;
+  user_id: string | null;
   subject: string;
   last_seen_at: string;
   fact_count: number;
@@ -107,23 +113,64 @@ function deleteMemoryFactVectors(store: MemoryStore, factId: number) {
   return Number(result?.changes || 0);
 }
 
+const MEMORY_FACT_SELECT_COLUMNS = [
+  "id",
+  "created_at",
+  "updated_at",
+  "scope",
+  "guild_id",
+  "channel_id",
+  "user_id",
+  "subject",
+  "fact",
+  "fact_type",
+  "evidence_text",
+  "source_message_id",
+  "confidence"
+].join(", ");
+
+function normalizeMemoryFactScope(
+  value: unknown,
+  fallback: MemoryFactScope | null = null
+): MemoryFactScope | null {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "user" || normalized === "guild") {
+    return normalized;
+  }
+  return fallback;
+}
+
 function buildScopedFactWhereClause({
-  guildId,
+  guildId = null,
+  scope = null,
   subjectIds = null,
   factTypes = null,
   tableAlias = ""
 }: {
-  guildId: string;
+  guildId?: string | null;
+  scope?: MemoryFactScope | null;
   subjectIds?: string[] | null;
   factTypes?: string[] | null;
   tableAlias?: string;
 }) {
   const normalizedGuildId = String(guildId || "").trim();
-  if (!normalizedGuildId) return null;
+  const normalizedScope = normalizeMemoryFactScope(scope);
+  if (!normalizedGuildId && normalizedScope === "guild") return null;
 
   const prefix = tableAlias ? `${tableAlias}.` : "";
-  const where = [`${prefix}guild_id = ?`, `${prefix}is_active = 1`];
-  const args: string[] = [normalizedGuildId];
+  const where = [`${prefix}is_active = 1`];
+  const args: string[] = [];
+
+  if (normalizedScope) {
+    where.push(`${prefix}scope = ?`);
+    args.push(normalizedScope);
+  }
+  if (normalizedGuildId) {
+    where.push(`${prefix}guild_id = ?`);
+    args.push(normalizedGuildId);
+  }
 
   if (Array.isArray(subjectIds) && subjectIds.length) {
     const normalizedSubjects: string[] = [
@@ -147,13 +194,17 @@ function buildScopedFactWhereClause({
 
   return {
     where,
-    args
+    args,
+    scope: normalizedScope,
+    guildId: normalizedGuildId || null
   };
 }
 
 export function addMemoryFact(store: MemoryStore, fact) {
-const guildId = String(fact.guildId || "").trim();
-if (!guildId) return false;
+const normalizedGuildId = String(fact.guildId || "").trim();
+const normalizedScope = normalizeMemoryFactScope(fact.scope, normalizedGuildId ? "guild" : "user");
+if (!normalizedScope) return false;
+if (normalizedScope === "guild" && !normalizedGuildId) return false;
 
 const rawConfidence = Number(fact.confidence);
 const confidence = clamp(Number.isFinite(rawConfidence) ? rawConfidence : 0.5, 0, 1);
@@ -161,13 +212,23 @@ const now = nowIso();
 const normalizedSubject = normalizeMemoryFactSubject(fact.subject);
 const normalizedFact = normalizeMemoryFactText(fact.fact);
 if (!normalizedSubject || !normalizedFact) return false;
+const normalizedUserId =
+  normalizedScope === "user"
+    ? (() => {
+      if (normalizedSubject === "__self__") return null;
+      const requestedUserId = String(fact.userId || "").trim();
+      return requestedUserId || normalizedSubject;
+    })()
+    : null;
 const result = store.db
   .prepare(
     `INSERT INTO memory_facts(
           created_at,
           updated_at,
+          scope,
           guild_id,
           channel_id,
+          user_id,
           subject,
           fact,
           fact_type,
@@ -175,10 +236,13 @@ const result = store.db
           source_message_id,
           confidence,
           is_active
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-        ON CONFLICT(guild_id, subject, fact) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ON CONFLICT DO UPDATE SET
           updated_at = excluded.updated_at,
+          scope = excluded.scope,
+          guild_id = excluded.guild_id,
           channel_id = excluded.channel_id,
+          user_id = excluded.user_id,
           fact_type = excluded.fact_type,
           evidence_text = excluded.evidence_text,
           source_message_id = excluded.source_message_id,
@@ -188,8 +252,10 @@ const result = store.db
   .run(
     now,
     now,
-    guildId,
+    normalizedScope,
+    normalizedGuildId || null,
     fact.channelId ? String(fact.channelId).slice(0, 120) : null,
+    normalizedUserId,
     normalizedSubject,
     normalizedFact,
     normalizeMemoryFactType(fact.factType),
@@ -201,13 +267,18 @@ const result = store.db
 return result.changes > 0;
 }
 
-export function getMemoryFactById(store: MemoryStore, factId, guildId = null) {
+export function getMemoryFactById(store: MemoryStore, factId, guildId = null, scope: MemoryFactScope | null = null) {
 const factIdInt = Number(factId);
 const normalizedGuildId = String(guildId || "").trim();
+const normalizedScope = normalizeMemoryFactScope(scope);
 if (!Number.isInteger(factIdInt) || factIdInt <= 0) return null;
 
 const where = ["id = ?", "is_active = 1"];
 const args: Array<string | number> = [factIdInt];
+if (normalizedScope) {
+  where.push("scope = ?");
+  args.push(normalizedScope);
+}
 if (normalizedGuildId) {
   where.push("guild_id = ?");
   args.push(normalizedGuildId);
@@ -216,7 +287,7 @@ if (normalizedGuildId) {
 return (
   store.db
     .prepare<MemoryFactRow, Array<string | number>>(
-      `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+      `SELECT ${MEMORY_FACT_SELECT_COLUMNS}
            FROM memory_facts
            WHERE ${where.join(" AND ")}
            LIMIT 1`
@@ -228,14 +299,21 @@ return (
 export function getFactsForSubjectScoped(store: MemoryStore, subject, limit = 12, scope = null) {
 const where = ["subject = ?", "is_active = 1"];
 const args: string[] = [String(subject)];
-if (scope?.guildId) {
+const normalizedScope = normalizeMemoryFactScope(scope?.scope);
+const normalizedGuildId = String(scope?.guildId || "").trim();
+if (normalizedScope === "guild" && !normalizedGuildId) return [];
+if (normalizedScope) {
+  where.push("scope = ?");
+  args.push(normalizedScope);
+}
+if (normalizedGuildId) {
   where.push("guild_id = ?");
-  args.push(String(scope.guildId));
+  args.push(normalizedGuildId);
 }
 
 return store.db
   .prepare<MemoryFactRow, Array<string | number>>(
-    `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+    `SELECT ${MEMORY_FACT_SELECT_COLUMNS}
          FROM memory_facts
          WHERE ${where.join(" AND ")}
          ORDER BY updated_at DESC
@@ -253,14 +331,21 @@ if (!normalizedSubjects.length) return [];
 const placeholders = normalizedSubjects.map(() => "?").join(", ");
 const where = [`subject IN (${placeholders})`, "is_active = 1"];
 const args: string[] = [...normalizedSubjects];
-if (scope?.guildId) {
+const normalizedScope = normalizeMemoryFactScope(scope?.scope);
+const normalizedGuildId = String(scope?.guildId || "").trim();
+if (normalizedScope === "guild" && !normalizedGuildId) return [];
+if (normalizedScope) {
+  where.push("scope = ?");
+  args.push(normalizedScope);
+}
+if (normalizedGuildId) {
   where.push("guild_id = ?");
-  args.push(String(scope.guildId));
+  args.push(normalizedGuildId);
 }
 
 return store.db
   .prepare<MemoryFactRow, Array<string | number>>(
-    `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+    `SELECT ${MEMORY_FACT_SELECT_COLUMNS}
          FROM memory_facts
          WHERE ${where.join(" AND ")}
          ORDER BY updated_at DESC
@@ -271,43 +356,64 @@ return store.db
 
 export function getFactProfileRows(store: MemoryStore, {
   guildId,
+  scope = null,
   subjects = [],
   limit = 20
 }: {
   guildId?: string | null;
+  scope?: MemoryFactScope | null;
   subjects?: string[];
   limit?: number;
 }) {
 const normalizedGuildId = String(guildId || "").trim();
-if (!normalizedGuildId) return [];
+const normalizedScope = normalizeMemoryFactScope(scope);
+if (normalizedScope === "guild" && !normalizedGuildId) return [];
 
 const normalizedSubjects: string[] = [
   ...new Set((Array.isArray(subjects) ? subjects : []).map((value) => String(value || "").trim()).filter(Boolean))
 ];
 if (!normalizedSubjects.length) return [];
 
+const where = ["is_active = 1", `subject IN (${normalizedSubjects.map(() => "?").join(", ")})`];
+const args: Array<string | number> = [...normalizedSubjects];
+if (normalizedScope) {
+  where.push("scope = ?");
+  args.push(normalizedScope);
+}
+if (normalizedGuildId) {
+  where.push("guild_id = ?");
+  args.push(normalizedGuildId);
+}
+
 return store.db
   .prepare<MemoryFactRow, Array<string | number>>(
-    `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+    `SELECT ${MEMORY_FACT_SELECT_COLUMNS}
          FROM memory_facts
-         WHERE guild_id = ?
-           AND is_active = 1
-           AND subject IN (${normalizedSubjects.map(() => "?").join(", ")})
+         WHERE ${where.join(" AND ")}
          ORDER BY confidence DESC, updated_at DESC
          LIMIT ?`
   )
-  .all(normalizedGuildId, ...normalizedSubjects, clamp(limit, 1, 200));
+  .all(...args, clamp(limit, 1, 200));
 }
 
 export function getFactsForScope(store: MemoryStore, {
   guildId,
+  scope = null,
   limit = 120,
   subjectIds = null,
   factTypes = null,
   queryText = ""
+}: {
+  guildId?: string | null;
+  scope?: MemoryFactScope | null;
+  limit?: number;
+  subjectIds?: string[] | null;
+  factTypes?: string[] | null;
+  queryText?: string;
 }) {
 const scoped = buildScopedFactWhereClause({
   guildId,
+  scope,
   subjectIds,
   factTypes
 });
@@ -333,7 +439,7 @@ if (normalizedQueryText) {
 
 return store.db
   .prepare<MemoryFactRow, Array<string | number>>(
-    `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+    `SELECT ${MEMORY_FACT_SELECT_COLUMNS}
          FROM memory_facts
          WHERE ${where.join(" AND ")}
          ORDER BY updated_at DESC
@@ -344,13 +450,15 @@ return store.db
 
 export function searchMemoryFactsLexical(store: MemoryStore, {
   guildId,
+  scope = null,
   subjectIds = null,
   factTypes = null,
   queryText = "",
   queryTokens = [],
   limit = 60
 }: {
-  guildId: string;
+  guildId?: string | null;
+  scope?: MemoryFactScope | null;
   subjectIds?: string[] | null;
   factTypes?: string[] | null;
   queryText?: string;
@@ -359,6 +467,7 @@ export function searchMemoryFactsLexical(store: MemoryStore, {
 }) {
   const scoped = buildScopedFactWhereClause({
     guildId,
+    scope,
     subjectIds,
     factTypes
   });
@@ -395,8 +504,10 @@ export function searchMemoryFactsLexical(store: MemoryStore, {
            id,
            created_at,
            updated_at,
+           scope,
            guild_id,
            channel_id,
+           user_id,
            subject,
            fact,
            fact_type,
@@ -409,8 +520,10 @@ export function searchMemoryFactsLexical(store: MemoryStore, {
              id,
              created_at,
              updated_at,
+             scope,
              guild_id,
              channel_id,
+             user_id,
              subject,
              fact,
              fact_type,
@@ -431,8 +544,10 @@ export function searchMemoryFactsLexical(store: MemoryStore, {
     id: Number(row.id),
     created_at: String(row.created_at || ""),
     updated_at: String(row.updated_at || ""),
-    guild_id: String(row.guild_id || ""),
+    scope: normalizeMemoryFactScope(row.scope, "guild") || "guild",
+    guild_id: String(row.guild_id || "").trim() || null,
     channel_id: String(row.channel_id || "").trim() || null,
+    user_id: String(row.user_id || "").trim() || null,
     subject: String(row.subject || ""),
     fact: String(row.fact || ""),
     fact_type: String(row.fact_type || ""),
@@ -444,13 +559,15 @@ export function searchMemoryFactsLexical(store: MemoryStore, {
 
 export function searchMemoryFactsByEmbedding(store: MemoryStore, {
   guildId,
+  scope = null,
   subjectIds = null,
   factTypes = null,
   model,
   queryEmbedding,
   limit = 60
 }: {
-  guildId: string;
+  guildId?: string | null;
+  scope?: MemoryFactScope | null;
   subjectIds?: string[] | null;
   factTypes?: string[] | null;
   model: string;
@@ -461,6 +578,7 @@ export function searchMemoryFactsByEmbedding(store: MemoryStore, {
 
   const scoped = buildScopedFactWhereClause({
     guildId,
+    scope,
     subjectIds,
     factTypes,
     tableAlias: "m"
@@ -478,8 +596,10 @@ export function searchMemoryFactsByEmbedding(store: MemoryStore, {
              m.id,
              m.created_at,
              m.updated_at,
+             m.scope,
              m.guild_id,
              m.channel_id,
+             m.user_id,
              m.subject,
              m.fact,
              m.fact_type,
@@ -508,8 +628,10 @@ export function searchMemoryFactsByEmbedding(store: MemoryStore, {
         id: Number(row.id),
         created_at: String(row.created_at || ""),
         updated_at: String(row.updated_at || ""),
-        guild_id: String(row.guild_id || ""),
+        scope: normalizeMemoryFactScope(row.scope, "guild") || "guild",
+        guild_id: String(row.guild_id || "").trim() || null,
         channel_id: String(row.channel_id || "").trim() || null,
+        user_id: String(row.user_id || "").trim() || null,
         subject: String(row.subject || ""),
         fact: String(row.fact || ""),
         fact_type: String(row.fact_type || ""),
@@ -526,12 +648,20 @@ export function searchMemoryFactsByEmbedding(store: MemoryStore, {
 
 export function getFactsForSubjectsScoped(store: MemoryStore, {
     guildId = null,
+    scope = null,
     subjectIds = [],
     perSubjectLimit = 6,
     totalLimit = 600
+  }: {
+    guildId?: string | null;
+    scope?: MemoryFactScope | null;
+    subjectIds?: string[];
+    perSubjectLimit?: number;
+    totalLimit?: number;
   } = {}) {
 const normalizedGuildId = String(guildId || "").trim();
-if (!normalizedGuildId) return [];
+const normalizedScope = normalizeMemoryFactScope(scope);
+if (normalizedScope === "guild" && !normalizedGuildId) return [];
 
 const normalizedSubjects: string[] = [
   ...new Set((subjectIds || []).map((value) => String(value || "").trim()).filter(Boolean))
@@ -545,70 +675,96 @@ const boundedTotalLimit = clamp(
   1200
 );
 const subjectPlaceholders = normalizedSubjects.map(() => "?").join(", ");
+const where = [`subject IN (${subjectPlaceholders})`, "is_active = 1"];
+const args: Array<string | number> = [...normalizedSubjects];
+if (normalizedScope) {
+  where.push("scope = ?");
+  args.push(normalizedScope);
+}
+if (normalizedGuildId) {
+  where.push("guild_id = ?");
+  args.push(normalizedGuildId);
+}
 
 return store.db
   .prepare<MemoryFactRow, Array<string | number>>(
     `SELECT
-           id,
-           created_at,
-           updated_at,
-           guild_id,
-           channel_id,
-           subject,
-           fact,
-           fact_type,
-           evidence_text,
-           source_message_id,
-           confidence
+           ${MEMORY_FACT_SELECT_COLUMNS}
          FROM (
            SELECT
-             id,
-             created_at,
-             updated_at,
-             guild_id,
-             channel_id,
-             subject,
-             fact,
-             fact_type,
-             evidence_text,
-             source_message_id,
-             confidence,
-             ROW_NUMBER() OVER (PARTITION BY subject ORDER BY updated_at DESC) AS row_num
+             ${MEMORY_FACT_SELECT_COLUMNS},
+             ROW_NUMBER() OVER (
+               PARTITION BY COALESCE(guild_id, ''), COALESCE(user_id, ''), subject
+               ORDER BY updated_at DESC
+             ) AS row_num
            FROM memory_facts
-           WHERE guild_id = ?
-             AND is_active = 1
-             AND subject IN (${subjectPlaceholders})
+           WHERE ${where.join(" AND ")}
          ) AS ranked
          WHERE row_num <= ?
          ORDER BY updated_at DESC
          LIMIT ?`
   )
   .all(
-    normalizedGuildId,
-    ...normalizedSubjects,
+    ...args,
     boundedPerSubjectLimit,
     boundedTotalLimit
   );
 }
 
-export function getMemoryFactBySubjectAndFact(store: MemoryStore, guildId, subject, fact) {
+export function getMemoryFactBySubjectAndFact(store: MemoryStore, {
+  guildId = null,
+  scope = null,
+  userId = null,
+  subject,
+  fact
+}: {
+  guildId?: string | null;
+  scope?: MemoryFactScope | null;
+  userId?: string | null;
+  subject: string;
+  fact: string;
+}) {
 const normalizedGuildId = String(guildId || "").trim();
-if (!normalizedGuildId) return null;
+const normalizedScope = normalizeMemoryFactScope(scope, normalizedGuildId ? "guild" : "user");
+const normalizedSubject = String(subject || "").trim();
+const normalizedFact = String(fact || "").trim();
+const normalizedUserId = String(userId || "").trim() || null;
+if (!normalizedScope) return null;
+if (!normalizedSubject || !normalizedFact) return null;
+if (normalizedScope === "guild" && !normalizedGuildId) return null;
+
+const where = ["subject = ?", "fact = ?", "is_active = 1"];
+const args: Array<string | number> = [normalizedSubject, normalizedFact];
+if (normalizedScope) {
+  where.push("scope = ?");
+  args.push(normalizedScope);
+}
+if (normalizedGuildId) {
+  where.push("guild_id = ?");
+  args.push(normalizedGuildId);
+}
+if (normalizedUserId) {
+  where.push("user_id = ?");
+  args.push(normalizedUserId);
+}
 
 return (
   store.db
-    .prepare<MemoryFactRow, [string, string, string]>(
-      `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+    .prepare<MemoryFactRow, Array<string | number>>(
+      `SELECT ${MEMORY_FACT_SELECT_COLUMNS}
            FROM memory_facts
-           WHERE guild_id = ? AND subject = ? AND fact = ? AND is_active = 1
+           WHERE ${where.join(" AND ")}
+           ORDER BY updated_at DESC
            LIMIT 1`
     )
-    .get(normalizedGuildId, String(subject), String(fact)) || null
+    .get(...args) || null
 );
 }
 
 export function updateMemoryFact(store: MemoryStore, {
-  guildId,
+  guildId = null,
+  scope = null,
+  userId = null,
   factId,
   subject,
   fact,
@@ -617,29 +773,44 @@ export function updateMemoryFact(store: MemoryStore, {
   confidence = 0.5
 }) {
 const normalizedGuildId = String(guildId || "").trim();
+const normalizedScope = normalizeMemoryFactScope(scope, normalizedGuildId ? "guild" : "user");
 const factIdInt = Number(factId);
 const normalizedSubject = normalizeMemoryFactSubject(subject);
 const normalizedFact = normalizeMemoryFactText(fact);
-if (!normalizedGuildId) return { ok: false, reason: "guild_required" } as const;
+if (!normalizedScope) return { ok: false, reason: "scope_required" } as const;
+if (normalizedScope === "guild" && !normalizedGuildId) return { ok: false, reason: "guild_required" } as const;
 if (!Number.isInteger(factIdInt) || factIdInt <= 0) return { ok: false, reason: "invalid_fact_id" } as const;
 if (!normalizedSubject) return { ok: false, reason: "subject_required" } as const;
 if (!normalizedFact) return { ok: false, reason: "fact_required" } as const;
 
-const existing = getMemoryFactById(store, factIdInt, normalizedGuildId);
+const existing = getMemoryFactById(store, factIdInt, normalizedGuildId || null, normalizedScope);
 if (!existing) return { ok: false, reason: "not_found" } as const;
+const normalizedUserId =
+  normalizedScope === "user"
+    ? String(userId || existing.user_id || "").trim() || null
+    : null;
 
 const duplicate = store.db
-  .prepare<DuplicateMemoryFactRow, [string, string, string, number]>(
+  .prepare<DuplicateMemoryFactRow, Array<string | number>>(
     `SELECT id
          FROM memory_facts
-         WHERE guild_id = ?
+         WHERE scope = ?
+           AND IFNULL(guild_id, '') = IFNULL(?, '')
+           AND IFNULL(user_id, '') = IFNULL(?, '')
            AND subject = ?
            AND fact = ?
            AND is_active = 1
            AND id != ?
          LIMIT 1`
   )
-  .get(normalizedGuildId, normalizedSubject, normalizedFact, factIdInt);
+  .get(
+    normalizedScope,
+    normalizedGuildId || null,
+    normalizedUserId,
+    normalizedSubject,
+    normalizedFact,
+    factIdInt
+  );
 if (Number.isInteger(Number(duplicate?.id)) && Number(duplicate.id) > 0) {
   return {
     ok: false,
@@ -656,29 +827,37 @@ const result = store.db
   .prepare(
     `UPDATE memory_facts
          SET updated_at = ?,
+             scope = ?,
+             guild_id = ?,
+             user_id = ?,
              subject = ?,
              fact = ?,
              fact_type = ?,
              evidence_text = ?,
              confidence = ?
          WHERE id = ?
-           AND guild_id = ?
+           AND scope = ?
+           AND IFNULL(guild_id, '') = IFNULL(?, '')
            AND is_active = 1`
   )
   .run(
     updatedAt,
+    normalizedScope,
+    normalizedGuildId || null,
+    normalizedUserId,
     normalizedSubject,
     normalizedFact,
     normalizedFactType,
     normalizedEvidenceText,
     normalizedConfidence,
     factIdInt,
-    normalizedGuildId
+    normalizedScope,
+    normalizedGuildId || null
   );
 if (Number(result?.changes || 0) <= 0) return { ok: false, reason: "not_found" } as const;
 
 deleteMemoryFactVectors(store, factIdInt);
-const row = getMemoryFactById(store, factIdInt, normalizedGuildId);
+const row = getMemoryFactById(store, factIdInt, normalizedGuildId || null, normalizedScope);
 if (!row) return { ok: false, reason: "not_found" } as const;
 
 return {
@@ -687,10 +866,18 @@ return {
 } as const;
 }
 
-export function deleteMemoryFact(store: MemoryStore, { guildId, factId }) {
+export function deleteMemoryFact(store: MemoryStore, {
+  guildId = null,
+  scope = null,
+  factId
+}) {
 const normalizedGuildId = String(guildId || "").trim();
+const normalizedScope = normalizeMemoryFactScope(scope, normalizedGuildId ? "guild" : "user");
 const factIdInt = Number(factId);
-if (!normalizedGuildId) return { ok: false, reason: "guild_required", deleted: 0 } as const;
+if (!normalizedScope) return { ok: false, reason: "scope_required", deleted: 0 } as const;
+if (normalizedScope === "guild" && !normalizedGuildId) {
+  return { ok: false, reason: "guild_required", deleted: 0 } as const;
+}
 if (!Number.isInteger(factIdInt) || factIdInt <= 0) {
   return { ok: false, reason: "invalid_fact_id", deleted: 0 } as const;
 }
@@ -701,10 +888,11 @@ const result = store.db
          SET is_active = 0,
              updated_at = ?
          WHERE id = ?
-           AND guild_id = ?
+           AND scope = ?
+           AND IFNULL(guild_id, '') = IFNULL(?, '')
            AND is_active = 1`
   )
-  .run(nowIso(), factIdInt, normalizedGuildId);
+  .run(nowIso(), factIdInt, normalizedScope, normalizedGuildId || null);
 const deleted = Number(result?.changes || 0);
 if (deleted > 0) {
   deleteMemoryFactVectors(store, factIdInt);
@@ -862,39 +1050,75 @@ try {
 
 export function getMemorySubjects(store: MemoryStore, limit = 80, scope = null) {
 const where = ["is_active = 1"];
-const args: string[] = [];
-if (scope?.guildId) {
+const args: Array<string | number> = [];
+const normalizedScope = normalizeMemoryFactScope(scope?.scope);
+const normalizedGuildId = String(scope?.guildId || "").trim();
+if (normalizedScope) {
+  where.push("scope = ?");
+  args.push(normalizedScope);
+}
+if (normalizedGuildId) {
   where.push("guild_id = ?");
-  args.push(String(scope.guildId));
+  args.push(normalizedGuildId);
 }
 
 return store.db
   .prepare<MemorySubjectRow, Array<string | number>>(
-    `SELECT guild_id, subject, MAX(updated_at) AS last_seen_at, COUNT(*) AS fact_count
+    `SELECT
+         scope,
+         guild_id,
+         user_id,
+         subject,
+         MAX(updated_at) AS last_seen_at,
+         COUNT(*) AS fact_count
          FROM memory_facts
          WHERE ${where.join(" AND ")}
-         GROUP BY guild_id, subject
+         GROUP BY scope, guild_id, user_id, subject
          ORDER BY last_seen_at DESC
          LIMIT ?`
   )
   .all(...args, clamp(limit, 1, 500));
 }
 
-export function archiveOldFactsForSubject(store: MemoryStore, { guildId, subject, factType = null, keep = 120 }) {
+export function archiveOldFactsForSubject(store: MemoryStore, {
+  guildId = null,
+  scope = null,
+  userId = null,
+  subject,
+  factType = null,
+  keep = 120
+}) {
 const normalizedGuildId = String(guildId || "").trim();
+const normalizedScope = normalizeMemoryFactScope(scope, normalizedGuildId ? "guild" : "user");
+const normalizedUserId =
+  normalizedScope === "user"
+    ? String(userId || "").trim() || null
+    : null;
 const normalizedSubject = String(subject || "").trim();
-if (!normalizedGuildId || !normalizedSubject) return 0;
+if (!normalizedScope || !normalizedSubject) return 0;
+if (normalizedScope === "guild" && !normalizedGuildId) return 0;
 
 const boundedKeep = clamp(Math.floor(Number(keep) || 120), 1, 400);
-const where = ["guild_id = ?", "subject = ?", "is_active = 1"];
-const args: string[] = [normalizedGuildId, normalizedSubject];
+const where = [
+  "scope = ?",
+  "IFNULL(guild_id, '') = IFNULL(?, '')",
+  "IFNULL(user_id, '') = IFNULL(?, '')",
+  "subject = ?",
+  "is_active = 1"
+];
+const args: Array<string | number> = [
+  normalizedScope,
+  normalizedGuildId || null,
+  normalizedUserId,
+  normalizedSubject
+];
 if (factType) {
   where.push("fact_type = ?");
   args.push(String(factType));
 }
 
 const rows = store.db
-  .prepare<MemoryFactIdRow, string[]>(
+  .prepare<MemoryFactIdRow, Array<string | number>>(
     `SELECT id, fact_type, confidence, updated_at
          FROM memory_facts
          WHERE ${where.join(" AND ")}
